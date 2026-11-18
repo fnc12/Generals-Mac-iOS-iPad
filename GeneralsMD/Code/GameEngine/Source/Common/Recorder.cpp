@@ -102,6 +102,25 @@ static const UnsignedInt desyncOffset = frameCountOffset + sizeof(UnsignedInt);
 static const UnsignedInt quitEarlyOffset = desyncOffset + sizeof(Bool);
 static const UnsignedInt disconOffset = quitEarlyOffset + sizeof(Bool);
 
+// GeneralsX @bugfix Claude 18/11/2026 The replay format stores wide characters as 16-bit UTF-16LE code
+// units (sizeof(wchar_t)==2 on the original Windows build). On macOS/Linux wchar_t is 32 bits, so reading
+// or writing sizeof(WideChar) bytes desynchronised every field after the first string in a retail replay
+// header (and overflowed the read buffer). Always use 2 bytes per character on disk.
+typedef uint16_t ReplayWideChar;
+
+static void writeReplayWideString(File *file, const UnicodeString &str)
+{
+	const WideChar *chars = str.str();
+	const Int length = str.getLength();
+	for (Int i = 0; i < length; ++i)
+	{
+		const ReplayWideChar c = (ReplayWideChar)chars[i];
+		file->write(&c, sizeof(c));
+	}
+	const ReplayWideChar terminator = 0;
+	file->write(&terminator, sizeof(terminator));
+}
+
 static void writeAtOffset(File* file, Int offset, const void* data, Int dataSize)
 {
 	UnsignedInt fileSize = file->size();
@@ -556,8 +575,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 	// Print out the name of the replay.
 	UnicodeString replayName;
 	replayName = TheGameText->fetch("GUI:LastReplay");
-	m_file->writeFormat(L"%s", replayName.str());
-	m_file->writeChar(L"\0");
+	writeReplayWideString(m_file, replayName);
 
 	// Date and Time
 	SYSTEMTIME systemTime;
@@ -568,10 +586,8 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 	UnicodeString versionString = TheVersion->getUnicodeVersion();
 	UnicodeString versionTimeString = TheVersion->getUnicodeBuildTime();
 	UnsignedInt versionNumber = TheVersion->getVersionNumber();
-	m_file->writeFormat(L"%s", versionString.str());
-	m_file->writeChar(L"\0");
-	m_file->writeFormat(L"%s", versionTimeString.str());
-	m_file->writeChar(L"\0");
+	writeReplayWideString(m_file, versionString);
+	writeReplayWideString(m_file, versionTimeString);
 	m_file->write(&versionNumber, sizeof(versionNumber));
 	m_file->write(&(TheGlobalData->m_exeCRC), sizeof(TheGlobalData->m_exeCRC));
 	m_file->write(&(TheGlobalData->m_iniCRC), sizeof(TheGlobalData->m_iniCRC));
@@ -829,8 +845,11 @@ void RecorderClass::writeArgument(GameMessageArgumentDataType type, const GameMe
 			m_file->write( &(arg.timestamp), sizeof(arg.timestamp) );
 			break;
 		case ARGUMENTDATATYPE_WIDECHAR:
-			m_file->write( &(arg.wChar), sizeof(arg.wChar) );
+		{
+			const ReplayWideChar wc = (ReplayWideChar)arg.wChar;
+			m_file->write( &wc, sizeof(wc) );
 			break;
+		}
 		default:
 			DEBUG_LOG(("Unknown GameMessageArgumentDataType in RecorderClass::writeArgument"));
 			break;
@@ -1311,25 +1330,19 @@ Bool RecorderClass::playbackFile(AsciiString filename)
  * Read a unicode string from the current file position. The string is assumed to be 0-terminated.
  */
 UnicodeString RecorderClass::readUnicodeString() {
-	WideChar str[1024] = L"";
+	// GeneralsX @bugfix Claude 18/11/2026 Read 16-bit code units (see ReplayWideChar) and never write past
+	// the buffer: the original loop could store str[1024] on an unterminated string.
+	const Int maxChars = 1024;
+	WideChar str[maxChars] = L"";
 	Int index = 0;
-
-	Int c = m_file->readWideChar();
-	if (c == EOF) {
-		str[index] = 0;
-	}
-	str[index] = c;
-
-	while (index < 1024 && str[index] != 0) {
-		++index;
-		Int c = m_file->readWideChar();
-		if (c == EOF) {
-			str[index] = 0;
+	while (index < maxChars - 1) {
+		ReplayWideChar c = 0;
+		if (m_file->read(&c, sizeof(c)) != sizeof(c) || c == 0) {
 			break;
 		}
-		str[index] = c;
+		str[index++] = (WideChar)c;
 	}
-	str[1023] = L'\0';
+	str[index] = L'\0';
 
 	UnicodeString retval(str);
 	return retval;
@@ -1611,8 +1624,9 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 			break;
 		}
 		case ARGUMENTDATATYPE_WIDECHAR: {
-			WideChar theid;
-			m_file->read(&theid, sizeof(theid));
+			ReplayWideChar rawId = 0;
+			m_file->read(&rawId, sizeof(rawId));
+			const WideChar theid = (WideChar)rawId;
 			msg->appendWideCharArgument(theid);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
