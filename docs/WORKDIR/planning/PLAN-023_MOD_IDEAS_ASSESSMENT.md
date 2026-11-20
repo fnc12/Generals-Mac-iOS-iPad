@@ -57,7 +57,7 @@ fine; cross-platform play needs the determinism work first.
 | 10 | Tower defense | Data | M | yes | Waves via scripts and waypoint paths; towers are buildings |
 | 11 | Three-lane "dota" | Data + some code | L | yes | Lanes and creeps = scripts; hero leveling = veterancy; items/skills shop needs code or heavy tricks |
 | 12 | Daily content (videos, posts EN/RU) | Process | ongoing | n/a | Drafts from the dev diary; owner publishes |
-| 13 | Native editor (WC3-style) with a primitive model editor | Code | XL | n/a | C++ core + SQLite, thin native clients (C#, Swift, gtkmm), no Qt. Start after ideas 1-3 show what is missing |
+| 13 | Native editor (WC3-style) with a primitive model editor | Code | XL | n/a | Part of this plan. C++ core + SQLite, thin native clients (C#, Swift, gtkmm), no Qt. Start after ideas 1-3 show what is missing. Includes map meta editing, see below |
 | 14 | Cross-platform MP (Win + Mac) | Code | L | yes | Determinism gap above. Needed before public MP |
 
 ## Proposed order
@@ -73,11 +73,26 @@ fine; cross-platform play needs the determinism work first.
 7. Ideas 13 and 14 when the content shows what the editor must do and when MP
    matters.
 
-## Open questions for the owner
+## Map meta: faction override (owner decision, 2026-11-20)
 
-- Real names: countries are fine in practice; weapon product names of private
-  companies (e.g. LUCAS) are riskier than state products. Framing of the
-  current-war scenario ("inspired by", no real leaders) to be decided before
-  the first video.
-- Intro tagline without the word "Generals" (project rule on EA marks).
-- Is the editor (idea 13) part of this plan or a separate project?
+The editor edits a map's meta config, including which factions the map allows.
+
+- Override off (default): the faction list comes from the game, as today.
+- Override on: the map has its own faction list. Factions can be removed
+  (e.g. no GLA on this map) and new ones added (idea 6).
+- In skirmish / multiplayer setup, a faction the map does not allow cannot be
+  picked. If only one faction is left, the country dropdown is disabled and
+  its tooltip says the map allows only that faction ("Only <faction> is
+  available on this map").
+
+Engine work: the setup screen must read the map's meta before the players pick
+sides (today the list is global and fixed before the map loads), and the
+choice must be checked again when the game starts (MP clients and replays).
+
+## Owner decisions (2026-11-20)
+
+- Current-war scenario: handled carefully; rename things where needed.
+- Intro tagline is about generals as people (not a logo), with a second
+  meaning: this game never dies. Proposed wording: "Generals never retire.
+  Soldiers never surrender. Empires never die."
+- The editor is part of this plan.
