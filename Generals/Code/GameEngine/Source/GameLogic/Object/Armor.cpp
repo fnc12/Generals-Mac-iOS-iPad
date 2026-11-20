@@ -94,8 +94,17 @@ Real ArmorTemplate::adjustDamage(DamageType t, Real damage) const
 		return;
 	}
 
-	DamageType dt = (DamageType)DamageTypeFlags::getSingleBitFromName(damageName);
-	self->m_damageCoefficient[dt] = pct;
+	// GeneralsX @bugfix fnc12 20/11/2026 Unknown damage type names (mods use e.g. "HEAL" or
+	// "Surrender") are skipped. The original code wrote them to m_damageCoefficient[-1]
+	// (out of bounds); the strict scanIndexList variant throws and aborts the whole
+	// Armor.ini, which stops such mods (Zero Hour Reborn) from loading at all.
+	const Int index = DamageTypeFlags::getSingleBitFromName(damageName);
+	if (index < 0 || index >= DAMAGE_NUM_TYPES)
+	{
+		DEBUG_LOG(("Armor: unknown damage type '%s' ignored", damageName));
+		return;
+	}
+	self->m_damageCoefficient[(DamageType)index] = pct;
 }
 
 //-------------------------------------------------------------------------------------------------
