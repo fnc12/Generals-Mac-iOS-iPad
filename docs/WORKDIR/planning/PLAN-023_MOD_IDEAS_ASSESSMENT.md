@@ -89,6 +89,24 @@ Engine work: the setup screen must read the map's meta before the players pick
 sides (today the list is global and fixed before the map loads), and the
 choice must be checked again when the game starts (MP clients and replays).
 
+## Tests (owner decision, 2026-11-21)
+
+Grow coverage a little at a time; do not try to cover the whole project.
+
+1. Replay tests runnable locally with one command (macOS, Windows), plus "every
+   mod reaches the main menu".
+2. Unit tests with Catch2, set up like sqlite_orm (`tests/`, one `unit_tests`
+   target, `-DGENERALSX_BUILD_TESTS=ON`). Start with small engine libraries
+   that link without the whole game (compression), then code that was fixed
+   (replay strings, Armor parsing).
+3. Later: UI tests. Start the game with a script of UI steps (for example
+   Solo Play -> Custom Mission -> Back) and check which screen is open. Needs a
+   new engine mode; not started.
+
+Also later: a "Test map" button in our editor, like F5 in the Warcraft III
+editor. The engine already has `-file <map.map>`, which starts a single-player
+game on a map without the menu.
+
 ## Owner decisions (2026-11-20)
 
 - Current-war scenario: handled carefully; rename things where needed.
