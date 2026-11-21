@@ -6,7 +6,10 @@ else()
 
     FetchContent_Populate(lzhl DOWNLOAD_EXTRACT_TIMESTAMP
         GIT_REPOSITORY https://github.com/TheSuperHackers/lzhl-1.0
-        GIT_TAG        dfd96e2ca64adaddb35dd4ebadd6add7d5586783
+        # GeneralsX @bugfix fnc12 21/11/2026 Bump to upstream head: UINT32 was 'unsigned long'
+        # (64-bit on macOS/Linux), so LZHL hashed out of its table bounds there; also fixes a read
+        # past array bounds. Found by tests/compression_tests.cpp.
+        GIT_TAG        e5d4a830d5c820fa7694a43e0b4ba01fe9715774
         SOURCE_DIR     ${LZHL_DIR}
     )
 endif()
