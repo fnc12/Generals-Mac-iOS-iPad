@@ -374,7 +374,10 @@ static __inline unsigned int ggetm(const void *src, int bytes)
 {
     if (bytes==1)
         return (unsigned int) *(const unsigned char *) src;
-#if defined(__APPLE__) || (defined(__MWERKS__) && defined(__PPCGEKKO__))
+// GeneralsX @bugfix fnc12 21/11/2026 Native order is big-endian only on old PowerPC Macs.
+// On Intel and Apple Silicon Macs (and iOS) this branch wrote and read RefPack/BTree/Huffman
+// headers byte-swapped, so data compressed on macOS was unreadable by every other build.
+#if (defined(__APPLE__) && defined(__BIG_ENDIAN__)) || (defined(__MWERKS__) && defined(__PPCGEKKO__))
     else if (bytes==2)
         return (unsigned int) *(const unsigned short *) src;
     else if (bytes==4)
@@ -420,7 +423,10 @@ static __inline void gputm(void *dst, unsigned int data, int bytes)
     {
         ((unsigned char *) dst)[0] = (unsigned char) data;
     }
-#if defined(__APPLE__) || (defined(__MWERKS__) && defined(__PPCGEKKO__))
+// GeneralsX @bugfix fnc12 21/11/2026 Native order is big-endian only on old PowerPC Macs.
+// On Intel and Apple Silicon Macs (and iOS) this branch wrote and read RefPack/BTree/Huffman
+// headers byte-swapped, so data compressed on macOS was unreadable by every other build.
+#if (defined(__APPLE__) && defined(__BIG_ENDIAN__)) || (defined(__MWERKS__) && defined(__PPCGEKKO__))
     else if (bytes==2)
     {
         ((unsigned short *) dst)[0] = (unsigned short) data;
