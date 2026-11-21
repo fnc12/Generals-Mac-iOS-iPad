@@ -700,6 +700,8 @@ public:
 	void showPurchaseScience();
 	void hidePurchaseScience();
 	void togglePurchaseScience();
+	// GeneralsX @feature fnc12 21/11/2026 Lets ESC close the General's Powers window before opening the menu
+	Bool isPurchaseScienceVisible();
 
 	Bool hasAnyShortcutSelection() const;
 	Bool canShowSpecialPowerShortcut() const;

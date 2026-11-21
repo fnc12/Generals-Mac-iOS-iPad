@@ -3004,6 +3004,13 @@ void ControlBar::hidePurchaseScience()
 //		}
 }
 
+// GeneralsX @feature fnc12 21/11/2026 Lets ESC close the General's Powers window before opening the menu
+Bool ControlBar::isPurchaseScienceVisible()
+{
+	GameWindow *win = m_contextParent[ CP_PURCHASE_SCIENCE ];
+	return win != nullptr && !win->winIsHidden();
+}
+
 void ControlBar::togglePurchaseScience()
 {
 	if(m_contextParent[ CP_PURCHASE_SCIENCE ]->winIsHidden())

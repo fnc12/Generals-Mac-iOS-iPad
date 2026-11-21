@@ -3248,7 +3248,18 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 		//-----------------------------------------------------------------------------------------
 		case GameMessage::MSG_META_OPTIONS:
 
-			ToggleQuitMenu();
+			// GeneralsX @feature fnc12 21/11/2026 ESC closes the topmost thing first: with the
+			// General's Powers window open, the first ESC only closes it (it hides at once, so the
+			// next ESC opens the menu). The window's own ESC handler only works while it has focus.
+			if (TheControlBar && TheControlBar->isPurchaseScienceVisible()
+				&& !(TheInGameUI && TheInGameUI->isQuitMenuVisible()))
+			{
+				TheControlBar->hidePurchaseScience();
+			}
+			else
+			{
+				ToggleQuitMenu();
+			}
 			disp = DESTROY_MESSAGE;
 			break;
 
