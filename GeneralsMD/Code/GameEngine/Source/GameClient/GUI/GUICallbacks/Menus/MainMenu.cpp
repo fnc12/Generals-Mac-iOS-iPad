@@ -221,6 +221,15 @@ static Bool launchChallengeMenu = FALSE;
 
 static Bool dontAllowTransitions = FALSE;
 
+// GeneralsX @feature fnc12 21/11/2026 A screen opened from the Single Player menu (Custom Mission)
+// can ask the main menu to come back with the Single Player menu open instead of the top menu.
+static Bool returnToSinglePlayerMenu = FALSE;
+static Bool openSinglePlayerMenuOnEnter = FALSE;
+void MainMenuReturnToSinglePlayerMenu()
+{
+	returnToSinglePlayerMenu = TRUE;
+}
+
 const Int /*TIME_OUT = 15,*/ CORNER = 10;
 void AcceptResolution();
 void DeclineResolution();
@@ -694,6 +703,9 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 		if(rule)
 		rule->winHide(FALSE);
 	}
+	// GeneralsX @feature fnc12 21/11/2026 Consume the request once, whatever path the menu takes
+	openSinglePlayerMenuOnEnter = returnToSinglePlayerMenu;
+	returnToSinglePlayerMenu = FALSE;
 
 	layout->bringForward();
 	// set keyboard focus to main parent
@@ -933,7 +945,20 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 	{
 		if(initialGadgetDelay == 1)
 		{
-			TheTransitionHandler->setGroup("MainMenuDefaultMenuLogoFade");
+			// GeneralsX @feature fnc12 21/11/2026 Back from Custom Mission: show the Single Player menu
+			// the same way the Single Player button does, plus the logo the top menu would fade in.
+			if (openSinglePlayerMenuOnEnter && dropDownWindows[DROPDOWN_SINGLE])
+			{
+				GameWindow *logo = TheWindowManager->winGetWindowFromId( parentMainMenu, TheNameKeyGenerator->nameToKey( "MainMenu.wnd:Logo" ) );
+				if (logo)
+					logo->winHide(FALSE);
+				dropDownWindows[DROPDOWN_SINGLE]->winHide(FALSE);
+				TheTransitionHandler->setGroup("MainMenuSinglePlayerMenu");
+				dontAllowTransitions = TRUE;
+			}
+			else
+				TheTransitionHandler->setGroup("MainMenuDefaultMenuLogoFade");
+			openSinglePlayerMenuOnEnter = FALSE;
 			TheWindowManager->winSetFocus( parentMainMenu );
 			initialGadgetDelay = 2;
 			justEntered = FALSE;

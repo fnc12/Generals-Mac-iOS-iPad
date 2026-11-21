@@ -146,6 +146,52 @@ void SetDifficultyRadioButton()
 	}
 }
 
+// GeneralsX @feature fnc12 21/11/2026 "Back" button: return to the Single Player menu.
+// The layout (MapSelectMenu.wnd) is game data, so the button is created here. It copies the look
+// of the existing "Main Menu" button and sits centered between "Start" and "Main Menu".
+void MainMenuReturnToSinglePlayerMenu();
+static const char *const kButtonBackToSinglePlayerName = "MapSelectMenu.wnd:GeneralsXButtonBackToSinglePlayer";
+
+static GameWindow *createBackToSinglePlayerButton( GameWindow *buttonOK, GameWindow *buttonMainMenu )
+{
+	if (buttonOK == nullptr || buttonMainMenu == nullptr)
+		return nullptr;
+
+	GameWindow *parent = buttonMainMenu->winGetParent();
+	const NameKeyType id = TheNameKeyGenerator->nameToKey( kButtonBackToSinglePlayerName );
+	GameWindow *existing = TheWindowManager->winGetWindowFromId( parent, id );
+	if (existing)
+		return existing;
+
+	Int okX, okY, okW, okH, mainX, mainY, mainW, mainH;
+	buttonOK->winGetPosition( &okX, &okY );
+	buttonOK->winGetSize( &okW, &okH );
+	buttonMainMenu->winGetPosition( &mainX, &mainY );
+	buttonMainMenu->winGetSize( &mainW, &mainH );
+	const Int x = ( okX + okW + mainX - mainW ) / 2;
+
+	const WinInstanceData *look = buttonMainMenu->winGetInstanceData();
+	WinInstanceData instData;
+	instData.init();
+	instData.m_style = look->m_style;
+	for (Int i = 0; i < MAX_DRAW_DATA; ++i)
+	{
+		instData.m_enabledDrawData[i] = look->m_enabledDrawData[i];
+		instData.m_disabledDrawData[i] = look->m_disabledDrawData[i];
+		instData.m_hiliteDrawData[i] = look->m_hiliteDrawData[i];
+	}
+	instData.m_enabledText = look->m_enabledText;
+	instData.m_disabledText = look->m_disabledText;
+	instData.m_hiliteText = look->m_hiliteText;
+	instData.m_textLabelString = "GUI:Back";
+
+	GameWindow *button = TheWindowManager->gogoGadgetPushButton( parent, buttonMainMenu->winGetStatus(),
+		x, mainY, mainW, mainH, &instData, buttonMainMenu->winGetFont(), FALSE );
+	if (button)
+		button->winSetWindowId( id );
+	return button;
+}
+
 //-------------------------------------------------------------------------------------------------
 /** Initialize the MapSelect menu */
 //-------------------------------------------------------------------------------------------------
@@ -188,6 +234,11 @@ void MapSelectMenuInit( WindowLayout *layout, void *userData )
 
 	TheShell->registerWithAnimateManager(buttonBack, WIN_ANIMATION_SLIDE_RIGHT, TRUE,0);
 	TheShell->registerWithAnimateManager(buttonOK, WIN_ANIMATION_SLIDE_LEFT, TRUE, 0);
+
+	// GeneralsX @feature fnc12 21/11/2026 "Back" to the Single Player menu next to "Main Menu"
+	GameWindow *buttonBackToSinglePlayer = createBackToSinglePlayerButton( buttonOK, buttonBack );
+	if (buttonBackToSinglePlayer)
+		TheShell->registerWithAnimateManager(buttonBackToSinglePlayer, WIN_ANIMATION_SLIDE_BOTTOM, TRUE, 0);
 
 	SetDifficultyRadioButton();
 
@@ -301,6 +352,8 @@ WindowMsgHandledType MapSelectMenuSystem( GameWindow *window, UnsignedInt msg,
 																				  WindowMsgData mData1, WindowMsgData mData2 )
 {
 	static NameKeyType buttonBack = NAMEKEY_INVALID;
+	// GeneralsX @feature fnc12 21/11/2026 "Back" to the Single Player menu
+	static NameKeyType buttonBackToSinglePlayer = NAMEKEY_INVALID;
 	static NameKeyType buttonOK = NAMEKEY_INVALID;
 	static NameKeyType listboxMap = NAMEKEY_INVALID;
 	static NameKeyType radioButtonEasyAI = NAMEKEY_INVALID;
@@ -315,6 +368,7 @@ WindowMsgHandledType MapSelectMenuSystem( GameWindow *window, UnsignedInt msg,
 
 			// get ids for our children controls
 			buttonBack = TheNameKeyGenerator->nameToKey( "MapSelectMenu.wnd:ButtonBack" );
+			buttonBackToSinglePlayer = TheNameKeyGenerator->nameToKey( kButtonBackToSinglePlayerName );
 			buttonOK = TheNameKeyGenerator->nameToKey( "MapSelectMenu.wnd:ButtonOK" );
 			listboxMap = TheNameKeyGenerator->nameToKey( "MapSelectMenu.wnd:ListboxMap" );
 			radioButtonEasyAI = TheNameKeyGenerator->nameToKey( "MapSelectMenu.wnd:RadioButtonEasyAI" );
@@ -392,6 +446,14 @@ WindowMsgHandledType MapSelectMenuSystem( GameWindow *window, UnsignedInt msg,
 				TheShell->pop();
 				buttonPushed = true;
 
+			}
+			// GeneralsX @feature fnc12 21/11/2026 Same as "Main Menu", but the main menu comes back
+			// with the Single Player menu open
+			else if( controlID == buttonBackToSinglePlayer )
+			{
+				MainMenuReturnToSinglePlayerMenu();
+				TheShell->pop();
+				buttonPushed = true;
 			}
 			else if( controlID == buttonOK )
 			{
