@@ -117,7 +117,11 @@ def main():
         sys.exit(__doc__)
     with open(sys.argv[1], "rb") as f:
         data = f.read()
-    new, commands = convert(data)
+    try:
+        new, commands = convert(data)
+    except ValueError as e:
+        # Also what a replay that is already in the new format gives.
+        sys.exit(f"{sys.argv[1]}: not an old-format replay ({e})")
     with open(sys.argv[2], "wb") as f:
         f.write(new)
     print(f"{sys.argv[2]}: {commands} commands, {len(data)} -> {len(new)} bytes")
