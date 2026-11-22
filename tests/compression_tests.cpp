@@ -4,7 +4,9 @@
 
 #include "Compression.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -73,4 +75,37 @@ TEST_CASE("CompressionManager plain data is not compressed") {
     const std::string text = "not a compressed block";
     REQUIRE_FALSE(CompressionManager::isDataCompressed(text.data(), Int(text.size())));
     REQUIRE(CompressionManager::getCompressionType(text.data(), Int(text.size())) == COMPRESSION_NONE);
+}
+
+TEST_CASE("Data that does not compress fits getMaxCompressedSize") {
+    // The EAC encoders get no output size: getMaxCompressedSize is the only thing that keeps them
+    // inside the buffer. A guard area after the buffer must stay untouched.
+    auto type = GENERATE(COMPRESSION_REFPACK,
+                         COMPRESSION_NOXLZH,
+                         COMPRESSION_ZLIB1,
+                         COMPRESSION_ZLIB9,
+                         COMPRESSION_BTREE,
+                         COMPRESSION_HUFF);
+    auto size = GENERATE(std::size_t(1), std::size_t(7), std::size_t(113), std::size_t(4096), std::size_t(300 * 1000));
+    CAPTURE(CompressionManager::getCompressionNameByType(type), size);
+
+    if(type == COMPRESSION_NOXLZH && size < 2) {
+        SKIP("LZHL refuses 1-byte input");
+    }
+
+    std::mt19937 engine{std::uint32_t(size)};
+    std::vector<std::uint8_t> original(size);
+    std::generate(original.begin(), original.end(), [&engine] { return std::uint8_t(engine()); });
+
+    const std::size_t maxLen = std::size_t(CompressionManager::getMaxCompressedSize(Int(size), type));
+    const std::size_t guard = 64 * 1024;
+    std::vector<std::uint8_t> packed(maxLen + guard, 0xCD);
+    const Int packedLen = CompressionManager::compressData(type, original.data(), Int(size), packed.data(), Int(maxLen));
+    REQUIRE(packedLen > 0);
+    REQUIRE(std::size_t(packedLen) <= maxLen);
+    REQUIRE(std::all_of(packed.begin() + maxLen, packed.end(), [](std::uint8_t b) { return b == 0xCD; }));
+
+    std::vector<std::uint8_t> unpacked(size);
+    REQUIRE(CompressionManager::decompressData(packed.data(), packedLen, unpacked.data(), Int(size)) == Int(size));
+    REQUIRE(unpacked == original);
 }

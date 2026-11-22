@@ -135,10 +135,16 @@ Int CompressionManager::getMaxCompressedSize( Int uncompressedLen, CompressionTy
 		case COMPRESSION_NOXLZH:
 			return CalcNewSize(uncompressedLen) + 8;
 
-		case COMPRESSION_BTREE:   // guessing here
-		case COMPRESSION_HUFF:    // guessing here
-		case COMPRESSION_REFPACK: // guessing here
-			return uncompressedLen + 8;
+		// GeneralsX @bugfix fnc12 22/11/2026 The encoders get no output size and write as much as
+		// they need, so this must be a real upper bound. EA's guess (len + 8) was too small for data
+		// that does not compress: on random data RefPack writes about len + len/112 + 15 bytes,
+		// Huffman up to about 70 bytes more than len on small inputs, and every encoder wrote past
+		// the end of the buffer. Found by tests/compression_tests.cpp. Only buffer sizes change; the
+		// compressed data is the same.
+		case COMPRESSION_BTREE:
+		case COMPRESSION_HUFF:
+		case COMPRESSION_REFPACK:
+			return uncompressedLen + uncompressedLen / 8 + 1024;
 		case COMPRESSION_ZLIB1:
 		case COMPRESSION_ZLIB2:
 		case COMPRESSION_ZLIB3:
