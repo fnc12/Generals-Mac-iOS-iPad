@@ -58,7 +58,7 @@ fine; cross-platform play needs the determinism work first.
 | 11 | Three-lane "dota" | Data + some code | L | yes | Lanes and creeps = scripts; hero leveling = veterancy; items/skills shop needs code or heavy tricks |
 | 12 | Daily content (videos, posts EN/RU) | Process | ongoing | n/a | Drafts from the dev diary; owner publishes |
 | 13 | Native editor (WC3-style) with a primitive model editor | Code | XL | n/a | Part of this plan. C++ core + SQLite, thin native clients (C#, Swift, gtkmm), no Qt. Start after ideas 1-3 show what is missing. Includes map meta editing, see below |
-| 14 | Cross-platform MP (Win + Mac) | Code | L | yes | Determinism gap above. Needed before public MP |
+| 14 | Own network: server, lobby, cross-platform MP (Win, Mac, Linux; mobile later) | Code | XL | yes | Owner decision 2026-11-22, see "Network" below. Determinism gap above must be closed first |
 
 ## Proposed order
 
@@ -106,6 +106,24 @@ Grow coverage a little at a time; do not try to cover the whole project.
 Also later: a "Test map" button in our editor, like F5 in the Warcraft III
 editor. The engine already has `-file <map.map>`, which starts a single-player
 game on a map without the menu.
+
+## Network (owner decision, 2026-11-22)
+
+END has its own server, its own lobby and its own network. Playing against the
+retail game (Steam 1.04, 32-bit) is not a goal.
+
+- Every END client plays with every other END client: Windows, macOS, Linux,
+  later mobile. All of them must give the same simulation (same CRC), so the
+  game logic has to be deterministic across compilers and CPUs (x64 MSVC,
+  arm64 clang, x64 gcc/clang). This is the real work; the network is the easy
+  part.
+- Transport: WebSocket. No custom protocol (the owner has written them before
+  and does not want one here).
+- Server: lobby (rooms, players, chat, game setup) and relay of the lockstep
+  commands. The server does not simulate the game.
+- First check, before any network code: play replays recorded on one platform
+  on the others (Mac replays on Windows and Linux, and back). Each one that
+  passes is a regression test for cross-platform play.
 
 ## Owner decisions (2026-11-20)
 
