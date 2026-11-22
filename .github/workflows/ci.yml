@@ -95,7 +95,10 @@ jobs:
   replay-test-linux:
     name: Replay Tests (linux)
     needs: [build-linux-flatpak]
-    if: needs.build-linux-flatpak.result == 'success'
+    # GeneralsX @build fnc12 22/11/2026 Needs the ASSETS_KEY secret and fbraz3's private test-files repo
+    # (game assets); forks have neither, so run only in fbraz3/GeneralsX. Local runner:
+    # scripts/qa/replays/run-replay-tests-macos.sh
+    if: needs.build-linux-flatpak.result == 'success' && github.repository == 'fbraz3/GeneralsX'
     uses: ./.github/workflows/replay-tests.yml
     with:
       platform: linux-flatpak
@@ -106,7 +109,10 @@ jobs:
   replay-test-macos:
     name: Replay Tests (macos)
     needs: [build-macos]
-    if: needs.build-macos.result == 'success'
+    # GeneralsX @build fnc12 22/11/2026 Needs the ASSETS_KEY secret and fbraz3's private test-files repo
+    # (game assets); forks have neither, so run only in fbraz3/GeneralsX. Local runner:
+    # scripts/qa/replays/run-replay-tests-macos.sh
+    if: needs.build-macos.result == 'success' && github.repository == 'fbraz3/GeneralsX'
     uses: ./.github/workflows/replay-tests.yml
     with:
       platform: macos

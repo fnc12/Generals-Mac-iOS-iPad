@@ -1,0 +1,42 @@
+# GeneralsX @build fnc12 22/11/2026 Unit tests (tests/, Catch2) on Linux, macOS and Windows.
+# tests/ builds as a project of its own (only Catch2 and the small engine libraries it tests),
+# so this needs no vcpkg, no game build and no game data, and takes a few minutes.
+name: Unit Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: cmake -S tests -B build/unit-tests -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/unit-tests --config Release --parallel
+
+      - name: Run
+        run: ctest --test-dir build/unit-tests -C Release --output-on-failure
