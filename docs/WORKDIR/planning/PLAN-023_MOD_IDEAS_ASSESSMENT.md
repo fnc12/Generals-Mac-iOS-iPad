@@ -57,7 +57,7 @@ fine; cross-platform play needs the determinism work first.
 | 10 | Tower defense | Data | M | yes | Waves via scripts and waypoint paths; towers are buildings |
 | 11 | Three-lane "dota" | Data + some code | L | yes | Lanes and creeps = scripts; hero leveling = veterancy; items/skills shop needs code or heavy tricks |
 | 12 | Daily content (videos, posts EN/RU) | Process | ongoing | n/a | Drafts from the dev diary; owner publishes |
-| 13 | Native editor (WC3-style) with a primitive model editor | Code | XL | n/a | Part of this plan. C++ core + SQLite, thin native clients (C#, Swift, gtkmm), no Qt. Start after ideas 1-3 show what is missing. Includes map meta editing, see below |
+| 13 | Native editor (WC3-style) with a primitive model editor | Code | XL | n/a | Part of this plan. C++ core + SQLite, thin native clients (C#, Swift, gtkmm), no Qt. Owner decision 2026-11-22: start as soon as possible, Mac (Swift client) first, because the owner works on a Mac. Includes map meta editing, see below |
 | 14 | Own network: server, lobby, cross-platform MP (Win, Mac, Linux; mobile later) | Code | XL | yes | Owner decision 2026-11-22, see "Network" below. Determinism gap above must be closed first |
 
 ## Proposed order
@@ -132,3 +132,18 @@ retail game (Steam 1.04, 32-bit) is not a goal.
   meaning: this game never dies. Proposed wording: "Generals never retire.
   Soldiers never surrender. Empires never die."
 - The editor is part of this plan.
+
+## Editor and shipyard (owner decisions, 2026-11-22)
+
+- The editor starts on macOS (C++ core + SQLite, Swift client), as soon as
+  possible. The EA tools (WorldBuilder, W3DView, MFC, Windows only) are built
+  on the PC only to look at maps, models and animations in the meantime.
+- Editor features asked for: list of all units with model preview and
+  animation playback; right click on the map to place a unit; create a new
+  unit type (e.g. a building or a ship) from an existing one.
+- Shipyard: placed on land at the shore (as in Cossacks or Heroes III, not on
+  water as in Red Alert 2). Placement rule and AI support need code
+  (`BuildAssistant.cpp` rejects water cells under a footprint today).
+- Existing water units in ZH: PT boat, ferry, amphibious transport (civilian,
+  not buildable). Dock and pier models exist. Prototype on these first; own
+  models later.
