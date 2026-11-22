@@ -14,6 +14,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     enable_testing()
 
     set(GENERALSX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    include(${GENERALSX_ROOT}/cmake/compilers.cmake)  # same compiler flags as the game
     include(FetchContent)
     include(${GENERALSX_ROOT}/cmake/lzhl.cmake)
     add_subdirectory(${GENERALSX_ROOT}/Dependencies/Utility utility)
