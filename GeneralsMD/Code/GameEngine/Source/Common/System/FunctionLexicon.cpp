@@ -148,7 +148,6 @@ static FunctionLexicon::TableEntry gameWinSystemTable[] =
 	{ NAMEKEY_INVALID, "GameInfoWindowSystem",               (void*)GameInfoWindowSystem },
 	{ NAMEKEY_INVALID, "ScoreScreenSystem",                  (void*)ScoreScreenSystem },
 	{ NAMEKEY_INVALID, "DownloadMenuSystem",                 (void*)DownloadMenuSystem },
-	{ NAMEKEY_INVALID, "ExtrasMenuSystem",                   (void*)ExtrasMenuSystem },
 
 	{ NAMEKEY_INVALID, nullptr,                              nullptr }
 
@@ -220,7 +219,6 @@ static FunctionLexicon::TableEntry gameWinInputTable[] =
 	{ NAMEKEY_INVALID, "GeneralsExpPointsInput",            (void*)GeneralsExpPointsInput },
 
 	{ NAMEKEY_INVALID, "DownloadMenuInput",                 (void*)DownloadMenuInput },
-	{ NAMEKEY_INVALID, "ExtrasMenuInput",                   (void*)ExtrasMenuInput },
 
 	{ NAMEKEY_INVALID, "IMECandidateWindowInput",           (void*)IMECandidateWindowInput },
 	{ NAMEKEY_INVALID, nullptr,                             nullptr }
@@ -283,7 +281,6 @@ static FunctionLexicon::TableEntry winLayoutInitTable[] =
 	{ NAMEKEY_INVALID, "GameInfoWindowInit",            (void*)GameInfoWindowInit },
 	{ NAMEKEY_INVALID, "ScoreScreenInit",               (void*)ScoreScreenInit },
 	{ NAMEKEY_INVALID, "DownloadMenuInit",              (void*)DownloadMenuInit },
-	{ NAMEKEY_INVALID, "ExtrasMenuInit",                (void*)ExtrasMenuInit },
 	{ NAMEKEY_INVALID, "DifficultySelectInit",          (void*)DifficultySelectInit },
 	{ NAMEKEY_INVALID, "PopupReplayInit",               (void*)PopupReplayInit },
 
@@ -327,7 +324,6 @@ static FunctionLexicon::TableEntry winLayoutUpdateTable[] =
 	{ NAMEKEY_INVALID, "NetworkDirectConnectUpdate",      (void*)NetworkDirectConnectUpdate },
 	{ NAMEKEY_INVALID, "ScoreScreenUpdate",               (void*)ScoreScreenUpdate },
 	{ NAMEKEY_INVALID, "DownloadMenuUpdate",              (void*)DownloadMenuUpdate },
-	{ NAMEKEY_INVALID, "ExtrasMenuUpdate",                (void*)ExtrasMenuUpdate },
 	{ NAMEKEY_INVALID, "PopupReplayUpdate",               (void*)PopupReplayUpdate },
 	{ NAMEKEY_INVALID, nullptr,                           nullptr }
 
@@ -369,7 +365,6 @@ static FunctionLexicon::TableEntry winLayoutShutdownTable[] =
 	{ NAMEKEY_INVALID, "NetworkDirectConnectShutdown",      (void*)NetworkDirectConnectShutdown },
 	{ NAMEKEY_INVALID, "ScoreScreenShutdown",               (void*)ScoreScreenShutdown },
 	{ NAMEKEY_INVALID, "DownloadMenuShutdown",              (void*)DownloadMenuShutdown },
-	{ NAMEKEY_INVALID, "ExtrasMenuShutdown",                (void*)ExtrasMenuShutdown },
 	{ NAMEKEY_INVALID, "PopupReplayShutdown",               (void*)PopupReplayShutdown },
 	{ NAMEKEY_INVALID, nullptr,                             nullptr }
 
@@ -377,6 +372,42 @@ static FunctionLexicon::TableEntry winLayoutShutdownTable[] =
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // PUBLIC DATA
+// GeneralsX @bugfix Claude 22/11/2026 Callbacks that only GeneralsX has live in separate tables
+// that get their name keys after all game data is loaded (FunctionLexicon::loadLateTables, called
+// at the end of GameEngine::init). Name keys are handed out in order of first use, and network and
+// replay messages carry some of them (MSG_QUEUE_UPGRADE sends the upgrade's name key). New names
+// registered in init() shift every key after them, so replays and games with other builds desync.
+// Add GeneralsX-only callbacks here, never to the tables above.
+static FunctionLexicon::TableEntry lateGameWinSystemTable[] =
+{
+	{ NAMEKEY_INVALID, "ExtrasMenuSystem",   (void*)ExtrasMenuSystem },
+	{ NAMEKEY_INVALID, nullptr,              nullptr }
+};
+
+static FunctionLexicon::TableEntry lateGameWinInputTable[] =
+{
+	{ NAMEKEY_INVALID, "ExtrasMenuInput",    (void*)ExtrasMenuInput },
+	{ NAMEKEY_INVALID, nullptr,              nullptr }
+};
+
+static FunctionLexicon::TableEntry lateWinLayoutInitTable[] =
+{
+	{ NAMEKEY_INVALID, "ExtrasMenuInit",     (void*)ExtrasMenuInit },
+	{ NAMEKEY_INVALID, nullptr,              nullptr }
+};
+
+static FunctionLexicon::TableEntry lateWinLayoutUpdateTable[] =
+{
+	{ NAMEKEY_INVALID, "ExtrasMenuUpdate",   (void*)ExtrasMenuUpdate },
+	{ NAMEKEY_INVALID, nullptr,              nullptr }
+};
+
+static FunctionLexicon::TableEntry lateWinLayoutShutdownTable[] =
+{
+	{ NAMEKEY_INVALID, "ExtrasMenuShutdown", (void*)ExtrasMenuShutdown },
+	{ NAMEKEY_INVALID, nullptr,              nullptr }
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 FunctionLexicon *TheFunctionLexicon = nullptr;  ///< the function dictionary
 
@@ -394,22 +425,41 @@ void FunctionLexicon::loadTable( TableEntry *table,
 	if( table == nullptr )
 		return;
 
-	// loop through all entries
-	TableEntry *entry = table;
-	while( entry->name )
-	{
-
-		// assign key from name key based on name provided in table
-		entry->key = TheNameKeyGenerator->nameToKey( entry->name );
-
-		// next table entry please
-		entry++;
-
-	}
+	assignKeys( table );
 
 	// assign table to the index specified
 	m_tables[ tableIndex ] = table;
 
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Assign the name key of every entry from its name */
+//-------------------------------------------------------------------------------------------------
+void FunctionLexicon::assignKeys( TableEntry *table )
+{
+	for( TableEntry *entry = table; entry->name; entry++ )
+		entry->key = TheNameKeyGenerator->nameToKey( entry->name );
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Assign name keys to the GeneralsX-only tables. Call once all game data is loaded, see the
+	* comment above lateGameWinSystemTable */
+//-------------------------------------------------------------------------------------------------
+void FunctionLexicon::loadLateTables()
+{
+	TableEntry *tables[ MAX_FUNCTION_TABLES ] = {};
+	tables[ TABLE_GAME_WIN_SYSTEM ] = lateGameWinSystemTable;
+	tables[ TABLE_GAME_WIN_INPUT ] = lateGameWinInputTable;
+	tables[ TABLE_WIN_LAYOUT_INIT ] = lateWinLayoutInitTable;
+	tables[ TABLE_WIN_LAYOUT_UPDATE ] = lateWinLayoutUpdateTable;
+	tables[ TABLE_WIN_LAYOUT_SHUTDOWN ] = lateWinLayoutShutdownTable;
+
+	for( Int i = 0; i < MAX_FUNCTION_TABLES; i++ )
+	{
+		if( tables[ i ] )
+			assignKeys( tables[ i ] );
+		m_lateTables[ i ] = tables[ i ];
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -473,6 +523,18 @@ void *FunctionLexicon::findFunction( NameKeyType key, TableIndex index )
 
 	}
 
+	// GeneralsX @bugfix Claude 22/11/2026 then the GeneralsX-only tables (empty until loadLateTables)
+	if( func == nullptr )
+	{
+		if( index == TABLE_ANY )
+		{
+			for( Int i = 0; i < MAX_FUNCTION_TABLES && func == nullptr; i++ )
+				func = keyToFunc( key, m_lateTables[ i ] );
+		}
+		else
+			func = keyToFunc( key, m_lateTables[ index ] );
+	}
+
 	// return function, if found
 	return func;
 
@@ -520,7 +582,10 @@ FunctionLexicon::FunctionLexicon()
 
 	// empty the tables
 	for( i = 0; i < MAX_FUNCTION_TABLES; i++ )
+	{
 		m_tables[ i ] = nullptr;
+		m_lateTables[ i ] = nullptr;
+	}
 
 }
 

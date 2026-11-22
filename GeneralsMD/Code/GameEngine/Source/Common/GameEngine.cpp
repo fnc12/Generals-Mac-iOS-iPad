@@ -723,6 +723,10 @@ void GameEngine::init()
 
 		TheSubsystemList->postProcessLoadAll();
 
+		// GeneralsX @bugfix Claude 22/11/2026 Name keys of GeneralsX-only callbacks come after all
+		// game data, so the game data keys stay the same as in the original game (see FunctionLexicon.cpp).
+		TheFunctionLexicon->loadLateTables();
+
 		// GeneralsX @bugfix Copilot 11/05/2026 Prevent uncapped render when FPS limiter is enabled but no valid limit value was loaded.
 		if (TheGlobalData->m_useFpsLimit && TheGlobalData->m_framesPerSecondLimit <= 0)
 		{

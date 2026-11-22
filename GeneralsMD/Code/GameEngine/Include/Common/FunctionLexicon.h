@@ -80,6 +80,9 @@ public:
 	/// validate the tables and make sure all entries are unique
 	Bool validate();
 
+	/// assign name keys to the GeneralsX-only tables; call once all game data is loaded
+	void loadLateTables();
+
 	/// get internal function table
 	TableEntry *getTable( TableIndex index );
 
@@ -110,6 +113,7 @@ protected:
 
 	/// load a lookup table with run time values needed and save in table list
 	void loadTable( TableEntry *table, TableIndex tableIndex );
+	void assignKeys( TableEntry *table );  ///< name key of every entry from its name
 
 	/** given a key find the function, the index parameter can limit the search
 	to a single table or to ANY of the tables */
@@ -121,6 +125,7 @@ protected:
 	void *keyToFunc( NameKeyType key, TableEntry *table );  ///< internal searching
 
 	TableEntry *m_tables[ MAX_FUNCTION_TABLES ];  ///< the lookup tables
+	TableEntry *m_lateTables[ MAX_FUNCTION_TABLES ];  ///< GeneralsX-only tables, keyed by loadLateTables
 
 };
 
