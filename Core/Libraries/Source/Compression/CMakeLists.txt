@@ -44,6 +44,7 @@ if (ZLIB_FOUND)
     target_link_libraries(core_compression PUBLIC ZLIB::ZLIB)
 else()
     # Adds zlib from github repository
-    include(${CMAKE_SOURCE_DIR}/cmake/zlib.cmake)
+    # GeneralsX @build fnc12 22/11/2026 Path relative to this file, so tests/ can build it as a project of its own.
+    include(${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/zlib.cmake)
     target_link_libraries(core_compression PUBLIC libzlib)
 endif()
