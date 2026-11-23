@@ -199,10 +199,10 @@ if(RTS_BUILD_OPTION_BENCHMARKS)
 endif()
 
 # GeneralsX @build fnc12 21/11/2026 Unit tests (Catch2), off by default
-option(GENERALSX_BUILD_TESTS "Build unit tests (tests/, Catch2)" OFF)
+option(GENERALSX_BUILD_TESTS "Build unit tests (Tests/Catch2, Catch2)" OFF)
 if(GENERALSX_BUILD_TESTS)
     enable_testing()
-    add_subdirectory(tests)
+    add_subdirectory(Tests/Catch2)
 endif()
 
 feature_summary(WHAT ENABLED_FEATURES DESCRIPTION "Enabled features:")
