@@ -1,5 +1,6 @@
 #include "big_archive.h"
 
+#include <algorithm>
 #include <fstream>
 
 namespace end_editor {
@@ -91,12 +92,16 @@ namespace end_editor {
     }
 
     bool BigArchive::read(const BigEntry &entry, std::string &out) const {
+        return this->readPrefix(entry, entry.size, out);
+    }
+
+    bool BigArchive::readPrefix(const BigEntry &entry, std::uint32_t maxBytes, std::string &out) const {
         std::ifstream file(this->filePath, std::ios::binary);
         if(!file) {
             return false;
         }
         file.seekg(entry.offset);
-        out.resize(entry.size);
-        return bool(file.read(out.data(), std::streamsize(entry.size)));
+        out.resize(std::min(entry.size, maxBytes));
+        return bool(file.read(out.data(), std::streamsize(out.size())));
     }
 }

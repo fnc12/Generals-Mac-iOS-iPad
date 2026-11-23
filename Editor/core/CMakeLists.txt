@@ -44,7 +44,11 @@ endif()
 add_library(end_editor_core STATIC
     src/big_archive.cpp
     src/ini_objects.cpp
+    src/game_files.cpp
     src/game_data.cpp
+    src/w3d.cpp
+    src/texture.cpp
+    src/model_loader.cpp
     src/editor_core.cpp
     src/editor_core_c.cpp
 )
@@ -76,7 +80,8 @@ if(END_EDITOR_BUILD_TESTS)
         GIT_SHALLOW TRUE
         FIND_PACKAGE_ARGS 3 CONFIG)
     FetchContent_MakeAvailable(Catch2)
-    add_executable(end_editor_tests tests/big_archive_tests.cpp tests/ini_objects_tests.cpp tests/editor_core_tests.cpp)
+    add_executable(end_editor_tests tests/big_archive_tests.cpp tests/ini_objects_tests.cpp tests/editor_core_tests.cpp
+        tests/model_tests.cpp)
     target_include_directories(end_editor_tests PRIVATE src)
     target_include_directories(end_editor_tests BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
     target_link_libraries(end_editor_tests PRIVATE end_editor_core Catch2::Catch2WithMain)

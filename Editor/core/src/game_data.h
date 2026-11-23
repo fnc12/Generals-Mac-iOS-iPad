@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game_files.h"
 #include "ini_objects.h"
 
 #include <filesystem>
@@ -16,10 +17,13 @@ namespace end_editor {
         std::string error;  // set when nothing could be read
     };
 
-    // Reads the object templates of a game folder: every Data/INI/Object/*.ini (and
-    // Data/INI/Default/Object.ini) from the folder's .big archives and from loose files under
-    // the folder. A loose file wins over an archived one with the same path, and among archives
-    // the first in name order wins (that is why patch archives are named "!..." or "00...").
+    // Reads the object templates (every Data/INI/Object/*.ini and Data/INI/Default/Object.ini)
+    // the mounted folders hold. See GameFiles for which copy of a file wins.
+    GameDataScan scanObjects(const GameFiles &files);
+
+    // Mounts `folders` (Zero Hour first, then base Generals if given) and scans them.
+    // `files` keeps the mount for later reads (models, textures).
+    GameDataScan scanGameData(const std::vector<std::filesystem::path> &folders, GameFiles &files);
     GameDataScan scanGameData(const std::filesystem::path &gameDir);
 
     // True for the INI paths that hold object templates ("data/ini/object/x.ini").

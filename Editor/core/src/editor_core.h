@@ -1,11 +1,14 @@
 #pragma once
 
+#include "game_files.h"
+#include "model_loader.h"
 #include "storage.h"
 
 #include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace end_editor {
 
@@ -31,17 +34,24 @@ namespace end_editor {
         }
 
       private:
-        struct OpenGameJob {
-            std::string gameDir;
+        struct Job {
+            enum Kind { openGame, openModel, playAnimation } kind = openGame;
+            std::vector<std::string> arguments;
         };
 
         void setStatus(const std::string &state, const std::string &message, const std::string &gameDir,
                        std::int64_t objectCount);
-        void openGame(const OpenGameJob &job);
+        void setModelState(const std::string &name, const std::string &state, const std::string &message);
+        void runOpenGame(const Job &job);
+        void runOpenModel(const std::string &name);
+        void runPlayAnimation(const std::string &name);
 
         std::string path;
         std::unique_ptr<Storage> storage;
-        std::deque<OpenGameJob> jobs;
+        std::deque<Job> jobs;
         std::int64_t revision = 0;
+        GameFiles files;
+        std::unique_ptr<ModelLoader> loader;
+        LoadedModel model;
     };
 }

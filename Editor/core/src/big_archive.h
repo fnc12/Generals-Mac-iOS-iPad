@@ -33,6 +33,8 @@ namespace end_editor {
 
         // Reads one entry's bytes. Returns false on an I/O error.
         bool read(const BigEntry &entry, std::string &out) const;
+        // Reads at most the first `maxBytes` bytes of an entry.
+        bool readPrefix(const BigEntry &entry, std::uint32_t maxBytes, std::string &out) const;
 
       private:
         std::filesystem::path filePath;
