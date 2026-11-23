@@ -58,11 +58,6 @@ Display::Display()
 	m_cinematicText = AsciiString::TheEmptyString;
 	m_cinematicFont = nullptr;
 	m_cinematicTextFrames = 0;
-	m_movieHoldTime	= -1;
-	m_copyrightHoldTime = -1;
-	m_elapsedMovieTime = 0;
-	m_elapsedCopywriteTime = 0;
-	m_copyrightDisplayString = nullptr;
 
 	m_currentlyPlayingMovie.clear();
 	m_letterBoxFadeStartTime = 0;
@@ -155,7 +150,8 @@ Bool Display::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt bi
 	UnsignedInt oldDisplayHeight=getHeight();
 	UnsignedInt oldDisplayWidth=getWidth();
 	Int oldViewWidth=TheTacticalView->getWidth();
-	Int oldViewHeight=TheTacticalView->getHeight();
+	// GeneralsX @feature ClaudeCode 22/11/2026 The framed height is what was scaled for the control bar.
+	Int oldFramingHeight=TheTacticalView->getFramingHeight();
 	Int oldViewOriginX,oldViewOriginY;
 	TheTacticalView->getOrigin(&oldViewOriginX,&oldViewOriginY);
 
@@ -164,7 +160,20 @@ Bool Display::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt bi
 
 	//Adjust view to match previous proportions
 	TheTacticalView->setWidth((Real)oldViewWidth/(Real)oldDisplayWidth*(Real)xres);
-	TheTacticalView->setHeight((Real)oldViewHeight/(Real)oldDisplayHeight*(Real)yres);
+	// GeneralsX @feature ClaudeCode 22/11/2026 Keep the framed proportion. If the view was shortened for the
+	// control bar and the new display lays the UI out in a centred rect, draw the view at full height and only
+	// frame the camera for the shortened height (see ControlBar::setScaledViewportHeight).
+	const Int newFramingHeight = (Int)((Real)oldFramingHeight/(Real)oldDisplayHeight*(Real)yres);
+	if (oldFramingHeight < (Int)oldDisplayHeight && getUILayoutOriginX() > 0)
+	{
+		TheTacticalView->setFramingHeight(newFramingHeight);
+		TheTacticalView->setHeight(yres);
+	}
+	else
+	{
+		TheTacticalView->setFramingHeight(0);
+		TheTacticalView->setHeight(newFramingHeight);
+	}
 	TheTacticalView->setOrigin((Real)oldViewOriginX/(Real)oldDisplayWidth*(Real)xres,
 	(Real)oldViewOriginY/(Real)oldDisplayHeight*(Real)yres);
 	return TRUE;
@@ -173,6 +182,29 @@ Bool Display::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt bi
 // Display::setWidth ==========================================================
 /** Set the width of the display */
 //=============================================================================
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature ClaudeCode 22/11/2026 Width of the centred rect the UI is laid out in. See Display.h.
+//-------------------------------------------------------------------------------------------------
+Int Display::getUILayoutWidth()
+{
+	const Int width = (Int)getWidth();
+	const Int height = (Int)getHeight();
+
+	if (TheGlobalData == nullptr || !TheGlobalData->m_ultrawideUI || height <= 0)
+		return width;
+
+	const Int maxWidth = (Int)((Real)height * UILayoutMaxAspectRatio + 0.5f);
+	return width > maxWidth ? maxWidth : width;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature ClaudeCode 22/11/2026 Left edge of the centred rect the UI is laid out in. See Display.h.
+//-------------------------------------------------------------------------------------------------
+Int Display::getUILayoutOriginX()
+{
+	return ((Int)getWidth() - getUILayoutWidth()) / 2;
+}
+
 void Display::setWidth( UnsignedInt width )
 {
 
@@ -201,46 +233,13 @@ void Display::setHeight( UnsignedInt height )
 }
 
 //============================================================================
-// Display::playLogoMovie
-// minMovieLength is in milliseconds
-// minCopyrightLength
-//============================================================================
-
-void Display::playLogoMovie( AsciiString movieName, Int minMovieLength, Int minCopyrightLength )
-{
-
-	stopMovie();
-
-	m_videoStream = TheVideoPlayer->open( movieName );
-
-	if ( m_videoStream == nullptr )
-	{
-		return;
-	}
-
-	m_currentlyPlayingMovie = movieName;
-	m_movieHoldTime = minMovieLength;
-	m_copyrightHoldTime = minCopyrightLength;
-	m_elapsedMovieTime = timeGetTime();  // we're using time get time because legal wants actual "Seconds"
-
-	m_videoBuffer = createVideoBuffer();
-	if (	m_videoBuffer == nullptr ||
-				!m_videoBuffer->allocate(	m_videoStream->width(),
-													m_videoStream->height())
-		)
-	{
-		stopMovie();
-		return;
-	}
-
-}
-
-//============================================================================
 // Display::playMovie
 //============================================================================
 
 void Display::playMovie( AsciiString movieName)
 {
+	if (TheGlobalData->m_headless)
+		return;
 
 	stopMovie();
 
@@ -286,13 +285,6 @@ void Display::stopMovie()
 		//TheScriptEngine->notifyOfCompletedVideo(m_currentlyPlayingMovie); // Removing this sync-error cause MDC
 		m_currentlyPlayingMovie = AsciiString::TheEmptyString;
 	}
-	if(m_copyrightDisplayString)
-	{
-		TheDisplayStringManager->freeDisplayString(m_copyrightDisplayString);
-		m_copyrightDisplayString = nullptr;
-	}
-	m_copyrightHoldTime = -1;
-	m_movieHoldTime = -1;
 }
 
 //============================================================================
@@ -308,34 +300,8 @@ void Display::update()
 			m_videoStream->frameDecompress();
 			m_videoStream->frameRender( m_videoBuffer );
 			if( m_videoStream->frameIndex() != m_videoStream->frameCount() - 1)
-				m_videoStream->frameNext();
-			else if( m_copyrightHoldTime >= 0 ||m_movieHoldTime >= 0 )
 			{
-				if( m_elapsedCopywriteTime == 0 && m_elapsedCopywriteTime >= 0)
-				{
-					//display the copyrighttext;
-					deleteInstance(m_copyrightDisplayString);
-					m_copyrightDisplayString = TheDisplayStringManager->newDisplayString();
-					m_copyrightDisplayString->setText(TheGameText->fetch("GUI:EACopyright"));
-					if (TheGlobalLanguageData && TheGlobalLanguageData->m_copyrightFont.name.isNotEmpty())
-					{	FontDesc	*fontdesc=&TheGlobalLanguageData->m_copyrightFont;
-						m_copyrightDisplayString->setFont(TheFontLibrary->getFont(fontdesc->name,
-							TheGlobalLanguageData->adjustFontSize(fontdesc->size),
-							fontdesc->bold));
-					}
-					else
-						m_copyrightDisplayString->setFont(TheFontLibrary->getFont("Courier",
-						TheGlobalLanguageData->adjustFontSize(12), TRUE));
-					m_elapsedCopywriteTime = timeGetTime();
-				}
-				if(m_movieHoldTime + m_elapsedMovieTime < timeGetTime() &&
-						m_copyrightHoldTime + m_elapsedCopywriteTime < timeGetTime())
-				{
-					m_movieHoldTime = -1;
-					m_elapsedMovieTime = 0;
-					m_elapsedCopywriteTime = 0;
-					m_copyrightHoldTime = -1;
-				}
+				m_videoStream->frameNext();
 			}
 			else
 			{

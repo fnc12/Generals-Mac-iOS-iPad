@@ -30,9 +30,10 @@
 // INCLUDES ///////////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
+#if defined(SAGE_USE_GAMESPY)
 #include "gamespy/ghttp/ghttp.h"
+#endif
 
-#include "Lib/BaseType.h"
 #include "Common/GameEngine.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
@@ -55,6 +56,7 @@
 #include "GameClient/KeyDefs.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetStaticText.h"
+#include "GameClient/GadgetPushButton.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/WindowVideoManager.h"
 #include "GameClient/CampaignManager.h"
@@ -62,16 +64,22 @@
 #include "GameClient/GameClient.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/ScriptEngine.h"
+#if defined(SAGE_USE_GAMESPY)
 #include "GameNetwork/GameSpyOverlay.h"
+#endif
 #include "GameClient/GameWindowTransitions.h"
 #include "GameClient/ChallengeGenerals.h"
 
+#if defined(SAGE_USE_GAMESPY)
 #include "GameNetwork/GameSpy/PeerDefs.h"
 #include "GameNetwork/GameSpy/PeerThread.h"
 #include "GameNetwork/GameSpy/BuddyThread.h"
+#endif
 
 #include "GameNetwork/DownloadManager.h"
+#if defined(SAGE_USE_GAMESPY)
 #include "GameNetwork/GameSpy/MainMenuUtils.h"
+#endif
 
 #include "GameClient/InGameUI.h"
 
@@ -82,6 +90,12 @@
 #include <SDL3/SDL.h>
 #endif
 
+// GeneralsX @feature GeneralsOnline NGMP browser-based login
+#ifdef SAGE_USE_NGMP
+#include "GameNetwork/GeneralsOnline/OnlineServices_Manager.h"
+#include "GameNetwork/GeneralsOnline/NGMP_Helpers.h"
+#include "GameNetwork/GameSpyOverlay.h"
+#endif
 
 // PRIVATE DATA ///////////////////////////////////////////////////////////////////////////////////
 
@@ -117,6 +131,8 @@ static NameKeyType buttonCustomMissionID = NAMEKEY_INVALID;
 static NameKeyType onlineID = NAMEKEY_INVALID;
 static NameKeyType networkID = NAMEKEY_INVALID;
 static NameKeyType optionsID = NAMEKEY_INVALID;
+// GeneralsX @feature fbraz3 14/10/2026 GeneralsX options menu button
+static NameKeyType generalsxID = NAMEKEY_INVALID;
 static NameKeyType exitID = NAMEKEY_INVALID;
 static NameKeyType motdID = NAMEKEY_INVALID;
 static NameKeyType worldBuilderID = NAMEKEY_INVALID;
@@ -165,6 +181,15 @@ static GameWindow *getUpdate = nullptr;
 #ifdef SAGE_UPDATE_CHECK
 static GameWindow *updateNotifyButton = nullptr;  // GeneralsX @feature BenderAI 21/04/2026 Dynamically created update notification button
 static AsciiString s_updateLatestTag;             // Tag of available update
+#if defined(SAGE_USE_NGMP)
+// GeneralsX @feature fbraz3 07/10/2026 Online flow update check gating and cancellation handling
+static Bool s_waitingUpdateCheckBeforeOnline = FALSE;
+static void cancelUpdateCheckBeforeOnline()
+{
+	s_waitingUpdateCheckBeforeOnline = FALSE;
+	ClearGSMessageBoxes();
+}
+#endif
 #endif
 static GameWindow *buttonTRAINING = nullptr;
 static GameWindow *buttonChallenge = nullptr;
@@ -273,7 +298,8 @@ static void quitCallback()
 
 
 	//if (!TheGameLODManager->didMemPass())
-	{	//GIANT CRAPTACULAR HACK ALERT!!!!  On sytems with little memory, we skip all normal exit code
+	{
+		//GIANT CRAPTACULAR HACK ALERT!!!!  On sytems with little memory, we skip all normal exit code
 //		//and let Windows clean up the mess.  This reduces exit times from minutes to seconds.
 //		//8-19-03. MW
 //		delete TheGameClient;
@@ -441,7 +467,11 @@ static void initLabelVersion()
 	NameKeyType versionID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:LabelVersion" );
 	GameWindow *labelVersion = TheWindowManager->winGetWindowFromId( nullptr, versionID );
 	UnicodeString creditText;
-	creditText.translate("GeneralsX - Multiplatform C&C Generals");
+	if (TheVersion) {
+		creditText = TheVersion->getUnicodeProjectWatermark();
+	} else {
+		creditText.translate("GeneralsX - Multiplatform C&C Generals");
+	}
 
 	if (labelVersion)
 	{
@@ -462,7 +492,8 @@ static void initLabelVersion()
 			instData.m_style = GWS_STATIC_TEXT | GWS_MOUSE_TRACK;
 			instData.m_textLabelString = "GeneralsXCreditLabel";
 
-			const Int width = 560;
+			// GeneralsX @feature ClaudeCode 22/11/2026 Relative to the main menu parent, which spans the UI layout rect.
+			const Int width = TheDisplay->getUILayoutWidth() - 16;
 			const Int height = 28;
 			const Int x = 8;
 			const Int y = TheDisplay->getHeight() - height - 8;
@@ -480,12 +511,78 @@ static void initLabelVersion()
 			if (fallbackCreditLabel)
 			{
 				// GeneralsX @tweak BenderAI 31/03/2026 Keep fallback watermark subtle and aligned to bottom-left target placement.
-				fallbackCreditLabel->winSetFont(TheWindowManager->winFindFont("Arial", 12, FALSE));
+				int baseSize = 12;
+				float scaleY = TheDisplay ? ((float)TheDisplay->getHeight() / 600.0f) : 1.0f;
+				int scaledSize = (scaleY > 1.0f) ? (int)(baseSize * scaleY * 0.70f) : baseSize;
+				if (scaledSize < baseSize) scaledSize = baseSize;
+				fallbackCreditLabel->winSetFont(TheWindowManager->winFindFont("Arial", scaledSize, FALSE));
 				fallbackCreditLabel->winSetEnabledTextColors(GameMakeColor(255, 220, 60, 255), GameMakeColor(0, 0, 0, 0));
 				GadgetStaticTextSetText(fallbackCreditLabel, creditText);
 			}
 		}
 	}
+}
+
+// GeneralsX @bugfix fbraz3 20/11/2026 Dynamically inject ButtonGeneralsX instead of overriding MainMenu.wnd in generalsx.big
+static GameWindow *createGeneralsXMainMenuButton( GameWindow *buttonCredits, GameWindow *buttonExit, NameKeyType generalsxID )
+{
+	if (!buttonCredits || !buttonExit || !TheWindowManager)
+		return nullptr;
+
+	GameWindow *earthMap = buttonCredits->winGetParent();
+	if (!earthMap)
+		return nullptr;
+
+	ICoord2D credPos, credSize, exitPos;
+	buttonCredits->winGetPosition( &credPos.x, &credPos.y );
+	buttonCredits->winGetSize( &credSize.x, &credSize.y );
+	buttonExit->winGetPosition( &exitPos.x, &exitPos.y );
+
+	Int deltaY = exitPos.y - credPos.y;
+	if (deltaY <= 0)
+		deltaY = credSize.y + 4;
+
+	if (GameWindow *mapBorder = earthMap->winGetParent())
+	{
+		ICoord2D mapSize;
+		mapBorder->winGetSize( &mapSize.x, &mapSize.y );
+		mapBorder->winSetSize( mapSize.x, mapSize.y + deltaY );
+	}
+
+	ICoord2D earthSize;
+	earthMap->winGetSize( &earthSize.x, &earthSize.y );
+	earthMap->winSetSize( earthSize.x, earthSize.y + deltaY );
+
+	buttonCredits->winSetPosition( credPos.x, credPos.y + deltaY );
+	buttonExit->winSetPosition( exitPos.x, exitPos.y + deltaY );
+
+	WinInstanceData instData;
+	instData.init();
+	if (WinInstanceData *credInst = buttonCredits->winGetInstanceData())
+	{
+		instData = *credInst;
+		instData.m_text = nullptr;
+		instData.m_tooltip = nullptr;
+		instData.m_videoBuffer = nullptr;
+	}
+	instData.m_id = generalsxID;
+	instData.m_decoratedNameString = "MainMenu.wnd:ButtonGeneralsX";
+	instData.m_textLabelString = "GUI:GeneralsXOptions";
+	instData.m_tooltipString.clear();
+
+	GameWindow *btnGX = TheWindowManager->gogoGadgetPushButton(
+		earthMap,
+		buttonCredits->winGetStatus(),
+		credPos.x, credPos.y,
+		credSize.x, credSize.y,
+		&instData,
+		nullptr,
+		FALSE );
+
+	if (btnGX && buttonCredits->winGetFont())
+		btnGX->winSetFont( buttonCredits->winGetFont() );
+
+	return btnGX;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -516,6 +613,8 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 	onlineID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonOnline" );
 	networkID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonNetwork" );
 	optionsID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonOptions" );
+	// GeneralsX @feature fbraz3 14/10/2026 GeneralsX options menu button
+	generalsxID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonGeneralsX" );
 	exitID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonExit" );
 	motdID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonMOTD" );
 	worldBuilderID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonWorldBuilder" );
@@ -555,15 +654,41 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 	// GeneralsX @feature fbraz3 18/09/2026 Enable Steam Custom Mission button
 	buttonCustomMission = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonCustomMissionID );
 	buttonOnline = TheWindowManager->winGetWindowFromId( parentMainMenu, onlineID );
+#if !defined(SAGE_USE_GAMESPY) && !defined(SAGE_USE_NGMP)
+	if (buttonOnline)
+		buttonOnline->winEnable(FALSE);
+#endif
 	buttonNetwork = TheWindowManager->winGetWindowFromId( parentMainMenu, networkID );
 	buttonOptions = TheWindowManager->winGetWindowFromId( parentMainMenu, optionsID );
 	buttonExit = TheWindowManager->winGetWindowFromId( parentMainMenu, exitID );
+#if defined(__EMSCRIPTEN__)
+	if (buttonExit)
+		buttonExit->winHide(TRUE);
+#endif
 	buttonMOTD = TheWindowManager->winGetWindowFromId( parentMainMenu, motdID );
 	buttonWorldBuilder = TheWindowManager->winGetWindowFromId( parentMainMenu, worldBuilderID );
 	buttonReplay = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonReplayID );
 	buttonLoadReplay = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonLoadReplayID );
 	buttonLoad = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonLoadID );
 	buttonCredits = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonCreditsID );
+	GameWindow *btnGX = TheWindowManager->winGetWindowFromId( parentMainMenu, generalsxID );
+	if (!btnGX)
+	{
+		btnGX = createGeneralsXMainMenuButton( buttonCredits, buttonExit, generalsxID );
+	}
+	if (btnGX)
+	{
+		UnicodeString ustr = TheGameText->fetch("GUI:GeneralsXOptions");
+		GadgetButtonSetText(btnGX, ustr);
+
+		// GeneralsX @feature fbraz3 14/10/2026 Register ButtonGeneralsX in main menu transitions
+		if (TheTransitionHandler)
+		{
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenu", "MainMenu.wnd:ButtonGeneralsX", BUTTON_TRANSITION_FLASH, 11);
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenuLogoFade", "MainMenu.wnd:ButtonGeneralsX", BUTTON_TRANSITION_FLASH, 11);
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenuBack", "MainMenu.wnd:ButtonGeneralsX", TRANSITION_FLASH, 0);
+		}
+	}
 
 	buttonEasy = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonEasyID );
 	buttonMedium = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonMediumID );
@@ -659,11 +784,15 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 	UpdateChecker::start();
 #endif
 
+#if defined(SAGE_USE_GAMESPY)
 	if (TheGameSpyPeerMessageQueue && !TheGameSpyPeerMessageQueue->isConnected())
 	{
 		DEBUG_LOG(("Tearing down GameSpy from MainMenuInit()"));
+#ifndef SAGE_USE_NGMP
 		TearDownGameSpy();
+#endif
 	}
+#endif
 	if (TheMapCache)
 		TheMapCache->updateCache();
 
@@ -735,9 +864,18 @@ void MainMenuShutdown( WindowLayout *layout, void *userData )
 		TheWindowManager->winDestroy(updateNotifyButton);
 		updateNotifyButton = nullptr;
 	}
+#if defined(SAGE_USE_NGMP)
+	if (s_waitingUpdateCheckBeforeOnline)
+	{
+		s_waitingUpdateCheckBeforeOnline = FALSE;
+		ClearGSMessageBoxes();
+	}
+#endif
 #endif
 
+#if defined(SAGE_USE_GAMESPY)
 	CancelPatchCheckCallback();
+#endif
 
 	// if we are shutting down for an immediate pop, skip the animations
 	Bool popImmediate = *(Bool *)userData;
@@ -766,7 +904,11 @@ void MainMenuShutdown( WindowLayout *layout, void *userData )
 //		localAnimateWindowManager->reverseAnimateWindow();
 }
 
+#if !defined(SAGE_USE_GAMESPY) && !defined(SAGE_USE_NGMP)
+Bool DontShowMainMenu = FALSE;
+#else
 extern Bool DontShowMainMenu;
+#endif
 
 ////////////////////////////////////////////////////////////////////////////
 //Allows the user to confirm the change, goes back to the previous mode
@@ -881,6 +1023,37 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 	if(DontShowMainMenu && justEntered)
 		justEntered = FALSE;
 
+#if defined(SAGE_USE_NGMP)
+	if (NGMP_OnlineServicesManager::getInstance().isLoggedIn()) {
+		if (buttonPushed) {
+			buttonPushed = FALSE; 
+			dontAllowTransitions = FALSE;
+			std::string username = NGMP_OnlineServicesManager::getInstance().getUsername();
+			int64_t userId = NGMP_OnlineServicesManager::getInstance().getUserId();
+			if (TheGameSpyInfo) {
+				TheGameSpyInfo->setLocalName(AsciiString(username.c_str()));
+				TheGameSpyInfo->setLocalProfileID(static_cast<Int>(userId));
+			}
+			TheShell->push("Menus/WOLWelcomeMenu.wnd");
+		}
+	} else if (!NGMP_OnlineServicesManager::getInstance().isWaitingBrowserLogin()) {
+		// GeneralsX @bugfix fbraz3 12/09/2026 Restore main menu UI if browser login was cancelled or failed
+		if (buttonPushed && dropDown == DROPDOWN_NONE) {
+			for (Int i = 0; i < DROPDOWN_COUNT; ++i) {
+				if (dropDownWindows[i]) {
+					dropDownWindows[i]->winHide(i != DROPDOWN_MAIN);
+				}
+			}
+			TheTransitionHandler->remove("MainMenuMultiPlayerMenuTransitionToNext");
+			HandleCanceledDownload(TRUE);
+			dontAllowTransitions = FALSE;
+			if (parentMainMenu) {
+				TheWindowManager->winSetFocus(parentMainMenu);
+			}
+		}
+	}
+#endif
+
 	// GeneralsX @feature BenderAI 21/04/2026 Poll background update check; create dynamic button when update found
 #ifdef SAGE_UPDATE_CHECK
 	if (updateNotifyButton == nullptr)
@@ -893,7 +1066,8 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 			const Int btnW = 260;
 			const Int btnH = 26;
 			const Int margin = 8;
-			const Int x = TheDisplay->getWidth()  - btnW - margin;
+			// GeneralsX @feature ClaudeCode 22/11/2026 Relative to the main menu parent, which spans the UI layout rect.
+			const Int x = TheDisplay->getUILayoutWidth()  - btnW - margin;
 			const Int y = TheDisplay->getHeight() - btnH - margin;
 
 			WinInstanceData instData;
@@ -915,7 +1089,11 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 
 			if (updateNotifyButton)
 			{
-				GameFont* font = TheWindowManager->winFindFont("Arial", 10, FALSE);
+				int baseSize = 10;
+				float scaleY = TheDisplay ? ((float)TheDisplay->getHeight() / 600.0f) : 1.0f;
+				int scaledSize = (scaleY > 1.0f) ? (int)(baseSize * scaleY * 0.70f) : baseSize;
+				if (scaledSize < baseSize) scaledSize = baseSize;
+				GameFont* font = TheWindowManager->winFindFont("Arial", scaledSize, FALSE);
 				if (font)
 					updateNotifyButton->winSetFont(font);
 
@@ -925,6 +1103,50 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 			}
 		}
 	}
+
+#if defined(SAGE_USE_NGMP)
+	// GeneralsX @feature fbraz3 07/10/2026 Poll pending update check before transitioning to Online
+	if (s_waitingUpdateCheckBeforeOnline)
+	{
+		if (UpdateChecker::isDone())
+		{
+			s_waitingUpdateCheckBeforeOnline = FALSE;
+			ClearGSMessageBoxes();
+
+			if (UpdateChecker::hasUpdate())
+			{
+				UnicodeString msg(L"A newer version of GeneralsX is available. You must update before playing online.");
+				const char* tag = UpdateChecker::getLatestTag();
+				if (tag && tag[0] != '\0')
+				{
+					char buf[256];
+					snprintf(buf, sizeof(buf), "A newer version of GeneralsX (%s) is available. You must update before playing online.", tag);
+					msg = NGMP::UTF8ToUnicode(buf);
+				}
+				GSMessageBoxOk(UnicodeString(L"Update Required"), msg, []() {
+					const char* url = UpdateChecker::getReleasesUrl();
+					if (url)
+					{
+						NGMP::OpenURL(url);
+					}
+				});
+			}
+			else
+			{
+				dontAllowTransitions = TRUE;
+				buttonPushed = TRUE;
+				dropDownWindows[DROPDOWN_MULTIPLAYER]->winHide(FALSE);
+				TheTransitionHandler->reverse("MainMenuMultiPlayerMenuTransitionToNext");
+				NGMP_OnlineServicesManager::getInstance().init();
+				if (!NGMP_OnlineServicesManager::getInstance().isLoggedIn())
+				{
+					NGMP_OnlineServicesManager::getInstance().beginLogin();
+				}
+				dropDown = DROPDOWN_NONE;
+			}
+		}
+	}
+#endif
 #endif
 
 	if (TheDownloadManager && !TheDownloadManager->isDone())
@@ -1021,14 +1243,20 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 //			initialGadgetDelay--;
 //	}
 
+#if defined(SAGE_USE_GAMESPY) || defined(SAGE_USE_NGMP)
 	if (raiseMessageBoxes)
 	{
 		RaiseGSMessageBox();
 		raiseMessageBoxes = FALSE;
 	}
+#endif
 
+#if defined(SAGE_USE_GAMESPY)
 	HTTPThinkWrapper();
 	GameSpyUpdateOverlays();
+#elif defined(SAGE_USE_NGMP)
+	GameSpyUpdateOverlays();
+#endif
 //	if(localAnimateWindowManager)
 //		localAnimateWindowManager->update();
 //	if(localAnimateWindowManager && pendingDropDown != DROPDOWN_NONE && localAnimateWindowManager->isFinished())
@@ -1149,17 +1377,23 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 		//---------------------------------------------------------------------------------------------
 		case GWM_CREATE:
 		{
+#if defined(SAGE_USE_GAMESPY)
 			ghttpStartup();
+#endif
 			break;
 		}
 
 		//---------------------------------------------------------------------------------------------
 		case GWM_DESTROY:
 		{
+#if defined(SAGE_USE_GAMESPY)
 			ghttpCleanup();
 			DEBUG_LOG(("Tearing down GameSpy from MainMenuSystem(GWM_DESTROY)"));
+#ifndef SAGE_USE_NGMP
 			TearDownGameSpy();
+#endif
 			StopAsyncDNSCheck(); // kill off the async DNS check thread in case it is still running
+#endif
 			break;
 
 		}
@@ -1420,8 +1654,8 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 #endif
 
 			// don't allow mouse click slop that occurs during transitions to unset this flag
-			if (TheTransitionHandler->isFinished()
-				&& controlID != buttonEasyID && controlID != buttonMediumID && controlID != buttonHardID)
+			if (TheTransitionHandler->isFinished() &&
+				controlID != buttonEasyID && controlID != buttonMediumID && controlID != buttonHardID)
 			{
 				// this toggle must only be reset if one of these buttons have not been pressed
 				// ...the difficulty selection behavior must have a chance to act upon this toggle
@@ -1582,12 +1816,52 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 			{
 				if(dontAllowTransitions)
 					break;
+
+#if defined(SAGE_USE_NGMP) && defined(SAGE_UPDATE_CHECK)
+				// GeneralsX @feature fbraz3 07/10/2026 Require latest game version and gate Online button until update check finishes
+				if (!NGMP::IsDevelopment()) {
+					if (UpdateChecker::hasUpdate()) {
+						UnicodeString msg(L"A newer version of GeneralsX is available. You must update before playing online.");
+						const char* tag = UpdateChecker::getLatestTag();
+						if (tag && tag[0] != '\0') {
+							char buf[256];
+							snprintf(buf, sizeof(buf), "A newer version of GeneralsX (%s) is available. You must update before playing online.", tag);
+							msg = NGMP::UTF8ToUnicode(buf);
+						}
+						ClearGSMessageBoxes();
+						GSMessageBoxOk(UnicodeString(L"Update Required"), msg, []() {
+							const char* url = UpdateChecker::getReleasesUrl();
+							if (url) {
+								NGMP::OpenURL(url);
+							}
+						});
+						break;
+					}
+					else if (!UpdateChecker::isDone()) {
+						s_waitingUpdateCheckBeforeOnline = TRUE;
+						ClearGSMessageBoxes();
+						GSMessageBoxCancel(TheGameText->fetch("GUI:CheckingForPatches"),
+						                   TheGameText->fetch("GUI:CheckingForPatches"),
+						                   cancelUpdateCheckBeforeOnline);
+						break;
+					}
+				}
+#endif
+
 				dontAllowTransitions = TRUE;
 				buttonPushed = TRUE;
 				dropDownWindows[DROPDOWN_MULTIPLAYER]->winHide(FALSE);
 				TheTransitionHandler->reverse("MainMenuMultiPlayerMenuTransitionToNext");
 
+#if defined(SAGE_USE_NGMP)
+				// GeneralsX @feature GeneralsOnline - Silent refresh token login with browser fallback
+				NGMP_OnlineServicesManager::getInstance().init();
+				if (!NGMP_OnlineServicesManager::getInstance().isLoggedIn()) {
+					NGMP_OnlineServicesManager::getInstance().beginLogin();
+				}
+#elif defined(SAGE_USE_GAMESPY)
 				StartPatchCheck();
+#endif
 //				localAnimateWindowManager->reverseAnimateWindow();
 				dropDown = DROPDOWN_NONE;
 
@@ -1619,6 +1893,16 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 				optLayout->hide(FALSE);
 				optLayout->bringForward();
 			}
+			// GeneralsX @feature fbraz3 14/10/2026 Open GeneralsX options menu
+			else if ( controlID == generalsxID )
+			{
+				if (dontAllowTransitions)
+					break;
+				dontAllowTransitions = TRUE;
+				TheShell->push( "Menus/GeneralsXMenu.wnd" );
+				dropDownWindows[DROPDOWN_MAIN]->winHide( FALSE );
+				TheTransitionHandler->reverse( "MainMenuDefaultMenu" );
+			}
 			else if( controlID == worldBuilderID )
 			{
 #if defined RTS_DEBUG
@@ -1634,7 +1918,7 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 #ifdef SAGE_UPDATE_CHECK
 				// GeneralsX @feature BenderAI 21/04/2026 Open GitHub releases page instead of legacy GameSpy patch download
 				SDL_OpenURL("https://github.com/fbraz3/GeneralsX/releases");
-#else
+#elif defined(SAGE_USE_GAMESPY)
 				StartDownloadingPatches();
 #endif
 			}

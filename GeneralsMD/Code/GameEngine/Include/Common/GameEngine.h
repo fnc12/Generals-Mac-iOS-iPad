@@ -33,6 +33,7 @@
 
 #include "Common/SubsystemInterface.h"
 #include "Common/GameType.h"
+#include "Common/OSDisplay.h"
 
 // forward declarations
 class AudioManager;
@@ -50,7 +51,6 @@ class ModuleFactory;
 class ThingFactory;
 class FunctionLexicon;
 class Radar;
-class WebBrowser;
 class ParticleSystemManager;
 
 class GameEngine : public SubsystemInterface
@@ -75,16 +75,22 @@ public:
 
 	virtual Bool isMultiplayerSession();
 	virtual void serviceWindowsOS() {};		///< service the native OS
+	virtual void setBusyState(Bool busyDisplay, Bool busySystem) {}	///< tell the OS to keep the display and/or system awake
+	// Display a warning box to the user with the specified localized prompt, message, and
+	// buttons. (Feel free to add buttons as appropriate to the OSDisplayButtonType enum).
+	// This function will return the button pressed to close the dialog.
+	virtual OSDisplayButtonType displayWarningBox(AsciiString p, AsciiString m, UnsignedInt buttonFlags, UnsignedInt otherFlags) { return OSDBT_ERROR; }
 	virtual Bool isActive() {return m_isActive;}	///< returns whether app has OS focus.
 	virtual void setIsActive(Bool isActive) { m_isActive = isActive; };
 
 protected:
 
+	void executeFrame();
 	virtual void resetSubsystems();
 
-	Bool canUpdateGameLogic();
+	Bool canUpdateGameLogic(UnsignedInt logicTimeQueryFlags = 0);
 	Bool canUpdateNetworkGameLogic();
-	Bool canUpdateRegularGameLogic();
+	Bool canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags);
 
 	virtual FileSystem *createFileSystem();								///< Factory for FileSystem classes
 	virtual LocalFileSystem *createLocalFileSystem() = 0;	///< Factory for LocalFileSystem classes
@@ -96,7 +102,6 @@ protected:
 	virtual ThingFactory *createThingFactory() = 0;				///< Factory for the thing factory
 	virtual FunctionLexicon *createFunctionLexicon() = 0;	///< Factory for Function Lexicon
 	virtual Radar *createRadar(Bool dummy) = 0;						///< Factory for radar
-	virtual WebBrowser *createWebBrowser() = 0;						///< Factory for embedded browser
 	virtual ParticleSystemManager* createParticleSystemManager(Bool dummy) = 0;
 	virtual AudioManager *createAudioManager(Bool dummy) = 0;				///< Factory for Audio Manager
 

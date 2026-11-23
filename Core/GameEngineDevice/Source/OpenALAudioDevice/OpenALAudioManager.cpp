@@ -63,6 +63,8 @@
 
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/TerrainLogic.h"
+// GeneralsX @bugfix fbraz3 24/06/2026 Save and restore FPU precision mode when calling audio manager entrypoints.
+#include "GameLogic/FPUControl.h"
 
 #include "Common/file.h"
 
@@ -140,6 +142,7 @@ OpenALAudioManager::~OpenALAudioManager()
 #if defined(_DEBUG) || defined(_INTERNAL)
 AudioHandle OpenALAudioManager::addAudioEvent(const AudioEventRTS* eventToAdd)
 {
+	ScopedFPUGuard fpuGuard;
 	if (TheGlobalData->m_preloadReport) {
 		if (!eventToAdd->getEventName().isEmpty()) {
 			m_allEventsLoaded.insert(eventToAdd->getEventName());
@@ -270,7 +273,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 
 			dd->printf("%2d: %-20s - (%s) Volume: %d (2D)\n", i, playing->m_audioEventRTS->getEventName().str(), filenameNoSlashes.str(), REAL_TO_INT(volume));
 			playingArray[i] = NULL;
@@ -293,7 +296,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 
 			fprintf(fp, "%2d: %-20s - (%s) Volume: %d (2D)\n", channel++, playing->m_audioEventRTS->getEventName().str(), filenameNoSlashes.str(), REAL_TO_INT(volume));
 		}
@@ -335,7 +338,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 			Real dist = -1.0f;
 			const Coord3D* pos = playing->m_audioEventRTS->getPosition();
 			char distStr[32];
@@ -390,7 +393,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 			fprintf(fp, "%2d: %-24s - (%s) Volume: %d \n", channel++, playing->m_audioEventRTS->getEventName().str(), filenameNoSlashes.str(), REAL_TO_INT(volume));
 		}
 
@@ -417,7 +420,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 
 			dd->printf("%2d: %-24s - (%s)  Volume: %d (Stream)\n", channel++, playing->m_audioEventRTS->getEventName().str(), filenameNoSlashes.str(), REAL_TO_INT(volume));
 		}
@@ -444,7 +447,7 @@ void OpenALAudioManager::audioDebugDisplay(DebugDisplayInterface* dd, void*, FIL
 
 			// Calculate Sample volume
 			volume = 100.0f;
-			volume *= getEffectiveVolume(playing->m_audioEventRTS);
+			volume *= getEffectiveVolume(playing->m_audioEventRTS.Peek());
 
 			fprintf(fp, "%2d: %-24s - (%s)  Volume: %d (Stream)\n", channel++, playing->m_audioEventRTS->getEventName().str(), filenameNoSlashes.str(), REAL_TO_INT(volume));
 		}
@@ -504,6 +507,7 @@ ALenum OpenALAudioManager::getALFormat(uint8_t channels, uint8_t bitsPerSample)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::init()
 {
+	ScopedFPUGuard fpuGuard;
 	AudioManager::init();
 #ifdef INTENSE_DEBUG
 	DEBUG_LOG(("Sound has temporarily been disabled in debug builds only. jkmcd\n"));
@@ -543,6 +547,7 @@ void OpenALAudioManager::reset()
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::update()
 {
+	ScopedFPUGuard fpuGuard;
 	AudioManager::update();
 	setDeviceListenerPosition();
 	processRequestList();
@@ -554,6 +559,8 @@ void OpenALAudioManager::update()
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::stopAudio(AudioAffect which)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	// All we really need to do is:
 	// 1) Remove the EOS callback.
 	// 2) Stop the sample, (so that when we later unload it, bad stuff doesn't happen)
@@ -609,6 +616,8 @@ void OpenALAudioManager::stopAudio(AudioAffect which)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::pauseAudio(AudioAffect which)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 
 	PlayingAudio* playing = NULL;
@@ -675,6 +684,8 @@ void OpenALAudioManager::pauseAudio(AudioAffect which)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::resumeAudio(AudioAffect which)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 
 	PlayingAudio* playing = NULL;
@@ -724,8 +735,13 @@ void OpenALAudioManager::pauseAmbient(Bool shouldPause)
 }
 
 //-------------------------------------------------------------------------------------------------
-void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
+void OpenALAudioManager::playAudioEvent(AudioRequest* req)
 {
+	AudioEventRTS *event = req->m_pendingEvent.Peek();
+	if (!event) {
+		return;
+	}
+
 #ifdef INTENSIVE_AUDIO_DEBUG
 	DEBUG_LOG(("OPENAL (%d) - Processing play request: %d (%s)", TheGameLogic->getFrame(), event->getPlayingHandle(), event->getEventName().str()));
 #endif
@@ -801,13 +817,8 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 		if (!handleToKill || foundSoundToReplace) {
 			stream = new OpenALAudioStream;
 			// When we need more data ask FFmpeg for more data.
-			stream->setRequireDataCallback([ffmpegFile, stream]() -> bool {
+			stream->setRequireDataCallback([ffmpegFile, stream]() {
 				ffmpegFile->decodePacket();
-				// GeneralsX @bugfix 14/06/2026 Report TRUE end-of-file so a finished one-shot
-				// speech (taunt) stops being restarted and can reach a stable AL_STOPPED. Keys
-				// on real EOF, not a bare decode-error, so long briefings/music and transient
-				// underruns are unaffected.
-				return !ffmpegFile->isAtEof();
 				});
 			
 			// When we receive a frame from FFmpeg, send it to OpenAL.
@@ -852,7 +863,7 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 		}
 
 		// Put this on here, so that the audio event RTS will be cleaned up regardless.
-		audio->m_audioEventRTS = event;
+		audio->m_audioEventRTS = req->m_pendingEvent;
 		audio->m_stream = stream;
 		audio->m_ffmpegFile = ffmpegFile;
 		audio->m_type = PAT_Stream;
@@ -913,7 +924,7 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 				source = 0;
 			}
 			// Push it onto the list of playing things
-			audio->m_audioEventRTS = event;
+			audio->m_audioEventRTS = req->m_pendingEvent;
 			audio->m_source = source;
 			audio->m_bufferHandle = 0;
 			audio->m_type = PAT_3DSample;
@@ -921,7 +932,7 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 
 			if (source) {
 				audio->m_bufferHandle = playSample3D(event, audio);
-				m_sound->notifyOf3DSampleStart();
+
 			}
 
 			if (!audio->m_bufferHandle)
@@ -973,7 +984,7 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 			}
 
 			// Push it onto the list of playing things
-			audio->m_audioEventRTS = event;
+			audio->m_audioEventRTS = req->m_pendingEvent;
 			audio->m_source = source;
 			audio->m_bufferHandle = 0;
 			audio->m_type = PAT_Sample;
@@ -981,7 +992,7 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 
 			if (source) {
 				audio->m_bufferHandle = playSample(event, audio);
-				m_sound->notifyOf2DSampleStart();
+
 			}
 
 			if (!audio->m_bufferHandle) {
@@ -1012,6 +1023,8 @@ void OpenALAudioManager::playAudioEvent(AudioEventRTS* event)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::stopAudioEvent(AudioHandle handle)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 #ifdef INTENSIVE_AUDIO_DEBUG
 	DEBUG_LOG(("OPENAL (%d) - Processing stop request: %d\n", TheGameLogic->getFrame(), handle));
 #endif
@@ -1089,6 +1102,8 @@ void OpenALAudioManager::stopAudioEvent(AudioHandle handle)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::killAudioEventImmediately(AudioHandle audioEvent)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	//First look for it in the request list.
 	std::list<AudioRequest*>::iterator ait;
 	for (ait = m_audioRequests.begin(); ait != m_audioRequests.end(); ait++)
@@ -1160,6 +1175,8 @@ void OpenALAudioManager::killAudioEventImmediately(AudioHandle audioEvent)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::pauseAudioEvent(AudioHandle handle)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	// pause audio
 }
 
@@ -1214,20 +1231,17 @@ void OpenALAudioManager::releasePlayingAudio(PlayingAudio* release)
 	if (releaseInfo && releaseInfo->m_soundType == AT_SoundEffect) {
 		if (release->m_type == PAT_Sample) {
 			if (release->m_source) {
-				m_sound->notifyOf2DSampleCompletion();
+
 			}
 		}
 		else {
 			if (release->m_source) {
-				m_sound->notifyOf3DSampleCompletion();
+
 			}
 		}
 	}
 	releaseOpenALHandles(release);	// forces stop of this audio
 	closeBuffer(release->m_bufferHandle);
-	if (release->m_cleanupAudioEventRTS) {
-		releaseAudioEventRTS(release->m_audioEventRTS);
-	}
 	delete release;
 	release = NULL;
 }
@@ -1235,6 +1249,8 @@ void OpenALAudioManager::releasePlayingAudio(PlayingAudio* release)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::stopAllAudioImmediately(void)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 	PlayingAudio* playing;
 
@@ -1291,6 +1307,8 @@ void OpenALAudioManager::stopAllAudioImmediately(void)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::freeAllOpenALHandles(void)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	// First, we need to ensure that we don't have any sample handles open. To that end, we must stop
 	// all of our currently playing audio.
 	stopAllAudioImmediately();
@@ -1357,6 +1375,8 @@ void OpenALAudioManager::adjustPlayingVolume(PlayingAudio* audio)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::stopAllSpeech(void)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 	PlayingAudio* playing;
 	for (it = m_playingStreams.begin(); it != m_playingStreams.end(); ) {
@@ -1577,6 +1597,8 @@ void OpenALAudioManager::openDevice(void)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::closeDevice(void)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	unselectProvider();
 	alcMakeContextCurrent(nullptr);
 
@@ -1619,7 +1641,7 @@ Bool OpenALAudioManager::isCurrentlyPlaying(AudioHandle handle)
 	AudioRequest* req = NULL;
 	for (ait = m_audioRequests.begin(); ait != m_audioRequests.end(); ++ait) {
 		req = *ait;
-		if (req && req->m_usePendingEvent && req->m_pendingEvent->getPlayingHandle() == handle) {
+		if (req && req->m_pendingEvent && req->m_pendingEvent->getPlayingHandle() == handle) {
 			return true;
 		}
 	}
@@ -1630,6 +1652,8 @@ Bool OpenALAudioManager::isCurrentlyPlaying(AudioHandle handle)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::notifyOfAudioCompletion(UnsignedInt audioCompleted, UnsignedInt flags)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	PlayingAudio* playing = findPlayingAudioFrom(audioCompleted, flags);
 	if (!playing) {
 		DEBUG_CRASH(("Audio has completed playing, but we can't seem to find it. - jkmcd"));
@@ -1666,7 +1690,7 @@ void OpenALAudioManager::notifyOfAudioCompletion(UnsignedInt audioCompleted, Uns
 	if (playing->m_audioEventRTS->getNextPlayPortion() != PP_Done) {
 		if (playing->m_type == PAT_Sample) {
 			closeBuffer(playing->m_bufferHandle);	// close it so as not to leak it.
-			playing->m_bufferHandle = playSample(playing->m_audioEventRTS, playing);
+			playing->m_bufferHandle = playSample(playing->m_audioEventRTS.Peek(), playing);
 
 			// If we don't have a file now, then we should drop to the stopped status so that 
 			// We correctly close this handle.
@@ -1676,7 +1700,7 @@ void OpenALAudioManager::notifyOfAudioCompletion(UnsignedInt audioCompleted, Uns
 		}
 		else if (playing->m_type == PAT_3DSample) {
 			closeBuffer(playing->m_bufferHandle);	// close it so as not to leak it.
-			playing->m_bufferHandle = playSample3D(playing->m_audioEventRTS, playing);
+			playing->m_bufferHandle = playSample3D(playing->m_audioEventRTS.Peek(), playing);
 
 			// If we don't have a file now, then we should drop to the stopped status so that 
 			// We correctly close this handle.
@@ -1690,7 +1714,7 @@ void OpenALAudioManager::notifyOfAudioCompletion(UnsignedInt audioCompleted, Uns
 		// GeneralsX @bugfix BenderAI 11/03/2026 - guard against null audioEventRTS/info
 		const AudioEventInfo* info = (playing->m_audioEventRTS ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr);
 		if (info && info->m_soundType == AT_Music) {
-			playStream(playing->m_audioEventRTS, playing->m_stream);
+			playStream(playing->m_audioEventRTS.Peek(), playing->m_stream);
 
 			return;
 		}
@@ -1765,6 +1789,8 @@ UnsignedInt OpenALAudioManager::getProviderIndex(AsciiString providerName) const
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::selectProvider(UnsignedInt providerNdx)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	if (!isOn(AudioAffect_Sound3D))
 	{
 		return;
@@ -1865,6 +1891,8 @@ void OpenALAudioManager::selectProvider(UnsignedInt providerNdx)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::unselectProvider(void)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	if (!(isOn(AudioAffect_Sound3D) && isValidProvider())) {
 		return;
 	}
@@ -1972,7 +2000,7 @@ Bool OpenALAudioManager::doesViolateLimit(AudioEventRTS* event) const
 		if (req == NULL) {
 			continue;
 		}
-		if (req->m_usePendingEvent)
+		if (req->m_pendingEvent)
 		{
 			if (req->m_pendingEvent->getEventName() == event->getEventName())
 			{
@@ -2087,7 +2115,7 @@ AudioEventRTS* OpenALAudioManager::findLowestPrioritySound(AudioEventRTS* event)
 		//3D
 		for (it = m_playing3DSounds.begin(); it != m_playing3DSounds.end(); ++it)
 		{
-			AudioEventRTS* itEvent = (*it)->m_audioEventRTS;
+			AudioEventRTS* itEvent = (*it)->m_audioEventRTS.Peek();
 			if (!itEvent) continue; // GeneralsX @bugfix BenderAI 11/03/2026
 			const AudioEventInfo* itInfo = itEvent->getAudioEventInfo();
 			if (!itInfo) continue;
@@ -2111,7 +2139,7 @@ AudioEventRTS* OpenALAudioManager::findLowestPrioritySound(AudioEventRTS* event)
 		//2D
 		for (it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it)
 		{
-			AudioEventRTS* itEvent = (*it)->m_audioEventRTS;
+			AudioEventRTS* itEvent = (*it)->m_audioEventRTS.Peek();
 			if (!itEvent) continue; // GeneralsX @bugfix BenderAI 11/03/2026
 			const AudioEventInfo* itInfo = itEvent->getAudioEventInfo();
 			if (!itInfo) continue;
@@ -2152,7 +2180,7 @@ Bool OpenALAudioManager::isPlayingLowerPriority(AudioEventRTS* event) const
 			if (!(*it)->m_audioEventRTS) continue; // GeneralsX @bugfix BenderAI 11/03/2026
 			const AudioEventInfo* info = (*it)->m_audioEventRTS->getAudioEventInfo();
 			if (info && info->m_priority < priority) {
-				//event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
+				event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
 				return true;
 			}
 		}
@@ -2163,7 +2191,7 @@ Bool OpenALAudioManager::isPlayingLowerPriority(AudioEventRTS* event) const
 			if (!(*it)->m_audioEventRTS) continue; // GeneralsX @bugfix BenderAI 11/03/2026
 			const AudioEventInfo* info = (*it)->m_audioEventRTS->getAudioEventInfo();
 			if (info && info->m_priority < priority) {
-				//event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
+				event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
 				return true;
 			}
 		}
@@ -2175,6 +2203,8 @@ Bool OpenALAudioManager::isPlayingLowerPriority(AudioEventRTS* event) const
 //-------------------------------------------------------------------------------------------------
 Bool OpenALAudioManager::killLowestPrioritySoundImmediately(AudioEventRTS* event)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	//Actually, we want to kill the LOWEST PRIORITY SOUND, not the first "lower" priority
 	//sound we find, because it could easily be 
 	AudioEventRTS* lowestPriorityEvent = findLowestPrioritySound(event);
@@ -2191,7 +2221,7 @@ Bool OpenALAudioManager::killLowestPrioritySoundImmediately(AudioEventRTS* event
 					continue;
 				}
 
-				if (playing->m_audioEventRTS && playing->m_audioEventRTS == lowestPriorityEvent)
+				if (playing->m_audioEventRTS && playing->m_audioEventRTS.Peek() == lowestPriorityEvent)
 				{
 					//Release this 3D sound channel immediately because we are going to play another sound in it's place.
 					releasePlayingAudio(playing);
@@ -2210,7 +2240,7 @@ Bool OpenALAudioManager::killLowestPrioritySoundImmediately(AudioEventRTS* event
 					continue;
 				}
 
-				if (playing->m_audioEventRTS && playing->m_audioEventRTS == lowestPriorityEvent)
+				if (playing->m_audioEventRTS && playing->m_audioEventRTS.Peek() == lowestPriorityEvent)
 				{
 					//Release this 3D sound channel immediately because we are going to play another sound in it's place.
 					releasePlayingAudio(playing);
@@ -2227,6 +2257,8 @@ Bool OpenALAudioManager::killLowestPrioritySoundImmediately(AudioEventRTS* event
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::adjustVolumeOfPlayingAudio(AsciiString eventName, Real newVolume)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 
 	PlayingAudio* playing = NULL;
@@ -2265,6 +2297,8 @@ void OpenALAudioManager::adjustVolumeOfPlayingAudio(AsciiString eventName, Real 
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::removePlayingAudio(AsciiString eventName)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 
 	PlayingAudio* playing = NULL;
@@ -2314,6 +2348,8 @@ void OpenALAudioManager::removePlayingAudio(AsciiString eventName)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::removeAllDisabledAudio()
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	std::list<PlayingAudio*>::iterator it;
 
 	PlayingAudio* playing = NULL;
@@ -2464,7 +2500,7 @@ void OpenALAudioManager::processPlayingList(void)
 				adjustPlayingVolume(playing);
 			}
 
-			const Coord3D* pos = getCurrentPositionFromEvent(playing->m_audioEventRTS);
+			const Coord3D* pos = getCurrentPositionFromEvent(playing->m_audioEventRTS.Peek());
 			if (pos)
 			{
 				if (playing->m_audioEventRTS->isDead())
@@ -2475,7 +2511,7 @@ void OpenALAudioManager::processPlayingList(void)
 				}
 				else
 				{
-					Real volForConsideration = getEffectiveVolume(playing->m_audioEventRTS);
+					Real volForConsideration = getEffectiveVolume(playing->m_audioEventRTS.Peek());
 					volForConsideration /= (m_sound3DVolume > 0.0f ? m_soundVolume : 1.0f);
 					// GeneralsX @bugfix BenderAI 11/03/2026 - guard against null getAudioEventInfo()
 				const AudioEventInfo* pai = (playing->m_audioEventRTS ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr);
@@ -2547,10 +2583,10 @@ void OpenALAudioManager::processPlayingList(void)
 		}
 	}
 
-	// GeneralsX @bugfix 14/06/2026 Backstop (belt-and-braces): the proper fix is the EOF
-	// propagation in OpenALAudioStream (a finished one-shot now reaches AL_STOPPED so the
-	// per-stream clear above fires the frame the audio ends). This timeout remains only as a
-	// safety net in case AL_STOPPED detection ever fails on this iOS/OpenAL stack. A negative
+	// GeneralsX @bugfix 14/06/2026 Backstop (belt-and-braces): OpenALAudioStream::update() lets
+	// a finished one-shot reach AL_STOPPED (#380), so the per-stream clear above fires the frame
+	// the audio ends. This timeout remains only as a safety net in case AL_STOPPED detection
+	// ever fails on the iOS/OpenAL stack. A negative
 	// delta means the logic frame counter reset under us (new game/map) — treat the recorded
 	// frame as stale and clear too. Never cuts a genuinely-playing line (longer than any voice).
 	if (getDisallowSpeech() && TheGameLogic) {
@@ -2562,53 +2598,14 @@ void OpenALAudioManager::processPlayingList(void)
 
 	if (m_volumeHasChanged) {
 		m_volumeHasChanged = false;
+
+		// GeneralsX @bugfix Push speech volume changes because movie audio bypasses the audio mixer
+		if (TheVideoPlayer) {
+			TheVideoPlayer->setVolume(getVolume(AudioAffect_Speech));
+		}
 	}
 }
 
-//Patch for a rare bug (only on about 5% of in-studio machines suffer, and not all the time) .
-//The actual mechanics of this problem are still elusive as of the date of this comment. 8/21/03
-//but the cause is clear. Some cinematics do a radical change in the microphone position, which
-//calls for a radical 3DSoundVolume adjustment. If this happens while a stereo stream is *ENDING*,
-//low-level code gets caught in a tight loop. (Hangs) on some machines.
-//To prevent this condition, we just suppress the updating of 3DSoundVolume while one of these
-//is on the list. Since the music tracks play continuously, they never *END* during these cinematics.
-//so we filter them out as, *NOT SENSITIVE*... we do want to update 3DSoundVolume during music, 
-//which is almost all of the time.
-
-Bool OpenALAudioManager::has3DSensitiveStreamsPlaying(void) const
-{
-	if (m_playingStreams.empty())
-		return FALSE;
-
-	for (std::list< PlayingAudio* >::const_iterator it = m_playingStreams.begin(); it != m_playingStreams.end(); ++it)
-	{
-		const PlayingAudio* playing = (*it);
-
-		if (!playing)
-			continue;
-
-		// GeneralsX @bugfix BenderAI 11/03/2026 - guard against null audioEventRTS/info
-		if (!playing->m_audioEventRTS)
-			continue;
-
-		const AudioEventInfo* info = playing->m_audioEventRTS->getAudioEventInfo();
-		if (!info)
-			continue;
-
-		if (info->m_soundType != AT_Music)
-		{
-			return TRUE;
-		}
-
-		if (playing->m_audioEventRTS->getEventName().startsWith("Game_") == FALSE)
-		{
-			return TRUE;
-		}
-	}
-
-	return FALSE;
-
-}
 
 
 //-------------------------------------------------------------------------------------------------
@@ -2632,7 +2629,7 @@ void OpenALAudioManager::processFadingList(void)
 		}
 
 		++playing->m_framesFaded;
-		Real volume = getEffectiveVolume(playing->m_audioEventRTS);
+		Real volume = getEffectiveVolume(playing->m_audioEventRTS.Peek());
 		volume *= (1.0f - 1.0f * playing->m_framesFaded / getAudioSettings()->m_fadeAudioFrames);
 
 		switch (playing->m_type)
@@ -2680,7 +2677,7 @@ void OpenALAudioManager::processStoppedList(void)
 //-------------------------------------------------------------------------------------------------
 Bool OpenALAudioManager::shouldProcessRequestThisFrame(AudioRequest* req) const
 {
-	if (!req->m_usePendingEvent) {
+	if (!req->m_pendingEvent) {
 		return true;
 	}
 
@@ -2694,7 +2691,7 @@ Bool OpenALAudioManager::shouldProcessRequestThisFrame(AudioRequest* req) const
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::adjustRequest(AudioRequest* req)
 {
-	if (!req->m_usePendingEvent) {
+	if (!req->m_pendingEvent) {
 		return;
 	}
 
@@ -2705,14 +2702,14 @@ void OpenALAudioManager::adjustRequest(AudioRequest* req)
 //-------------------------------------------------------------------------------------------------
 Bool OpenALAudioManager::checkForSample(AudioRequest* req)
 {
-	if (!req->m_usePendingEvent) {
+	if (!req->m_pendingEvent) {
 		return true;
 	}
 
 	if (req->m_pendingEvent->getAudioEventInfo() == NULL)
 	{
 		// Fill in event info
-		getInfoForAudioEvent(req->m_pendingEvent);
+		getInfoForAudioEvent(req->m_pendingEvent.Peek());
 	}
 
 	if (req->m_pendingEvent->getAudioEventInfo()->m_type != AT_SoundEffect)
@@ -2720,7 +2717,7 @@ Bool OpenALAudioManager::checkForSample(AudioRequest* req)
 		return true;
 	}
 
-	return m_sound->canPlayNow(req->m_pendingEvent);
+	return m_sound->canPlayNow(req->m_pendingEvent.Peek());
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2775,6 +2772,8 @@ void OpenALAudioManager::setSpeakerSurround(Bool surround)
 //-------------------------------------------------------------------------------------------------
 Real OpenALAudioManager::getFileLengthMS(AsciiString strToLoad) const
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	if (strToLoad.isEmpty()) {
 		return 0.0f;
 	}
@@ -2792,6 +2791,8 @@ Real OpenALAudioManager::getFileLengthMS(AsciiString strToLoad) const
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::closeAnySamplesUsingFile(const void* fileToClose)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	ALuint bufferHandle = (ALuint)(uintptr_t)fileToClose;
 	if (!bufferHandle) {
 		return;
@@ -2905,23 +2906,20 @@ Bool OpenALAudioManager::startNextLoop(PlayingAudio* looping)
 		looping->m_audioEventRTS->generateFilename();
 
 		if (looping->m_audioEventRTS->getDelay() > MSEC_PER_LOGICFRAME_REAL) {
-			// fake it out so that this sound appears done, but also so that it will not
-			// delete the sound on completion (which would suck)
-			looping->m_cleanupAudioEventRTS = false;
 			looping->m_requestStop = true;
 
-			AudioRequest* req = allocateAudioRequest(true);
+			AudioRequest* req = allocateAudioRequest();
 			req->m_pendingEvent = looping->m_audioEventRTS;
 			req->m_requiresCheckForSample = true;
 			appendAudioRequest(req);
-			return true;
+			return TRUE;
 		}
 
 		if (looping->m_type == PAT_3DSample) {
-			looping->m_bufferHandle = playSample3D(looping->m_audioEventRTS, looping);
+			looping->m_bufferHandle = playSample3D(looping->m_audioEventRTS.Peek(), looping);
 		}
 		else {
-			looping->m_bufferHandle = playSample(looping->m_audioEventRTS, looping);
+			looping->m_bufferHandle = playSample(looping->m_audioEventRTS.Peek(), looping);
 		}
 
 		return looping->m_bufferHandle != 0;
@@ -2935,6 +2933,15 @@ void OpenALAudioManager::playStream(AudioEventRTS* event, OpenALAudioStream* str
 	// Force it to the beginning
 	if (event->getAudioEventInfo()->m_soundType == AT_Music) {
 		//alSourcei(stream->getSource(), AL_LOOPING, AL_TRUE);
+	}
+
+	// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize stream volume
+	Real desiredVolume = event->getVolume() * event->getVolumeShift();
+	if (event->getAudioEventInfo() && event->getAudioEventInfo()->m_soundType == AT_Music) {
+		alSourcef(stream->getSource(), AL_GAIN, m_musicVolume * desiredVolume);
+	}
+	else {
+		alSourcef(stream->getSource(), AL_GAIN, m_speechVolume * desiredVolume);
 	}
 
 	stream->play();
@@ -2951,6 +2958,8 @@ ALuint OpenALAudioManager::playSample(AudioEventRTS* event, PlayingAudio* audio)
 	if (bufferHandle) {
 		alSourcei(audio->m_source, AL_SOURCE_RELATIVE, AL_TRUE);
 		alSourcei(audio->m_source, AL_BUFFER, (ALuint)(uintptr_t)bufferHandle);
+		// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize sample volume
+		adjustPlayingVolume(audio);
 		alSourcePlay(audio->m_source);
 	}
 
@@ -3007,6 +3016,9 @@ ALuint OpenALAudioManager::playSample3D(AudioEventRTS* event, PlayingAudio* samp
 			}
 			alSourcei(source, AL_BUFFER, handle);
 			DEBUG_LOG(("Playing 3D sample '%s' at %f, %f, %f\n", event->getEventName().str(), x, y, z));
+
+			// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize 3D sample volume
+			adjustPlayingVolume(sample3D);
 
 			// Start playback
 			alSourcePlay(source);
@@ -3086,7 +3098,7 @@ void OpenALAudioManager::processRequest(AudioRequest* req)
 	{
 	case AR_Play:
 	{
-		playAudioEvent(req->m_pendingEvent);
+		playAudioEvent(req);
 		break;
 	}
 	case AR_Pause:
@@ -3125,6 +3137,8 @@ void OpenALAudioManager::releaseHandleForBink(void)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::friend_forcePlayAudioEventRTS(const AudioEventRTS* eventToPlay)
 {
+	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
+	ScopedFPUGuard fpuGuard;
 	if (!eventToPlay->getAudioEventInfo()) {
 		getInfoForAudioEvent(eventToPlay);
 		if (!eventToPlay->getAudioEventInfo()) {
@@ -3149,22 +3163,21 @@ void OpenALAudioManager::friend_forcePlayAudioEventRTS(const AudioEventRTS* even
 		break;
 	}
 
-	// GeneralsX @bugfix BenderAI 11/03/2026 - heap-allocate so releasePlayingAudio can safely
-	// delete it via m_cleanupAudioEventRTS. Stack allocation caused SIGSEGV in delete.
-	AudioEventRTS* event = NEW AudioEventRTS(*eventToPlay);
-
-	event->generateFilename();
-	event->generatePlayInfo();
+	AudioRequest *req = allocateAudioRequest();
+	req->m_pendingEvent.Assign_No_Add_Ref(newInstance(DynamicAudioEventRTS)(*eventToPlay));
+	req->m_pendingEvent->generateFilename();
+	req->m_pendingEvent->generatePlayInfo();
 
 	std::list<std::pair<AsciiString, Real> >::iterator it;
 	for (it = m_adjustedVolumes.begin(); it != m_adjustedVolumes.end(); ++it) {
-		if (it->first == event->getEventName()) {
-			event->setVolume(it->second);
+		if (it->first == req->m_pendingEvent->getEventName()) {
+			req->m_pendingEvent->setVolume(it->second);
 			break;
 		}
 	}
 
-	playAudioEvent(event);
+	playAudioEvent(req);
+	releaseAudioRequest(req);
 }
 
 #if defined(_DEBUG) || defined(_INTERNAL)
@@ -3231,3 +3244,19 @@ void OpenALAudioManager::dumpAllAssetsUsed()
 	logfile = NULL;
 }
 #endif
+
+//-------------------------------------------------------------------------------------------------
+UnsignedInt OpenALAudioManager::getNumAvailable2DSamples() const
+{
+	// GeneralsX @bugfix Mr. Meeseeks 27/06/2026 Fix available samples calculation to prevent voicelines culling
+	UnsignedInt playing = (UnsignedInt)m_playingSounds.size();
+	return (m_num2DSamples > playing) ? (m_num2DSamples - playing) : 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+UnsignedInt OpenALAudioManager::getNumAvailable3DSamples() const
+{
+	// GeneralsX @bugfix Mr. Meeseeks 27/06/2026 Fix available samples calculation to prevent voicelines culling
+	UnsignedInt playing = (UnsignedInt)m_playing3DSounds.size();
+	return (m_num3DSamples > playing) ? (m_num3DSamples - playing) : 0;
+}

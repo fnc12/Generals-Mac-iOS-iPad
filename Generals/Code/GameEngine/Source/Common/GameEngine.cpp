@@ -100,7 +100,6 @@
 #include "GameClient/GUICallbacks.h"
 
 #include "GameNetwork/NetworkInterface.h"
-#include "GameNetwork/WOLBrowser/WebBrowser.h"
 #include "GameNetwork/LANAPI.h"
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
@@ -171,10 +170,6 @@ void initSubsystem(
 
 //-------------------------------------------------------------------------------------------------
 extern HINSTANCE ApplicationHInstance;  ///< our application instance
-// TheSuperHackers @build fighter19 11/02/2026 COM module (Windows-only)
-#ifdef _WIN32
-extern CComModule _Module;
-#endif
 
 //-------------------------------------------------------------------------------------------------
 static void updateTGAtoDDS();
@@ -206,11 +201,10 @@ static void updateWindowTitle()
 	}
 
 #if RTS_GENERALS
-	const WideChar* defaultGameTitle = L"Command and Conquer Generals";
+	UnicodeString gameTitle = TheGameText->FETCH_OR_SUBSTITUTE("GUI:Command&ConquerGenerals", L"Command and Conquer Generals");
 #elif RTS_ZEROHOUR
-	const WideChar* defaultGameTitle = L"Command and Conquer Generals Zero Hour";
+	UnicodeString gameTitle = TheGameText->FETCH_OR_SUBSTITUTE("GUI:Command&ConquerGenerals", L"Command and Conquer Generals Zero Hour");
 #endif
-	UnicodeString gameTitle = TheGameText->FETCH_OR_SUBSTITUTE("GUI:Command&ConquerGenerals", defaultGameTitle);
 
 	if (!gameTitle.isEmpty())
 	{
@@ -257,10 +251,6 @@ GameEngine::GameEngine()
 	m_logicTimeAccumulator = 0.0f;
 	m_quitting = FALSE;
 	m_isActive = FALSE;
-
-#ifdef _WIN32
-	_Module.Init(nullptr, ApplicationHInstance, nullptr);
-#endif
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -301,10 +291,6 @@ GameEngine::~GameEngine()
 	TheFileSystem = nullptr;
 
 	Drawable::killStaticImages();
-
-#ifdef _WIN32
-	_Module.Term();
-#endif
 
 #ifdef PERF_TIMERS
 	PerfGather::termPerfDump();
@@ -403,6 +389,10 @@ void GameEngine::init()
 		// GeneralsX @feature BenderAI 18/02/2026 Add asset loading diagnostics
 		fprintf(stderr, "INFO: GameEngine::init() - ArchiveFileSystem initialized\n");
 
+		// Mods must be mounted before GameData.ini is loaded, or the mod's GameData.ini is ignored.
+		CommandLine::parseCommandLineForModInit();
+		TheArchiveFileSystem->loadMods();
+
 		DEBUG_ASSERTCRASH(TheWritableGlobalData,("TheWritableGlobalData expected to be created"));
 		fprintf(stderr, "INFO: GameEngine::init() - About to initialize TheWritableGlobalData\n");
 		initSubsystem(TheWritableGlobalData, "TheWritableGlobalData", TheWritableGlobalData, &xferCRC, "Data\\INI\\Default\\GameData", "Data\\INI\\GameData");
@@ -412,6 +402,8 @@ void GameEngine::init()
 
 	// GeneralsX @feature felipebraz 08/06/2026 Auto-create SagePatch.ini in user data dir with defaults.
 	{
+		static const char *const USER_GAME_DATA_INI_PATH = "Data\\INI\\GameData.ini";
+
 		AsciiString sagePatchPath = TheWritableGlobalData->getPath_UserData();
 		sagePatchPath.concat("SagePatch.ini");
 
@@ -424,8 +416,9 @@ void GameEngine::init()
 					"; -----------------------------------------------------------------------------\n"
 					"; SagePatch - Casual QoL overrides for GeneralsX\n"
 					";\n"
-					"; Loaded by the engine after the BIG-archived Data/INI/GameData.ini, so values\n"
-					"; here override (not append to) the originals.\n"
+					"; Loaded by the engine after the BIG-archived Data/INI/GameData.ini, so values here\n"
+					"; override (not append to) the originals. A loose Data/INI/GameData.ini that you author\n"
+					"; yourself is applied after this file and therefore still wins over it.\n"
 					"; -----------------------------------------------------------------------------\n"
 					"\n"
 					"GameData\n"
@@ -437,8 +430,11 @@ void GameEngine::init()
 					"  EnforceMaxCameraHeight = No\n"
 					"  ; Keyboard scroll - vanilla 0.5 is sluggish, double it.\n"
 					"  KeyboardScrollSpeedFactor = 1.0\n"
-					"  ; ~5% more terrain drawn at max zoom to fix terrain pop-in.\n"
+					"  ; ~5%% more terrain drawn at max zoom to fix terrain pop-in.\n"
 					"  TerrainDrawDistanceScale = 1.05\n"
+					// GeneralsX @tweak felipebraz 20/06/2026 Default render FPS limit to 60 FPS in SagePatch.ini
+					"  UseFPSLimit = Yes\n"
+					"  FramesPerSecondLimit = 60\n"
 					"End\n"
 				);
 				fclose(f);
@@ -447,7 +443,45 @@ void GameEngine::init()
 
 		if (TheLocalFileSystem->doesFileExist(sagePatchPath.str()))
 		{
+			// Check and migrate existing SagePatch.ini for 60 FPS
+			FILE *f = fopen(sagePatchPath.str(), "rb");
+			if (f)
+			{
+				fseek(f, 0, SEEK_END);
+				long size = ftell(f);
+				fseek(f, 0, SEEK_SET);
+				char *buffer = new char[size + 1];
+				fread(buffer, 1, size, f);
+				buffer[size] = 0;
+				fclose(f);
+
+				if (!strstr(buffer, "FramesPerSecondLimit"))
+				{
+					char *endPos = strstr(buffer, "End");
+					if (endPos != nullptr)
+					{
+						*endPos = '\0';
+						FILE *fw = fopen(sagePatchPath.str(), "wb");
+						if (fw)
+						{
+							fprintf(fw, "%s  ; Migrated 60 FPS defaults\n  UseFPSLimit = Yes\n  FramesPerSecondLimit = 60\nEnd\n", buffer);
+							fclose(fw);
+						}
+					}
+				}
+				delete[] buffer;
+			}
+
 			ini.load(sagePatchPath, INI_LOAD_OVERWRITE, nullptr);
+
+			// GeneralsX @bugfix kumait 13/08/2026 SagePatch defaults must not clobber a user-authored
+			// Data/INI/GameData.ini. That loose file shadows the BIG-archived one when the engine loads
+			// GameData above, so replaying it here restores user precedence over SagePatch. Installs
+			// without a loose GameData.ini are unaffected, and the archived original is never reloaded.
+			if (TheLocalFileSystem->doesFileExist(USER_GAME_DATA_INI_PATH))
+			{
+				ini.load(USER_GAME_DATA_INI_PATH, INI_LOAD_OVERWRITE, nullptr);
+			}
 		}
 	}
 
@@ -460,8 +494,6 @@ void GameEngine::init()
 
 		// special-case: parse command-line parameters after loading global data
 		CommandLine::parseCommandLineForEngineInit();
-
-		TheArchiveFileSystem->loadMods();
 
 		// doesn't require resets so just create a single instance here.
 		TheGameLODManager = MSGNEW("GameEngineSubsystem") GameLODManager;
@@ -519,6 +551,25 @@ void GameEngine::init()
 		initSubsystem(ThePlayerTemplateStore,"ThePlayerTemplateStore", MSGNEW("GameEngineSubsystem") PlayerTemplateStore(), &xferCRC, "Data\\INI\\Default\\PlayerTemplate", "Data\\INI\\PlayerTemplate");
 		initSubsystem(TheParticleSystemManager,"TheParticleSystemManager", createParticleSystemManager(TheGlobalData->m_headless), nullptr);
 		initSubsystem(TheFXListStore,"TheFXListStore", MSGNEW("GameEngineSubsystem") FXListStore(), &xferCRC, "Data\\INI\\Default\\FXList", "Data\\INI\\FXList");
+		// GeneralsX @feature fbraz3 08/10/2026 Load dynamic light pulses for explosions & superweapons without altering multiplayer CRC
+		if (TheFileSystem && TheFileSystem->doesFileExist("Data\\INI\\FXListGeneralsX.ini"))
+		{
+			try
+			{
+				INI iniGeneralsX;
+				iniGeneralsX.load(AsciiString("Data\\INI\\FXListGeneralsX.ini"), INI_LOAD_OVERWRITE, nullptr);
+			}
+			catch (const INIException& ex)
+			{
+				fprintf(stderr, "[INI] WARNING: Failed to load Data\\INI\\FXListGeneralsX.ini: %s\n", ex.mFailureMessage ? ex.mFailureMessage : "");
+				fflush(stderr);
+			}
+			catch (...)
+			{
+				fprintf(stderr, "[INI] WARNING: Unexpected exception loading Data\\INI\\FXListGeneralsX.ini\n");
+				fflush(stderr);
+			}
+		}
 		initSubsystem(TheWeaponStore,"TheWeaponStore", MSGNEW("GameEngineSubsystem") WeaponStore(), &xferCRC, nullptr, "Data\\INI\\Weapon");
 		initSubsystem(TheObjectCreationListStore,"TheObjectCreationListStore", MSGNEW("GameEngineSubsystem") ObjectCreationListStore(), &xferCRC, "Data\\INI\\Default\\ObjectCreationList", "Data\\INI\\ObjectCreationList");
 		initSubsystem(TheLocomotorStore,"TheLocomotorStore", MSGNEW("GameEngineSubsystem") LocomotorStore(), &xferCRC, nullptr, "Data\\INI\\Locomotor");
@@ -552,11 +603,14 @@ void GameEngine::init()
 		ini.loadFileDirectory("Data\\INI\\CommandMapDebug", INI_LOAD_MULTIFILE, nullptr);
 #endif
 
+#if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)
+		ini.loadFileDirectory("Data\\INI\\CommandMapDemo", INI_LOAD_MULTIFILE, nullptr, INI::LoadFlags_SearchSubDirs); // Added in Zero Hour
+#endif
+
 		TheMetaMap->generateMetaMap();
 		TheMetaMap->verifyMetaMap();
 
 		initSubsystem(TheActionManager,"TheActionManager", MSGNEW("GameEngineSubsystem") ActionManager(), nullptr);
-		//initSubsystem((CComObject<WebBrowser> *)TheWebBrowser,"(CComObject<WebBrowser> *)TheWebBrowser", (CComObject<WebBrowser> *)createWebBrowser(), nullptr);
 		initSubsystem(TheGameStateMap,"TheGameStateMap", MSGNEW("GameEngineSubsystem") GameStateMap, nullptr );
 		initSubsystem(TheGameState,"TheGameState", MSGNEW("GameEngineSubsystem") GameState, nullptr );
 
@@ -605,8 +659,12 @@ void GameEngine::init()
 			m_quitting = TRUE;
 		}
 
-		// load the initial shell screen
-		TheShell->push( "Menus/MainMenu.wnd" );
+		// GeneralsX @bugfix elmeriniemela 17/10/2026 Do not start the shell map during the intro.
+		// The main menu is not pushed here, as in the original code. MainMenuInit() calls
+		// showShellMap(TRUE), which would start the shell map (and its music and sounds)
+		// while the intro movies are still playing. GameClient::update() starts the shell map
+		// when the intro is done, and GameLogic::startNewGame() pushes the main menu once the
+		// shell map has loaded (or Shell::showShell() does it when the shell map is off).
 
 		// This allows us to run a map from the command line
 		if (TheGlobalData->m_initialFile.isEmpty() == FALSE)
@@ -635,18 +693,18 @@ void GameEngine::init()
 		//
 		if (TheMapCache && TheGlobalData->m_shellMapOn)
 		{
-			AsciiString lowerName = TheGlobalData->m_shellMapName;
-			lowerName.toLower();
-
-			MapCache::const_iterator it = TheMapCache->find(lowerName);
-			if (it == TheMapCache->end())
+			// GeneralsX @bugfix felipebraz 06/11/2026 Use findMap to handle mixed/normalized path separators on macOS/Linux (Issue #372).
+			const MapMetaData *shellMapData = TheMapCache->findMap(TheGlobalData->m_shellMapName);
+			if (shellMapData == nullptr)
 			{
 				TheWritableGlobalData->m_shellMapOn = FALSE;
 			}
+			else
+			{
+				// GeneralsX @bugfix felipebraz 07/11/2026 Ensure shell map name aligns with the resolved local file path.
+				TheWritableGlobalData->m_shellMapName = shellMapData->m_fileName;
+			}
 		}
-
-		if(!TheGlobalData->m_playIntro)
-			TheWritableGlobalData->m_afterIntro = TRUE;
 
 	}
 	catch (ErrorCode ec)
@@ -668,9 +726,6 @@ void GameEngine::init()
 	{
 		RELEASE_CRASH(("Uncaught Exception during initialization."));
 	}
-
-	if(!TheGlobalData->m_playIntro)
-		TheWritableGlobalData->m_afterIntro = TRUE;
 
 	resetSubsystems();
 
@@ -719,9 +774,9 @@ void GameEngine::resetSubsystems()
 }
 
 /// -----------------------------------------------------------------------------------------------
-Bool GameEngine::canUpdateGameLogic()
+Bool GameEngine::canUpdateGameLogic(UnsignedInt logicTimeQueryFlags)
 {
-	// Must be first.
+	// This updates the paused game status of the game logic.
 	TheGameLogic->preUpdate();
 
 	TheFramePacer->setTimeFrozen(isTimeFrozen());
@@ -733,7 +788,7 @@ Bool GameEngine::canUpdateGameLogic()
 	}
 	else
 	{
-		return canUpdateRegularGameLogic();
+		return canUpdateRegularGameLogic(logicTimeQueryFlags);
 	}
 }
 
@@ -754,11 +809,17 @@ Bool GameEngine::canUpdateNetworkGameLogic()
 }
 
 /// -----------------------------------------------------------------------------------------------
-Bool GameEngine::canUpdateRegularGameLogic()
+Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 {
+	const Int logicTimeScaleFps = TheFramePacer->getActualLogicTimeScaleFps(logicTimeQueryFlags);
+
+	if (logicTimeScaleFps <= 0)
+	{
+		return false;
+	}
+
 	const Bool enabled = TheFramePacer->isLogicTimeScaleEnabled();
-	const Int logicTimeScaleFps = TheFramePacer->getLogicTimeScaleFps();
-	const Int maxRenderFps = TheFramePacer->getFramesPerSecondLimit();
+	const Int maxRenderFps = TheFramePacer->getActualFramesPerSecondLimit();
 
 #if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode;
@@ -816,20 +877,15 @@ void GameEngine::update()
 			}
 		}	// end VERIFY_CRC block
 
-		const Bool canUpdate = canUpdateGameLogic();
-		const Bool canUpdateLogic = canUpdate && !TheFramePacer->isGameHalted() && !TheFramePacer->isTimeFrozen();
-		const Bool canUpdateScript = canUpdate && !TheFramePacer->isGameHalted();
-
-		if (canUpdateLogic)
+		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
+		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
-			TheGameClient->step();
 			TheGameLogic->UPDATE();
-		}
-		else if (canUpdateScript)
-		{
-			// TheSuperHackers @info Still update the Script Engine to allow
-			// for scripted camera movements while the time is frozen.
-			TheScriptEngine->UPDATE();
+
+			if (!TheFramePacer->isTimeFrozen())
+			{
+				TheGameClient->step();
+			}
 		}
 	}
 }
@@ -913,13 +969,10 @@ void GameEngine::execute()
 
 			TheFramePacer->update();
 
-			// GeneralsX @build BenderAI 18/02/2026 - Call display step and draw every frame
-			// This was missing, causing only magenta screen (no UI rendering)
-			if (TheDisplay != nullptr)
-			{
-				TheDisplay->step();
-				TheDisplay->draw();
-			}
+			// GeneralsX @bugfix MrMeeseeks 17/06/2026 Remove double-present call to fix uncapped FPS and game running too fast (matches Zero Hour / GeneralsMD)
+			// NOTE: TheDisplay->draw() is called via TheGameClient->UPDATE() above.
+			// GameClient::update() dispatches TheDisplay->DRAW() each frame.
+			// Do NOT add an extra draw() call here - it would double-present per frame.
 		}
 
 #ifdef PERF_TIMERS
@@ -968,7 +1021,8 @@ exit the app.
 void GameEngine::checkAbnormalQuitting()
 {
 	if (TheRecorder->isMultiplayer() && TheGameLogic->isInInternetGame())
-	{	//Should not be quitting at this time, record it as a cheat.
+	{
+		//Should not be quitting at this time, record it as a cheat.
 
 		Int localID = TheGameSpyInfo->getLocalProfileID();
 		PSPlayerStats stats = TheGameSpyPSMessageQueue->findPlayerStatsByID(localID);
@@ -1001,7 +1055,7 @@ void GameEngine::checkAbnormalQuitting()
 
 		UserPreferences pref;
 		AsciiString userPrefFilename;
-		userPrefFilename.format("GeneralsOnline\\MiscPref%d.ini", stats.id);
+		userPrefFilename.format("GeneralsOnline/MiscPref%d.ini", stats.id);
 		DEBUG_LOG(("using the file %s", userPrefFilename.str()));
 		pref.load(userPrefFilename);
 
@@ -1135,3 +1189,14 @@ void updateTGAtoDDS()
 
 	system(CONVERT_EXEC1);
 }
+
+// If we're using the Wide character version of MessageBox, then there's no additional
+// processing necessary. Please note that this is a sleazy way to get this information,
+// but pending a better one, this'll have to do.
+// TheSuperHackers @build fighter19 11/02/2026 MessageBox detection (Windows-only)
+#ifdef _WIN32
+extern const Bool TheSystemIsUnicode = (((void*) (::MessageBox)) == ((void*) (::MessageBoxW)));
+#else
+extern const Bool TheSystemIsUnicode = true;  // Linux: Always Unicode (UTF-8)
+#endif
+

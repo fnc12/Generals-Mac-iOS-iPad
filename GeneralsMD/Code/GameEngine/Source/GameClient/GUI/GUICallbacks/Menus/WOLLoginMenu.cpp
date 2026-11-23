@@ -58,6 +58,8 @@
 #include "GameClient/GameWindowTransitions.h"
 
 #include "GameNetwork/GameSpy/GSConfig.h"
+#include "Common/UpdateChecker.h"
+#include "GameNetwork/GeneralsOnline/NGMP_Helpers.h"
 #include "GameNetwork/GameSpy/PeerDefs.h"
 #include "GameNetwork/GameSpy/PeerThread.h"
 #include "GameNetwork/GameSpy/PingThread.h"
@@ -65,17 +67,17 @@
 #include "GameNetwork/GameSpy/ThreadUtils.h"
 #include "GameNetwork/GameSpy/PersistentStorageThread.h"
 
+#include "GameNetwork/RankPointValue.h"
+
+#if defined(SAGE_USE_NGMP)
+#include "GameNetwork/GeneralsOnline/OnlineServices_Manager.h"
+#endif
+
 #include "GameNetwork/GameSpyOverlay.h"
-
-#include "GameNetwork/WOLBrowser/WebBrowser.h"
-
 
 #ifdef ALLOW_NON_PROFILED_LOGIN
 Bool GameSpyUseProfiles = false;
 #endif // ALLOW_NON_PROFILED_LOGIN
-
-static Bool webBrowserActive = FALSE;
-static Bool useWebBrowserForTOS = FALSE;
 
 static Bool isShuttingDown = false;
 static Bool buttonPushed = false;
@@ -123,9 +125,11 @@ static AsciiString obfuscate( AsciiString in )
 		if (!*c2)
 			c2 = xorWord;
 		if (*c != *c2)
-			*c = *c++ ^ *c2++;
-		else
-			c++, c2++;
+		{
+			*c = *c ^ *c2;
+		}
+		c++;
+		c2++;
 	}
 	AsciiString out = buf;
 	delete[] buf;
@@ -737,14 +741,6 @@ void WOLLoginMenuShutdown( WindowLayout *layout, void *userData )
 	isShuttingDown = true;
 	loggedInOK = false;
 	TheWindowManager->clearTabList();
-	if (webBrowserActive)
-	{
-		if (TheWebBrowser != nullptr)
-		{
-			TheWebBrowser->closeBrowserWindow(listboxTOS);
-		}
-		webBrowserActive = FALSE;
-	}
 
 	// if we are shutting down for an immediate pop, skip the animations
 	Bool popImmediate = *(Bool *)userData;
@@ -806,11 +802,64 @@ static void checkLogin()
 //-------------------------------------------------------------------------------------------------
 void WOLLoginMenuUpdate( WindowLayout * layout, void *userData)
 {
+#if defined(SAGE_USE_NGMP)
+	// Pump the NGMP event queue each frame so worker-thread events (e.g. EVENT_AUTH_SUCCESS)
+	// are delivered while we are in the shell menu. The normal GameEngine::update() path that
+	// pumps NGMP only runs during gameplay (inside VERIFY_CRC), not during shell menus.
+	auto events = NGMP_OnlineServicesManager::getInstance().pollEvents();
+
+	if (NGMP_OnlineServicesManager::getInstance().isLoggedIn())
+	{
+		if (!buttonPushed)
+		{
+			// GeneralsX @feature fbraz3 12/08/2026 Populate GameSpyInfo with NGMP identity so player slots and chat work
+			std::string username = NGMP_OnlineServicesManager::getInstance().getUsername();
+			int64_t userId = NGMP_OnlineServicesManager::getInstance().getUserId();
+			AsciiString aName(username.c_str());
+			TheGameSpyInfo->setLocalName(aName);
+			TheGameSpyInfo->setLocalProfileID(static_cast<Int>(userId));
+
+			buttonPushed = true;
+			loginAttemptTime = 0;
+			nextScreen = "Menus/WOLWelcomeMenu.wnd";
+			TheShell->pop();
+		}
+		return;
+	}
+
+	// Process any other NGMP events
+	for (const auto& ev : events) {
+		if (ev.type == NGMPEvent::EVENT_AUTH_FAILURE) {
+			loginAttemptTime = 0;
+			EnableLoginControls(TRUE);
+			// GeneralsX @feature fbraz3 07/10/2026 Handle update-required authentication failures
+			if (ev.payload == "UpdateRequired") {
+				UnicodeString msg(L"A newer version of GeneralsX is available. You must update before playing online.");
+				ClearGSMessageBoxes();
+#ifdef SAGE_UPDATE_CHECK
+				GSMessageBoxOk(UnicodeString(L"Update Required"), msg, []() {
+					const char* url = UpdateChecker::getReleasesUrl();
+					if (url) {
+						NGMP::OpenURL(url);
+					}
+				});
+#else
+				GSMessageBoxOk(UnicodeString(L"Update Required"), msg);
+#endif
+			} else {
+				GSMessageBoxOk(TheGameText->fetch("GUI:ConnectionErrorTitle"), TheGameText->fetch("GUI:ConnectionError"));
+			}
+			fprintf(stderr, "[NGMP] Showing connection error to user: %s\n", ev.payload.c_str());
+			fflush(stderr);
+		}
+	}
+#endif
 
 	// We'll only be successful if we've requested to
 	if(isShuttingDown && TheShell->isAnimFinished() && TheTransitionHandler->isFinished())
 		shutdownComplete(layout);
 
+#if !defined(SAGE_USE_NGMP)
 	if (TheShell->isAnimFinished() && !buttonPushed && TheGameSpyPeerMessageQueue)
 	{
 		PingResponse pingResp;
@@ -878,7 +927,9 @@ void WOLLoginMenuUpdate( WindowLayout * layout, void *userData)
 
 		checkLogin();
 	}
+#endif
 
+#if !defined(SAGE_USE_NGMP)
 	if (TheGameSpyInfo && !buttonPushed && loginAttemptTime && (loginAttemptTime + loginTimeoutInMS < timeGetTime()))
 	{
 		// timed out a login attempt, so say so
@@ -898,6 +949,9 @@ void WOLLoginMenuUpdate( WindowLayout * layout, void *userData)
 		TearDownGameSpy();
 		SetUpGameSpy( motd.str(), config.str() );
 	}
+#else
+	loginAttemptTime = 0;
+#endif
 
 }
 
@@ -1213,7 +1267,9 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 				if ( controlID == buttonBackID )
 				{
 					buttonPushed = true;
+#ifndef SAGE_USE_NGMP
 					TearDownGameSpy();
+#endif
 					TheShell->pop();
 				}
 #ifdef ALLOW_NON_PROFILED_LOGIN
@@ -1346,6 +1402,13 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 
 						if ( !email.isEmpty() && !login.isEmpty() && !password.isEmpty() )
 						{
+#if defined(SAGE_USE_NGMP)
+							// GeneralsX @feature GeneralsOnline
+							// Login is handled via browser gamecode flow launched from MainMenu.
+							// This WOL login form is not used in NGMP builds.
+							(void)login; (void)password; (void)email;
+							loginAttemptTime = 0;
+#else
 							loginAttemptTime = timeGetTime();
 							BuddyRequest req;
 							req.buddyRequestType = BuddyRequest::BUDDYREQUEST_LOGIN;
@@ -1361,6 +1424,7 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 							DEBUG_LOG(("before login: TheGameSpyInfo->stuff(%s/%s/%s)", TheGameSpyInfo->getLocalBaseName().str(), TheGameSpyInfo->getLocalEmail().str(), TheGameSpyInfo->getLocalPassword().str()));
 
 							TheGameSpyBuddyMessageQueue->addRequest( req );
+#endif
 							if(checkBoxRememberPassword && GadgetCheckBoxIsChecked(checkBoxRememberPassword))
 							{
 								(*loginPref)["lastName"] = login;
@@ -1432,49 +1496,40 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 				else if ( controlID == buttonTOSID )
 				{
 					parentTOS->winHide(FALSE);
-					useWebBrowserForTOS = FALSE;//loginPref->getBool("UseTOSBrowser", TRUE);
-					if (useWebBrowserForTOS && (TheWebBrowser != nullptr))
+					// The terms of service are a UTF-8 text file.
+					GadgetListBoxReset(listboxTOS);
+					AsciiString fileName;
+					fileName.format("Data\\%s\\TOS.txt", GetRegistryLanguage().str());
+					File *theFile = TheFileSystem->openFile(fileName.str(), File::READ);
+					if (theFile)
 					{
-						TheWebBrowser->createBrowserWindow("TermsOfService", listboxTOS);
-						webBrowserActive = TRUE;
-					}
-					else
-					{
-						// Okay, no web browser.  This means we're looking at a UTF-8 text file.
-						GadgetListBoxReset(listboxTOS);
-						AsciiString fileName;
-						fileName.format("Data\\%s\\TOS.txt", GetRegistryLanguage().str());
-						File *theFile = TheFileSystem->openFile(fileName.str(), File::READ);
-						if (theFile)
+						Int size = theFile->size();
+
+						char *fileBuf = new char[size];
+						Color tosColor = GameMakeColor(255, 255, 255, 255);
+
+						Int bytesRead = theFile->read(fileBuf, size);
+						if (bytesRead == size && size > 2)
 						{
-							Int size = theFile->size();
-
-							char *fileBuf = new char[size];
-							Color tosColor = GameMakeColor(255, 255, 255, 255);
-
-							Int bytesRead = theFile->read(fileBuf, size);
-							if (bytesRead == size && size > 2)
+							fileBuf[size-1] = 0; // just to be safe
+							AsciiString asciiBuf = fileBuf+2;
+							AsciiString asciiLine;
+							while (asciiBuf.nextToken(&asciiLine, "\r\n"))
 							{
-								fileBuf[size-1] = 0; // just to be safe
-								AsciiString asciiBuf = fileBuf+2;
-								AsciiString asciiLine;
-								while (asciiBuf.nextToken(&asciiLine, "\r\n"))
-								{
-									UnicodeString uniLine;
-									uniLine = UnicodeString(MultiByteToWideCharSingleLine(asciiLine.str()).c_str());
-									uniLine.trimEnd();
-									DEBUG_LOG(("adding TOS line: [%ls]", uniLine.str()));
-									GadgetListBoxAddEntryText(listboxTOS, uniLine, tosColor, -1);
-								}
-
+								UnicodeString uniLine;
+								uniLine = UnicodeString(MultiByteToWideCharSingleLine(asciiLine.str()).c_str());
+								uniLine.trimEnd();
+								DEBUG_LOG(("adding TOS line: [%ls]", uniLine.str()));
+								GadgetListBoxAddEntryText(listboxTOS, uniLine, tosColor, -1);
 							}
 
-							delete[] fileBuf;
-							fileBuf = nullptr;
-
-							theFile->close();
-							theFile = nullptr;
 						}
+
+						delete[] fileBuf;
+						fileBuf = nullptr;
+
+						theFile->close();
+						theFile = nullptr;
 					}
 					EnableLoginControls( FALSE );
 					buttonBack->winEnable(FALSE);
@@ -1485,18 +1540,10 @@ WindowMsgHandledType WOLLoginMenuSystem( GameWindow *window, UnsignedInt msg,
 					EnableLoginControls( TRUE );
 
 					parentTOS->winHide(TRUE);
-					if (useWebBrowserForTOS && (TheWebBrowser != nullptr))
-					{
-						if (listboxTOS != nullptr)
-						{
-							TheWebBrowser->closeBrowserWindow(listboxTOS);
-						}
-					}
 
 					OptionPreferences optionPref;
 					optionPref["SawTOS"] = "yes";
 					optionPref.write();
-					webBrowserActive = FALSE;
 					buttonBack->winEnable(TRUE);
 				}
 				break;

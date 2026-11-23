@@ -35,7 +35,6 @@
 #include <stdlib.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
-#include "Lib/BaseType.h"
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
@@ -58,6 +57,7 @@
 #include "WW3D2/dx8renderer.h"
 #include "WW3D2/sortingrenderer.h"
 #include "WW3D2/dx8wrapper.h"
+#include "WW3D2/Renderer.h"
 #include "WW3D2/light.h"
 #include "WW3D2/matpass.h"
 #include "WW3D2/shader.h"
@@ -855,7 +855,7 @@ void RTS3DScene::updateFixedLightEnvironments(RenderInfoClass & rinfo)
 {
 	//Figure out how dimly lit fogged objects should be compared to fully lit.
 	Real foggedLightFrac = (Real)TheGlobalData->m_fogAlpha/(Real)TheGlobalData->m_clearAlpha;
-	Vector3 oldDiffuse;
+	Vector3 oldDiffuse, oldAmbient;
 	Real infantryLightScale;
 	if( TheGlobalData->m_scriptOverrideInfantryLightScale != -1.0f )
 		infantryLightScale = TheGlobalData->m_scriptOverrideInfantryLightScale;
@@ -871,11 +871,18 @@ void RTS3DScene::updateFixedLightEnvironments(RenderInfoClass & rinfo)
 		m_defaultLightEnv.Add_Light(*m_globalLight[globalLightIndex]);
 		//copy default lighting for infantry so we can tweak it.
 		*m_infantryLight[globalLightIndex]=*m_globalLight[globalLightIndex];
-		m_globalLight[globalLightIndex]->Get_Diffuse(&oldDiffuse);
-		m_infantryLight[globalLightIndex]->Set_Diffuse(oldDiffuse*infantryLightScale);
-		m_globalLight[globalLightIndex]->Get_Ambient(&oldDiffuse);
-		m_infantryLight[globalLightIndex]->Set_Ambient(oldDiffuse*infantryLightScale);
 		m_infantryLight[globalLightIndex]->Set_Transform(m_globalLight[globalLightIndex]->Get_Transform());
+
+		m_globalLight[globalLightIndex]->Get_Diffuse(&oldDiffuse);
+		m_globalLight[globalLightIndex]->Get_Ambient(&oldAmbient);
+		oldDiffuse *= infantryLightScale;
+		oldAmbient *= infantryLightScale;
+		// GeneralsX @bugfix Mr. Meeseeks 17/06/2026 Clamp infantry lighting to 1.0f to avoid shader overflows under Vulkan/DXVK
+		static Vector3 id (1.0f, 1.0f, 1.0f);
+		oldDiffuse.Cap_Absolute_To(id);
+		oldAmbient.Cap_Absolute_To(id);
+		m_infantryLight[globalLightIndex]->Set_Ambient(oldAmbient);
+		m_infantryLight[globalLightIndex]->Set_Diffuse(oldDiffuse);
 
 		//copy the normal light for fog so we can modify it
 		m_scratchLight->Set_Transform(m_globalLight[globalLightIndex]->Get_Transform());
@@ -925,7 +932,7 @@ void RTS3DScene::updatePlayerColorPasses()
 void RTS3DScene::Render(RenderInfoClass & rinfo)
 {
 	//USE_PERF_TIMER(NonTerrainRender)
-	DX8Wrapper::Set_Fog(FogEnabled, FogColor, FogStart, FogEnd);
+	Renderer::Set_Fog(FogEnabled, FogColor, FogStart, FogEnd);
 
 	//Override the behind building selection if it's not available on current hardware (needs stencil).
 	TheWritableGlobalData->m_enableBehindBuildingMarkers = TheWritableGlobalData->m_enableBehindBuildingMarkers && DX8Wrapper::Has_Stencil();
@@ -969,7 +976,7 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 			//a projected alpha texture which will later be used to determine where
 			//wireframe should be visible.
 			///@todo: Clearing to black may not be needed if the scene already did the clear.
-			DX8Wrapper::Clear(true, false, Vector3(0.0f,0.0f,0.0f),1.0f);	// Clear color but not z
+			Renderer::Clear(true, false, Vector3(0.0f,0.0f,0.0f),1.0f);	// Clear color but not z
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA);
 			DX8Wrapper::Set_DX8_Render_State (D3DRS_ZBIAS, 0);
 
@@ -1029,7 +1036,7 @@ void RTS3DScene::Render(RenderInfoClass & rinfo)
 				Customized_Render(rinfo);
 				break;
 			case EXTRA_PASS_CLEAR_LINE:
-				DX8Wrapper::Clear(true, false, Vector3(0.0f,0.0f,0.0f), 0.0f);	// Clear color but not z
+				Renderer::Clear(true, false, Vector3(0.0f,0.0f,0.0f), 0.0f);	// Clear color but not z
 				WW3D::Enable_Texturing(false);
 				WW3D::Enable_Coloring(0xff008000);
 				DX8Wrapper::Set_DX8_Render_State(D3DRS_FILLMODE,D3DFILL_WIREFRAME);
@@ -1286,7 +1293,9 @@ void renderStenciledPlayerColor( UnsignedInt color, UnsignedInt stencilRef, Bool
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);	//restore shader state
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE );
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO );
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_ALWAYS);
+	// GeneralsX @bugfix Mr. Meeseeks 13/10/2026 Restore depth test to LESSEQUAL instead of leaking ALWAYS
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
 
 	if (oldColorWriteEnable != 0x12345678)
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,oldColorWriteEnable);
@@ -1821,7 +1830,8 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 
 
 	if (ShaderClass::Is_Backface_Culling_Inverted())
-	{	//we are rendering reflections
+	{
+		//we are rendering reflections
 		///@todo: Have better flag to detect reflection pass
 
 		// Loop over all top-level RenderObjects in this scene. If the bounding sphere is not in front
@@ -1844,7 +1854,8 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 				}
 			}
 			else
-			{	//perform normal culling on non-drawables
+			{
+				//perform normal culling on non-drawables
 				if (robj->Is_Force_Visible()) {
 					robj->Set_Visible(true);
 				} else {
@@ -1878,7 +1889,8 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 				robj->Set_VisibleWithCheatSpy(isVisible);
 				if (robj->Is_VisibleWithCheatSpy())//this will clear for the bit set above
 
-				{	//need to keep track of occluders and ocludees for subsequent code.
+				{
+					//need to keep track of occluders and ocludees for subsequent code.
 					drawInfo = (DrawableInfo *)robj->Get_User_Data();
 					if (drawInfo && (draw=drawInfo->m_drawable) != nullptr)
 					{
@@ -1900,7 +1912,8 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 						{
 							//visible drawable. Check if it's either an occluder or occludee
 							if (draw->isKindOf(KINDOF_STRUCTURE) && m_numPotentialOccluders < TheGlobalData->m_maxVisibleOccluderObjects)
-							{	//object which could occlude other objects that need to be visible.
+							{
+								//object which could occlude other objects that need to be visible.
 								//Make sure this object is not translucent so it's not rendered twice (from m_potentialOccluders and m_translucentObjectsBuffer)
 								if (drawInfo->m_flags ^ DrawableInfo::ERF_IS_TRANSLUCENT)
 									m_potentialOccluders[m_numPotentialOccluders++]=robj;
@@ -1910,14 +1923,16 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 							if (draw->getObject() &&
 									(draw->isKindOf(KINDOF_SCORE) || draw->isKindOf(KINDOF_SCORE_CREATE) || draw->isKindOf(KINDOF_SCORE_DESTROY) || draw->isKindOf(KINDOF_MP_COUNT_FOR_VICTORY)) &&
 									(draw->getObject()->getSafeOcclusionFrame()) <= currentFrame && m_numPotentialOccludees < TheGlobalData->m_maxVisibleOccludeeObjects)
-							{	//object which could be occluded but still needs to be visible.
+							{
+								//object which could be occluded but still needs to be visible.
 								//We process transucent units twice (also in m_translucentObjectsBuffer) because we need to see them when occluded.
 								m_potentialOccludees[m_numPotentialOccludees++]=robj;
 								drawInfo->m_flags |= DrawableInfo::ERF_POTENTIAL_OCCLUDEE;
 							}
 							else
 							if (drawInfo->m_flags == DrawableInfo::ERF_IS_NORMAL && m_numNonOccluderOrOccludee < TheGlobalData->m_maxVisibleNonOccluderOrOccludeeObjects)
-							{	//regular object with no custom effects but still needs to be delayed to get the occlusion feature to work correctly.
+							{
+								//regular object with no custom effects but still needs to be delayed to get the occlusion feature to work correctly.
 								//Make sure this object is not translucent so it's not rendered twice (from m_potentialOccluders and m_translucentObjectsBuffer)
 								if (drawInfo->m_flags ^ DrawableInfo::ERF_IS_TRANSLUCENT)	//make sure not translucent
 									m_nonOccludersOrOccludees[m_numNonOccluderOrOccludee++]=robj;

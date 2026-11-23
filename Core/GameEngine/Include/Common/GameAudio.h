@@ -66,7 +66,7 @@ struct AudioRequest;
 struct AudioSettings;
 struct MiscAudio;
 
-typedef std::hash_map<AsciiString, AudioEventInfo*, rts::hash<AsciiString>, rts::equal_to<AsciiString> > AudioEventInfoHash;
+typedef std::hash_map<AsciiString, AudioEventInfo*, rts::hash<AsciiString>, rts::equal_to<AsciiString>/**/> AudioEventInfoHash;
 typedef AudioEventInfoHash::iterator AudioEventInfoHashIt;
 typedef UnsignedInt AudioHandle;
 
@@ -219,6 +219,8 @@ class AudioManager : public SubsystemInterface
 		virtual UnsignedInt getNum2DSamples() const = 0;
 		virtual UnsignedInt getNum3DSamples() const = 0;
 		virtual UnsignedInt getNumStreams() const = 0;
+		virtual UnsignedInt getNumAvailable2DSamples() const = 0;
+		virtual UnsignedInt getNumAvailable3DSamples() const = 0;
 
 		// Device Dependent calls to determine sound prioritization info
 		virtual Bool doesViolateLimit( AudioEventRTS *event ) const = 0;
@@ -242,8 +244,6 @@ class AudioManager : public SubsystemInterface
 		// on zoom.
 		virtual void set3DVolumeAdjustment( Real volumeAdjustment );
 
-    virtual Bool has3DSensitiveStreamsPlaying() const = 0;
-
  		virtual void *getHandleForBink() = 0;
  		virtual void releaseHandleForBink() = 0;
 
@@ -255,9 +255,9 @@ class AudioManager : public SubsystemInterface
 		virtual void setListenerPosition( const Coord3D *newListenerPos, const Coord3D *newListenerOrientation );
 		virtual const Coord3D *getListenerPosition() const;
 
-		virtual AudioRequest *allocateAudioRequest( Bool useAudioEvent );
+		virtual AudioRequest *allocateAudioRequest();
 		virtual void releaseAudioRequest( AudioRequest *requestToRelease );
-		virtual void appendAudioRequest( AudioRequest *m_request );
+		virtual void appendAudioRequest( AudioRequest *request );
 		virtual void processRequestList();
 
 		virtual AudioEventInfo *newAudioEventInfo( AsciiString newEventName );
@@ -266,9 +266,6 @@ class AudioManager : public SubsystemInterface
 
 		const AudioSettings *getAudioSettings() const;
 		const MiscAudio *getMiscAudio() const;
-
-		// This function should only be called by AudioManager, MusicManager and SoundManager
-		virtual void releaseAudioEventRTS( AudioEventRTS *&eventToRelease );
 
 		// For INI
 		AudioSettings *friend_getAudioSettings();
@@ -339,7 +336,7 @@ class AudioManager : public SubsystemInterface
 
 		AudioEventInfoHash m_allAudioEventInfo;
 		AudioHandle theAudioHandlePool;
-		std::list<std::pair<AsciiString, Real> > m_adjustedVolumes;
+		std::list<std::pair<AsciiString, Real>/**/> m_adjustedVolumes;
 
 		Real m_musicVolume;
 		Real m_soundVolume;

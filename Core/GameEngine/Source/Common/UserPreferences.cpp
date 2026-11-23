@@ -49,7 +49,20 @@
 #include "Common/MultiplayerSettings.h"
 #include "GameClient/MapUtil.h"
 #include "GameClient/ChallengeGenerals.h"
+#include "GameNetwork/GameInfo.h"
+#if defined(SAGE_USE_GAMESPY) || defined(SAGE_USE_NGMP)
 #include "GameNetwork/GameSpy/PeerDefs.h"
+#endif
+
+#if defined(SAGE_USE_NGMP) && __has_include("GameNetwork/GeneralsOnline/OnlineServices_Manager.h")
+#include "GameNetwork/GeneralsOnline/OnlineServices_Manager.h"
+#include "GameNetwork/GeneralsOnline/OnlineServices_Auth.h"
+#include "GameNetwork/GeneralsOnline/NGMP_interfaces.h"
+#define HAVE_NGMP_PREFS 1
+#endif
+#if !defined(_MSC_VER) || (_MSC_VER >= 1914)
+#include <filesystem>
+#endif
 
 
 //-----------------------------------------------------------------------------
@@ -120,8 +133,26 @@ Bool UserPreferences::load(AsciiString fname)
 //	if (strstr(fname.str(), "\\"))
 //		throw INI_INVALID_DATA;	// must be a leaf name
 
+	AsciiString normalizedFname = fname;
+#ifndef _WIN32
+	// Normalize backslashes to forward slashes on POSIX
+	if (!fname.isEmpty())
+	{
+		std::string s = fname.str();
+		for (char &c : s)
+		{
+			if (c == '\\') c = '/';
+		}
+		normalizedFname = s.c_str();
+	}
+#endif
+
 	m_filename = TheGlobalData->getPath_UserData();
-	m_filename.concat(fname);
+	if (!m_filename.endsWith("/") && !m_filename.endsWith("\\") && !normalizedFname.startsWith("/") && !normalizedFname.startsWith("\\"))
+	{
+		m_filename.concat('/');
+	}
+	m_filename.concat(normalizedFname);
 
 	FILE *fp = fopen(m_filename.str(), "r");
 	if (fp)
@@ -154,6 +185,17 @@ Bool UserPreferences::write()
 {
 	if (m_filename.isEmpty())
 		return false;
+
+#if !defined(_MSC_VER) || (_MSC_VER >= 1914)
+	// GeneralsX @feature fbraz3 03/09/2026 Ensure parent directory exists before writing preferences
+	std::filesystem::path filePath(m_filename.str());
+	std::filesystem::path parentDir = filePath.parent_path();
+	if (!parentDir.empty())
+	{
+		std::error_code ec;
+		std::filesystem::create_directories(parentDir, ec);
+	}
+#endif
 
 	FILE *fp = fopen(m_filename.str(), "w");
 	if (fp)
@@ -242,8 +284,15 @@ void UserPreferences::setAsciiString(AsciiString key, AsciiString val)
 QuickMatchPreferences::QuickMatchPreferences()
 {
 	AsciiString userPrefFilename;
-	Int localProfile = TheGameSpyInfo->getLocalProfileID();
-	userPrefFilename.format("GeneralsOnline\\QMPref%d.ini", localProfile);
+#if defined(HAVE_NGMP_PREFS)
+	NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	Int localProfile = pAuthInterface != nullptr ? (Int)pAuthInterface->GetUserID() : 0;
+#elif defined(SAGE_USE_GAMESPY)
+	Int localProfile = TheGameSpyInfo ? TheGameSpyInfo->getLocalProfileID() : 0;
+#else
+	Int localProfile = 0;
+#endif
+	userPrefFilename.format("GeneralsOnline/QMPref%d.ini", localProfile);
 	load(userPrefFilename);
 }
 
@@ -427,8 +476,15 @@ Int QuickMatchPreferences::getSide()
 CustomMatchPreferences::CustomMatchPreferences()
 {
 	AsciiString userPrefFilename;
-	Int localProfile = TheGameSpyInfo->getLocalProfileID();
-	userPrefFilename.format("GeneralsOnline\\CustomPref%d.ini", localProfile);
+#if defined(HAVE_NGMP_PREFS)
+	NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	Int localProfile = pAuthInterface != nullptr ? (Int)pAuthInterface->GetUserID() : 0;
+#elif defined(SAGE_USE_GAMESPY)
+	Int localProfile = TheGameSpyInfo ? TheGameSpyInfo->getLocalProfileID() : 0;
+#else
+	Int localProfile = 0;
+#endif
+	userPrefFilename.format("GeneralsOnline/CustomPref%d.ini", localProfile);
 	load(userPrefFilename);
 }
 
@@ -535,10 +591,12 @@ Int CustomMatchPreferences::getPreferredFaction()
 		else {
 			// Prevent from loading the disabled Generals, in case you had previously selected one as your preferred faction.
 			// This is also enforced at GUI setup (GUIUtil.cpp and GameLogic.cpp).
-			// @todo: unlock these when something rad happens
+			// GeneralsX @bugfix felipebraz 06/10/2026 Guard TheChallengeGenerals null-dereference and reset FactionBossGeneral to random
 			Bool disallowLockedGenerals = TRUE;
-			const GeneralPersona *general = TheChallengeGenerals->getGeneralByTemplateName(fac->getName());
+			const GeneralPersona *general = TheChallengeGenerals ? TheChallengeGenerals->getGeneralByTemplateName(fac->getName()) : nullptr;
 			Bool startsLocked = general ? !general->isStartingEnabled() : FALSE;
+			if (fac->getName().compareNoCase("FactionBossGeneral") == 0)
+				startsLocked = TRUE;
 			if (disallowLockedGenerals && startsLocked)
 				ret = PLAYERTEMPLATE_RANDOM;
 		}
@@ -663,7 +721,8 @@ AsciiString CustomMatchPreferences::getPreferredMap()
 	AsciiString ret;
 	CustomMatchPreferences::const_iterator it = find("Map");
 	if (it == end())
-	{	//map not found, use default instead
+	{
+		//map not found, use default instead
 		ret = getDefaultOfficialMap();
 		return ret;
 	}
@@ -671,7 +730,8 @@ AsciiString CustomMatchPreferences::getPreferredMap()
 	ret = QuotedPrintableToAsciiString(it->second);
 	ret.trim();
 	if (ret.isEmpty() || !isValidMap(ret, TRUE))
-	{	//map is invalid, use default instead
+	{
+		//map is invalid, use default instead
 		ret = getDefaultOfficialMap();
 		return ret;
 	}
@@ -776,8 +836,15 @@ void CustomMatchPreferences::setUseStats( Bool useStats )
 GameSpyMiscPreferences::GameSpyMiscPreferences()
 {
 	AsciiString userPrefFilename;
-	Int localProfile = TheGameSpyInfo->getLocalProfileID();
-	userPrefFilename.format("GeneralsOnline\\GSMiscPref%d.ini", localProfile);
+#if defined(HAVE_NGMP_PREFS)
+	NGMP_OnlineServices_AuthInterface* pAuthInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_AuthInterface>();
+	Int localProfile = pAuthInterface != nullptr ? (Int)pAuthInterface->GetUserID() : 0;
+#elif defined(SAGE_USE_GAMESPY)
+	Int localProfile = TheGameSpyInfo ? TheGameSpyInfo->getLocalProfileID() : 0;
+#else
+	Int localProfile = 0;
+#endif
+	userPrefFilename.format("GeneralsOnline/GSMiscPref%d.ini", localProfile);
 	load(userPrefFilename);
 }
 
@@ -822,9 +889,12 @@ Int GameSpyMiscPreferences::getMaxMessagesPerUpdate()
 IgnorePreferences::IgnorePreferences()
 {
 	AsciiString userPrefFilename;
-//	if(!TheGameSpyInfo)
-	Int localProfile = TheGameSpyInfo->getLocalProfileID();
-	userPrefFilename.format("GeneralsOnline\\IgnorePref%d.ini", localProfile);
+#if defined(SAGE_USE_GAMESPY)
+	Int localProfile = TheGameSpyInfo ? TheGameSpyInfo->getLocalProfileID() : 0;
+#else
+	Int localProfile = 0;
+#endif
+	userPrefFilename.format("GeneralsOnline/IgnorePref%d.ini", localProfile);
 	load(userPrefFilename);
 }
 
@@ -880,7 +950,7 @@ Bool LadderPreferences::loadProfile( Int profileID )
 	clear();
 	m_ladders.clear();
 	AsciiString userPrefFilename;
-	userPrefFilename.format("GeneralsOnline\\Ladders%d.ini", profileID);
+	userPrefFilename.format("GeneralsOnline/Ladders%d.ini", profileID);
 	Bool success = load(userPrefFilename);
 	if (!success)
 		return success;

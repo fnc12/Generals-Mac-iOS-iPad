@@ -8,10 +8,11 @@ applyTo: 'cmake/**,CMakeLists.txt,CMakePresets.json'
 - **`vc6`** — Visual Studio 6 (C++98), 32-bit, DirectX 8 + Miles
 - **`win32`** — MSVC 2022 (C++20), experimental upstream path
 
-### Cross-Platform (SDL3 + DXVK + OpenAL) — Active Targets
+### Cross-Platform (SDL3 + DXVK/WebGPU + MiniAudio) — Active Targets
 - **`linux64-deploy`** — GCC/Clang x86_64, Release — **PRIMARY LINUX**
 - **`linux64-testing`** — Linux debug variant
 - **`macos-vulkan`** — macOS ARM64, RelWithDebInfo — **PRIMARY MACOS**
+- **`webgpu`** — Emscripten 32-bit WebAssembly + WebGPU (`z_generals` / `GeneralsXZH`, exception to DXVK — uses `WebGPUDevice` + `web/` frontend)
 - **`mingw-w64-i686`** — exploratory MinGW-w64 cross-compile for Windows
 - **`windows64-deploy`** — planned MinGW-w64 x86_64 (issue #29, not active)
 
@@ -30,6 +31,10 @@ cmake --build build/linux64-deploy --target z_generals
 cmake --preset macos-vulkan
 cmake --build build/macos-vulkan --target z_generals
 
+# WebAssembly + WebGPU (Emscripten)
+cmake --preset webgpu
+cmake --build build/webgpu --target z_generals
+
 # Windows cross-build (exploratory)
 cmake --preset mingw-w64-i686
 cmake --build build/mingw-w64-i686 --target z_generals
@@ -37,7 +42,7 @@ cmake --build build/mingw-w64-i686 --target z_generals
 
 ## DXVK Source of Truth (macOS)
 
-- DXVK fixes must live in `references/fbraz3-dxvk` and be pushed to the fork branch `generalsx-macos-v2.6`.
+- DXVK fixes must live in `generalsx-dxvk` and be pushed to the fork branch `generalsx-macos-v2.6`.
 - macOS build tracks that branch via CMake FetchContent (`UPDATE_DISCONNECTED FALSE`).
 - Local mode: `-DSAGE_DXVK_USE_LOCAL_FORK=ON` (disables update/fetch).
 

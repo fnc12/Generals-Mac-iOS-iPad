@@ -138,7 +138,6 @@ void SDL3Keyboard::getKey(KeyboardIO *key)
 		key->key = KEY_NONE;
 		key->status = KeyboardIO::STATUS_UNUSED;
 		key->state = 0;
-		key->keyDownTimeMsec = 0;
 		return;
 	}
 
@@ -153,7 +152,6 @@ void SDL3Keyboard::getKey(KeyboardIO *key)
 		key->key = KEY_NONE;
 		key->status = KeyboardIO::STATUS_UNUSED;
 		key->state = 0;
-		key->keyDownTimeMsec = 0;
 		return;
 	}
 
@@ -166,8 +164,6 @@ void SDL3Keyboard::getKey(KeyboardIO *key)
 	key->key = keyDef;
 	key->status = KeyboardIO::STATUS_UNUSED;
 	key->state = keyEvent.down ? KEY_STATE_DOWN : KEY_STATE_UP;
-	// GeneralsX @bugfix felipebraz 01/04/2026 Use the same timer domain as Keyboard::checkKeyRepeat() to avoid immediate duplicate repeats.
-	key->keyDownTimeMsec = keyEvent.down ? timeGetTime() : 0;
 
 	// Mark this slot as empty (sentinel)
 	m_eventBuffer[m_nextGetIndex].type = SDL_EVENT_FIRST;
@@ -267,6 +263,11 @@ KeyVal SDL3Keyboard::translateScanCodeToKeyVal(unsigned char scan)
 		case SDL_SCANCODE_PAGEDOWN: return KEY_PGDN;
 		case SDL_SCANCODE_LSHIFT: return KEY_LSHIFT;
 		case SDL_SCANCODE_RSHIFT: return KEY_RSHIFT;
+#ifdef __APPLE__
+		// GeneralsX @bugfix MrMeeseeks 16/06/2026 Map Command to Control on macOS for group binding
+		case SDL_SCANCODE_LGUI: return KEY_LCTRL;
+		case SDL_SCANCODE_RGUI: return KEY_RCTRL;
+#endif
 		case SDL_SCANCODE_LCTRL: return KEY_LCTRL;     // GeneralsX @bugfix BenderAI 13/02/2026 Fix key constant name
 		case SDL_SCANCODE_RCTRL: return KEY_RCTRL;     // GeneralsX @bugfix BenderAI 13/02/2026 Fix key constant name
 		case SDL_SCANCODE_LALT: return KEY_LALT;       // GeneralsX @bugfix BenderAI 13/02/2026 Fix key constant name
@@ -336,6 +337,16 @@ KeyVal SDL3Keyboard::translateScanCodeToKeyVal(unsigned char scan)
 			// TODO: Phase 2 - Complete mapping
 			return KEY_NONE;
 	}
+}
+
+// GeneralsX @feature fbraz3 20/11/2026 Query macOS Command (GUI) modifier state
+Bool SDL3Keyboard::isCommand(void) const
+{
+#ifdef __APPLE__
+	return (SDL_GetModState() & SDL_KMOD_GUI) != 0;
+#else
+	return FALSE;
+#endif
 }
 
 #endif // !_WIN32

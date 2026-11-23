@@ -30,8 +30,6 @@
  *                                                                                             *
  *                    $Revision:: 2                                                           $*
  *                                                                                             *
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
@@ -48,11 +46,11 @@
 #else
 #include <sys/time.h>
 
-inline unsigned long systimerGetMS()
+inline unsigned int systimerGetMS()
 {
 	struct timeval tv;
 	gettimeofday(&tv, nullptr);
-	return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+	return (unsigned int)((tv.tv_sec * 1000) + (tv.tv_usec / 1000));
 }
 
 #define TIMEGETTIME systimerGetMS
@@ -75,9 +73,9 @@ class SysTimeClass
 		/*
 		** Get. Use everywhere you would use timeGetTime
 		*/
-		WWINLINE unsigned long Get();
-		WWINLINE unsigned long operator () () {return(Get());}
-		WWINLINE operator unsigned long() {return(Get());}
+		WWINLINE unsigned int Get();
+		WWINLINE unsigned int operator () () {return(Get());}
+		WWINLINE operator unsigned int() {return(Get());}
 
 		/*
 		** Use periodically (like every few days!) to make sure the timer doesn't wrap.
@@ -94,33 +92,20 @@ class SysTimeClass
 		/*
 		** Time we were first called.
 		*/
-		unsigned long StartTime;
+		unsigned int StartTime;
 
 		/*
 		** Time to add after timer wraps.
 		*/
-		unsigned long WrapAdd;
+		unsigned int WrapAdd;
 
 };
 
 extern SysTimeClass SystemTime;
 
 
-/***********************************************************************************************
- * SysTimeClass::Get -- Wrapper around system timeGetTime() api call                           *
- *                                                                                             *
- *                                                                                             *
- *                                                                                             *
- * INPUT:    Nothing                                                                           *
- *                                                                                             *
- * OUTPUT:   Current system time in ms                                                         *
- *                                                                                             *
- * WARNINGS: None                                                                              *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/25/2001 1:38PM ST : Created                                                            *
- *=============================================================================================*/
-WWINLINE unsigned long SysTimeClass::Get()
+// Wrapper around system timeGetTime() api call. Returns the current system time in ms.
+WWINLINE unsigned int SysTimeClass::Get()
 {
 	/*
 	** This has to be static here since we don't know if we will get called in a global constructor of another object before our
@@ -133,7 +118,7 @@ WWINLINE unsigned long SysTimeClass::Get()
 		is_init = true;
 	}
 
-	unsigned long time = timeGetTime();
+	unsigned int time = (unsigned int)timeGetTime();
 	if (time > StartTime) {
 		return(time - StartTime);
 	}

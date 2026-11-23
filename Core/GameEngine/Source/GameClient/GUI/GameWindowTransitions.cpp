@@ -55,6 +55,8 @@
 #include "GameClient/GameWindowTransitions.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
+#include "Common/FramePacer.h"
+#include "Common/GlobalData.h"
 //-----------------------------------------------------------------------------
 // DEFINES ////////////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -167,9 +169,12 @@ Bool TransitionWindow::init()
 	m_winID = TheNameKeyGenerator->nameToKey(m_winName);
 	m_win		= TheWindowManager->winGetWindowFromId(nullptr, m_winID);
 	m_currentFrameDelay = m_frameDelay;
-//	DEBUG_ASSERTCRASH( m_win, ("TransitionWindow::init Failed to find window %s", m_winName.str()));
-//	if( !m_win )
-//		return FALSE;
+	if (!m_win)
+	{
+		// GeneralsX @bugfix fbraz3 05/11/2026 Issue #381: Warn when a transition references a non-existent window
+		fprintf(stderr, "[WARNING] TransitionWindow::init: Window '%s' not found for transition style %d\n", m_winName.str(), m_style);
+		fflush(stderr);
+	}
 
 	delete m_transition;
 	m_transition = getTransitionForStyle( m_style );
@@ -239,7 +244,7 @@ Int TransitionWindow::getTotalFrames()
 //-----------------------------------------------------------------------------
 TransitionGroup::TransitionGroup()
 {
-	m_currentFrame = 0;
+	m_currentFrame = 0.0f;
 	m_fireOnce = FALSE;
 }
 
@@ -256,7 +261,7 @@ TransitionGroup::~TransitionGroup()
 
 void TransitionGroup::init()
 {
-	m_currentFrame = 0;
+	m_currentFrame = 0.0f;
 	m_directionMultiplier = 1;
 	TransitionWindowList::iterator it = m_transitionWindowList.begin();
 	while (it != m_transitionWindowList.end())
@@ -270,13 +275,37 @@ void TransitionGroup::init()
 
 void TransitionGroup::update()
 {
-	m_currentFrame += m_directionMultiplier; // we go forward or backwards depending.
-	TransitionWindowList::iterator it = m_transitionWindowList.begin();
-	while (it != m_transitionWindowList.end())
+	// TheSuperHackers @tweak bobtista GUI transition timing is now decoupled from the render update.
+	// Step every integer frame between the old and new accumulator value so discrete-state-machine
+	// transitions cannot skip a state when the render frame rate dips below the base rate.
+	// TheSuperHackers @feature bobtista 28/06/2026 Scale by the user game window transition speed preference.
+	const Real timeScale = TheFramePacer->getBaseOverUpdateFpsRatio() * TheGlobalData->m_gameWindowTransitionSpeedMultiplier;
+	const Int prevFrame = (Int)m_currentFrame;
+	m_currentFrame += m_directionMultiplier * timeScale;
+	const Int newFrame = (Int)m_currentFrame;
+
+	if( newFrame == prevFrame )
 	{
-		TransitionWindow *tWin = *it;
-		tWin->update(m_currentFrame);
-		it++;
+		return;
+	}
+
+	const Int step = (newFrame > prevFrame) ? 1 : -1;
+	for( Int frame = prevFrame + step; frame != newFrame + step; frame += step )
+	{
+		Bool isFinished = TRUE;
+		TransitionWindowList::iterator it = m_transitionWindowList.begin();
+		while (it != m_transitionWindowList.end())
+		{
+			TransitionWindow *tWin = *it;
+			tWin->update(frame);
+			isFinished &= tWin->isFinished();
+			it++;
+		}
+
+		if( isFinished )
+		{
+			break;
+		}
 	}
 }
 
@@ -315,7 +344,7 @@ void TransitionGroup::reverse()
 		tWin->reverse(totalFrames);
 		it++;
 	}
-	m_currentFrame = totalFrames;
+	m_currentFrame = (Real)totalFrames;
 //	m_currentFrame ++;
 }
 
@@ -353,6 +382,17 @@ void TransitionGroup::addWindow( TransitionWindow *transWin )
 	if(!transWin)
 		return;
 	m_transitionWindowList.push_back(transWin);
+}
+
+// GeneralsX @feature fbraz3 14/10/2026 Check if group already contains a window
+Bool TransitionGroup::hasWindow( AsciiString winName )
+{
+	for( TransitionWindowList::iterator it = m_transitionWindowList.begin(); it != m_transitionWindowList.end(); ++it )
+	{
+		if( (*it)->m_winName.compareNoCase( winName ) == 0 )
+			return TRUE;
+	}
+	return FALSE;
 }
 
 //-----------------------------------------------------------------------------
@@ -511,7 +551,13 @@ void GameWindowTransitionsHandler::reverse( AsciiString groupName )
 
 void GameWindowTransitionsHandler::remove( AsciiString groupName,  Bool skipPending )
 {
-	TransitionGroup *g = findGroup(groupName);
+	TransitionGroup* g = findGroup(groupName);
+
+	if (!g)
+	{
+		return;
+	}
+
 	if(m_pendingGroup == g)
 	{
 		if(skipPending)
@@ -583,5 +629,20 @@ void GameWindowTransitionsHandler::parseWindow( INI* ini, void *instance, void *
 	TransitionWindow *transWin = NEW TransitionWindow;
 	ini->initFromINI(transWin, myFieldParse);
 	((TransitionGroup*)instance)->addWindow(transWin);
+}
+
+// GeneralsX @feature fbraz3 14/10/2026 Add window to existing transition group if not already present
+void GameWindowTransitionsHandler::addWindowToGroup( AsciiString groupName, AsciiString winName, Int style, Int frameDelay )
+{
+	TransitionGroup *g = findGroup( groupName );
+	if (!g)
+		return;
+	if (g->hasWindow( winName ))
+		return;
+	TransitionWindow *transWin = NEW TransitionWindow;
+	transWin->m_winName = winName;
+	transWin->m_style = style;
+	transWin->m_frameDelay = frameDelay;
+	g->addWindow( transWin );
 }
 

@@ -36,12 +36,12 @@
 #include "agg_def.h"
 #include "htree.h"
 #include "w3derr.h"
-#include "chunkio.h"
-#include "wwdebug.h"
+#include "WWLib/chunkio.h"
+#include "WWDebug/wwdebug.h"
 #include "assetmgr.h"
 #include "matinfo.h"
 #include "texture.h"
-#include "wwstring.h"
+#include "WWLib/wwstring.h"
 
 // GeneralsX @build BenderAI 10/02/2026 - guard Windows headers
 #ifdef _WIN32
@@ -354,9 +354,8 @@ AggregateDefClass::Load_Assets (const char *passet_name)
 		// GeneralsX @build BenderAI 10/02/2026 - Remove :: for macros
 		GetCurrentDirectory (sizeof (path), path);
 
-		// Ensure the path is directory delimited
-		if (path[lstrlen(path)-1] != '\\') {
-			lstrcat (path, "\\");
+		if (!ensureTrailingSeparatorInPath (path, ARRAY_SIZE (path)).ok) {
+			return false;
 		}
 
 		// Assume the filename is simply the "asset name" + the w3d extension

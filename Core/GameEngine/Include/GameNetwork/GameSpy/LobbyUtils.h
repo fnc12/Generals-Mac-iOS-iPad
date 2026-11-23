@@ -30,6 +30,8 @@
 
 class GameWindow;
 
+#include "GameNetwork/LobbyTooltips.h"
+
 GameWindow *GetGameListBox();
 GameWindow *GetGameInfoListBox();
 NameKeyType GetGameListBoxID();
@@ -39,9 +41,6 @@ void ReleaseWindowInfo();
 void RefreshGameInfoListBox( GameWindow *mainWin, GameWindow *win );
 void RefreshGameListBoxes();
 void ToggleGameListType();
-
-void playerTemplateComboBoxTooltip(GameWindow *wndComboBox, WinInstanceData *instData, UnsignedInt mouse);
-void playerTemplateListBoxTooltip(GameWindow *wndListBox, WinInstanceData *instData, UnsignedInt mouse);
 
 enum GameSortType CPP_11(: Int)
 {
@@ -53,3 +52,15 @@ enum GameSortType CPP_11(: Int)
 
 Bool HandleSortButton( NameKeyType sortButton );
 void PopulateLobbyPlayerListbox();
+
+enum LobbyGameModeFilter CPP_11(: Int)
+{
+    LOBBY_FILTER_ALL = 0,
+    LOBBY_FILTER_1V1,
+    LOBBY_FILTER_TEAM,
+    LOBBY_FILTER_FFA,
+    LOBBY_FILTER_AOD,
+};
+
+extern LobbyGameModeFilter theLobbyFilter;
+LobbyGameModeFilter detectGameMode(const std::string& name);

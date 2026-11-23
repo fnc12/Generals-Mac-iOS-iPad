@@ -33,8 +33,6 @@
  *                    $Revision:: 1                                                          $*
  *                                                                                             *
  * 08/05/02 KM Texture filter class abstraction																			*
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
@@ -92,7 +90,7 @@ public:
 		TEXTURE_FILTER_COUNT
 	};
 
-	static const char* const TextureFilterModeString[TEXTURE_FILTER_COUNT];
+	static const char* const TextureFilterModeString[];
 
 	static TextureFilterMode getTextureFilterMode(const char* str);
 
@@ -130,7 +128,8 @@ public:
 
 	// These need to be called after device has been created
 	static void _Init_Filters(TextureFilterMode texture_filter, AnisotropicFilterMode anisotropy_level);
-	static void _Set_Max_Anisotropy(AnisotropicFilterMode mode);
+	// GeneralsX @bugfix Copilot 24/08/2026 Return the capability-limited anisotropy level applied to the renderer.
+	static int _Set_Max_Anisotropy(int level);
 
 	static void _Set_Default_Min_Filter(FilterType filter);
 	static void _Set_Default_Mag_Filter(FilterType filter);

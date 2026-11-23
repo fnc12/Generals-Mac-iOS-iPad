@@ -30,8 +30,8 @@
 
 #pragma once
 
-#include "ww3d.h"
-#include "texturefilter.h"
+#include "WW3D2/ww3d.h"
+#include "WW3D2/texturefilter.h"
 
 #include "Common/UserPreferences.h"
 
@@ -69,8 +69,21 @@ public:
 	void setOnlineIPAddress(UnsignedInt IP);
 	Bool getArchiveReplaysEnabled() const;
 	Bool getAlternateMouseModeEnabled();
+	Bool getRightMouseScrollWithAlternateMouseEnabled() const;
+	// GeneralsX @feature fbraz3 20/11/2026 Option to enable/disable Command+Left-Click-Drag map panning on macOS
+	Bool getCommandDragScrollEnabled() const;
+	void setCommandDragScrollEnabled(Bool val);
+	// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ camera projection options for displays wider than 16:9
+	Bool getUltrawideHorPlusEnabled() const;
+	void setUltrawideHorPlusEnabled(Bool val);
+	Real getUltrawideMaxHorizontalFOV() const;
+	void setUltrawideMaxHorizontalFOV(Real val);
+	// GeneralsX @feature ClaudeCode 22/11/2026 Centred 16:9 UI layout on displays wider than 16:9
+	Bool getUltrawideUIEnabled() const;
+	void setUltrawideUIEnabled(Bool val);
 	Bool getRetaliationModeEnabled();
 	Bool getDoubleClickAttackMoveEnabled();
+	Int getJpegQuality() const;
 	Real getScrollFactor();
 	Bool getDrawScrollAnchor();
 	Bool getMoveScrollAnchor();
@@ -82,7 +95,6 @@ public:
 	Bool getScreenEdgeScrollEnabledInWindowedApp() const;
 	Bool getScreenEdgeScrollEnabledInFullscreenApp() const;
 	ScreenEdgeScrollMode getScreenEdgeScrollMode() const;
-	Bool getSendDelay();
 	Int getFirewallBehavior();
 	Short getFirewallPortAllocationDelta();
 	UnsignedShort getFirewallPortOverride();
@@ -133,4 +145,46 @@ public:
 	Real getMinCameraHeight() const;
 	Real getCameraPitch() const;
 	Real getTerrainDrawDistanceScale() const;
+	// GeneralsX @feature fbraz3 14/10/2026 Camera height and terrain draw distance preference setters
+	void setMaxCameraHeight(Real val);
+	void setTerrainDrawDistanceScale(Real val);
+	Real getGameWindowTransitionSpeedMultiplier() const;
+	// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
+	Int getSkirmishTickRate() const;
+
+	// GeneralsX @feature fbraz3 08/10/2026 Enhanced graphics & lighting options
+	Bool getAdvancedShadows(Bool defaultVal = TRUE) const;
+	Bool getAdvancedLighting(Bool defaultVal = TRUE) const;
+	Bool getUseShadowVolumesForSkins(Bool defaultVal = TRUE) const;
+	Bool getExtendedShadowFrustumCulling(Bool defaultVal = TRUE) const;
+	Bool getNaturalSunElevation(Bool defaultVal = TRUE) const;
+	Bool getShadowsForProjectiles(Bool defaultVal = TRUE) const;
+	Bool getShadowsForProps(Bool defaultVal = TRUE) const;
+	Bool getBridgeShadows(Bool defaultVal = TRUE) const;
+	Bool getWaterReflections(Bool defaultVal = TRUE) const;
+	Bool getExplosionDynamicLights(Bool defaultVal = TRUE) const;
+	Bool getVehicleHeadlights(Bool defaultVal = TRUE) const;
+	Bool getEnablePostProcessing(Bool defaultVal = TRUE) const;
+	Bool getPostProcessBloom(Bool defaultVal = TRUE) const;
+	Bool getPostProcessHDR(Bool defaultVal = TRUE) const;
+	Bool getPostProcessFXAA(Bool defaultVal = FALSE) const;
+	// GeneralsX @feature Mr. Meeseeks 16/10/2026 Option to toggle air unit ground indicator
+	Bool getAirUnitGroundIndicator(Bool defaultVal = TRUE) const;
+
+	void setAdvancedShadows(Bool val);
+	void setAdvancedLighting(Bool val);
+	void setUseShadowVolumesForSkins(Bool val);
+	void setExtendedShadowFrustumCulling(Bool val);
+	void setNaturalSunElevation(Bool val);
+	void setShadowsForProjectiles(Bool val);
+	void setShadowsForProps(Bool val);
+	void setBridgeShadows(Bool val);
+	void setWaterReflections(Bool val);
+	void setExplosionDynamicLights(Bool val);
+	void setVehicleHeadlights(Bool val);
+	void setEnablePostProcessing(Bool val);
+	void setPostProcessBloom(Bool val);
+	void setPostProcessHDR(Bool val);
+	void setPostProcessFXAA(Bool val);
+	void setAirUnitGroundIndicator(Bool val);
 };

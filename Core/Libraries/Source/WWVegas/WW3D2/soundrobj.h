@@ -30,23 +30,25 @@
  *                                                                                             *
  *                    $Revision:: 4                                                           $*
  *                                                                                             *
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
 
 // TheSuperHackers @build xezon 05/04/2025 Compile in WWAUDIO for Renegade's w3dview tool.
+#if defined(SAGE_USE_WEBGPU)
+#define noWWAUDIO 0
+#else
 #define noWWAUDIO 1
+#endif
 
 #if noWWAUDIO // (gth) removing dependency on WWAUDIO
 
 #include "rendobj.h"
-#include "wwstring.h"
+#include "WWLib/wwstring.h"
 #include "proto.h"
-#include "w3d_file.h"
+#include "WW3D2/w3d_file.h"
 #include "w3derr.h"
-#include "AudibleSound.h"
+#include "WWAudio/AudibleSound.h"
 
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -118,7 +120,7 @@ public:
 	//
 	//	SoundRenderObjClass specific
 	//
-	virtual void						Set_Sound (AudibleSoundDefinitionClass *definition);
+	virtual void						Set_Sound (AudibleSoundClass *sound);
 	virtual AudibleSoundClass *	Get_Sound () const;
 	virtual AudibleSoundClass *	Peek_Sound () const			{ return Sound; }
 
@@ -163,7 +165,7 @@ public:
 	//	Public constructors/destructors
 	///////////////////////////////////////////////////////////
 	SoundRenderObjDefClass ();
-	SoundRenderObjDefClass (SoundRenderObjClass &render_obj);
+	SoundRenderObjDefClass (const SoundRenderObjClass &render_obj);
 	SoundRenderObjDefClass (const SoundRenderObjDefClass &src);
 	virtual ~SoundRenderObjDefClass () override;
 
@@ -176,6 +178,7 @@ public:
 	//	Public methods
 	///////////////////////////////////////////////////////////
 	RenderObjClass *				Create ();
+	AudibleSoundClass *			Create_Sound () const;
 	WW3DErrorType					Load_W3D (ChunkLoadClass &cload);
 	WW3DErrorType					Save_W3D (ChunkSaveClass &csave);
 	const char *					Get_Name () const					{ return Name; }
@@ -185,7 +188,7 @@ public:
 	//
 	//	Initialization
 	//
-	void								Initialize (SoundRenderObjClass &render_obj);
+	void								Initialize (const SoundRenderObjClass &render_obj);
 
 protected:
 
@@ -198,21 +201,61 @@ protected:
 	//
 	WW3DErrorType					Read_Header (ChunkLoadClass &cload);
 	WW3DErrorType					Read_Definition (ChunkLoadClass &cload);
+	void								Read_Settings (ChunkLoadClass &cload);
+	void								Read_Base_Class (ChunkLoadClass &cload);
 
 	//
 	//	Saving methods
 	//
 	WW3DErrorType					Write_Header (ChunkSaveClass &csave);
 	WW3DErrorType					Write_Definition (ChunkSaveClass &csave);
+	void								Write_Settings (ChunkSaveClass &csave);
+	void								Write_Base_Class (ChunkSaveClass &csave);
 
 private:
+
+	///////////////////////////////////////////////////////////
+	//	Private data types
+	///////////////////////////////////////////////////////////
+
+	//
+	//	The settings of the sound that Create_Sound builds. The logical sound settings, the display text, the sphere
+	//	color and the definition ID and name have no effect; they are kept so that a save writes them back.
+	//
+	struct SoundSettingsStruct
+	{
+		SoundSettingsStruct ();
+
+		float					Priority;
+		float					Volume;
+		float					Pan;
+		int					LoopCount;
+		float					DropOffRadius;
+		float					MaxVolRadius;
+		bool					Is3D;
+		StringClass			Filename;
+		int					Type;
+		StringClass			DisplayText;
+		float					StartOffset;
+		float					PitchFactor;
+
+		int					LogicalTypeMask;
+		float					LogicalNotifyDelay;
+		float					LogicalDropOffRadius;
+		bool					CreateLogical;
+
+		Vector3				AttenuationSphereColor;
+
+		uint32				DefinitionID;
+		StringClass			DefinitionName;
+	};
 
 	///////////////////////////////////////////////////////////
 	//	Private member data
 	///////////////////////////////////////////////////////////
 	uint32								Version;
 	StringClass							Name;
-	AudibleSoundDefinitionClass 	Definition;
+	SoundSettingsStruct				Settings;
 	SoundRenderObjClass::FLAGS		Flags;
 };
 

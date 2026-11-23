@@ -69,6 +69,8 @@ bool OpenALAudioStream::bufferData(uint8_t *data, size_t data_size, ALenum forma
     if (m_current_buffer_idx >= AL_STREAM_BUFFER_COUNT)
         m_current_buffer_idx = 0;
 
+    m_newBuffersQueued++;
+
     return true;
 }
 
@@ -80,48 +82,27 @@ void OpenALAudioStream::update()
     ALint num_queued;
     alGetSourcei(m_source, AL_BUFFERS_QUEUED, &num_queued);
 
-    // GeneralsX @bugfix 14/06/2026 EOF probe — runs BEFORE the restart-on-stopped guard below.
-    // If the source has stopped having fully played everything queued (no unplayed buffers left),
-    // probe the source stream once: at true EOF, latch m_endOfData so the guard does NOT restart
-    // it. Without this, a one-shot voice line that ends while its queue is still over the refill
-    // threshold (so the periodic refill/EOF check below hasn't run) gets restarted, REPLAYING its
-    // already-played buffers as a repeating 'chip' until the next line. If data IS still available
-    // this is a genuine underrun and m_endOfData stays false so the normal refill+restart recovers.
-    {
-        ALint processedNow = 0;
-        alGetSourcei(m_source, AL_BUFFERS_PROCESSED, &processedNow);
-        if (sourceState == AL_STOPPED && num_queued > 0 && processedNow >= num_queued
-            && !m_endOfData && m_requireDataCallback) {
-            ALint queuedBefore = num_queued;
-            bool moreData = m_requireDataCallback();
-            ALint queuedAfter = 0;
-            alGetSourcei(m_source, AL_BUFFERS_QUEUED, &queuedAfter);
-            if (!moreData) {
-                m_endOfData = true;   // definitive EOF from the decoder
-            }
-            else if (queuedAfter <= queuedBefore) {
-                // GeneralsX @bugfix 04/07/2026 The decoder claims more data is coming but
-                // produced none. Decode here is synchronous, so a persistently failing
-                // packet never heals — and without this, the restart guard below replays
-                // the already-played queue forever: the audible "chirping" loop after a
-                // voice line, which also pins the stream un-stopped and holds the
-                // disallow-speech flag (silencing subsequent EVA). Three consecutive
-                // no-growth probes = the stream is done; latch EOF and let it stop.
-                if (++m_stalledProbes >= 3) {
-                    m_endOfData = true;
-                }
-            }
-            else {
-                m_stalledProbes = 0;
-            }
+    // GeneralsX @bugfix Moortu 02/11/2026 Drop processed buffers on STOPPED source to avoid looping speech (#380)
+    // A STOPPED source has played everything that was queued on it before reaching this state.
+    // In OpenAL, a source in AL_STOPPED reports all queued buffers as processed, including any
+    // fresh buffer queued by bufferData() immediately prior to update() (e.g. in movie playback).
+    // Discard only the stale played buffers (num_queued - m_newBuffersQueued) so newly queued frames
+    // are preserved, and prevent replaying old buffers in an infinite loop.
+    if (sourceState == AL_STOPPED && num_queued > 0) {
+        ALint staleBuffers = (num_queued > (ALint)m_newBuffersQueued) ? (num_queued - (ALint)m_newBuffersQueued) : 0;
+        while (staleBuffers > 0) {
+            ALuint buffer;
+            alSourceUnqueueBuffers(m_source, 1, &buffer);
+            staleBuffers--;
         }
+        alGetSourcei(m_source, AL_BUFFERS_QUEUED, &num_queued);
     }
+    m_newBuffersQueued = 0;
 
     // GeneralsX @bugfix BenderAI 22/04/2026 Restart before unqueue to avoid dropping freshly queued
     // briefing buffers when OpenAL reports AL_STOPPED with processed buffers.
-    // GeneralsX @bugfix 14/06/2026 ...but NOT once the stream is at true EOF: a finished one-shot
-    // speech (taunt) must be allowed to reach a stable AL_STOPPED so its disallowSpeech flag clears.
-    if ((sourceState == AL_STOPPED || sourceState == AL_INITIAL || sourceState == AL_PAUSED) && num_queued > 0 && !m_endOfData) {
+    // Only INITIAL/PAUSED here: a STOPPED source was handled above.
+    if ((sourceState == AL_INITIAL || sourceState == AL_PAUSED) && num_queued > 0) {
         play();
         alGetSourcei(m_source, AL_SOURCE_STATE, &sourceState);
     }
@@ -138,37 +119,16 @@ void OpenALAudioStream::update()
         processedToUnqueue--;
     }
 
-    // GeneralsX @bugfix 14/06/2026 At true EOF the source has stopped with its final buffers
-    // still queued-but-processed; the state-gated unqueue above skips them. Reap them here so
-    // num_queued can reach 0, letting processPlayingList detect the finished one-shot as stopped
-    // (which clears disallowSpeech the frame the audio ends, so back-to-back taunts play).
-    if (m_endOfData) {
-        ALint processedAtEof = 0;
-        alGetSourcei(m_source, AL_BUFFERS_PROCESSED, &processedAtEof);
-        while (processedAtEof > 0) {
-            ALuint buffer;
-            alSourceUnqueueBuffers(m_source, 1, &buffer);
-            processedAtEof--;
-        }
-    }
-
     alGetSourcei(m_source, AL_BUFFERS_QUEUED, &num_queued);
     DEBUG_LOG(("Having %i buffers queued\n", num_queued));
 
-    if (num_queued < AL_STREAM_BUFFER_COUNT / 2 && m_requireDataCallback && !m_endOfData) {
+    if (num_queued < AL_STREAM_BUFFER_COUNT / 2 && m_requireDataCallback) {
         // GeneralsX @bugfix BenderAI 22/04/2026 Do not fake queue growth when callback fails to enqueue data.
         // Ask for more data to be buffered.
         // Only fill up to the half, because some formats can output
         // more than one buffer per decoded frame.
         while (num_queued < AL_STREAM_BUFFER_COUNT / 2) {
-            // GeneralsX @bugfix 14/06/2026 callback returns FALSE at true end-of-file (no more
-            // data will ever come). Latch m_endOfData so we stop restarting the drained source
-            // and let it finish. A transient decode error still returns TRUE, so a stutter/underrun
-            // mid-line is NOT mistaken for the end and the existing recovery path runs unchanged.
-            if (!m_requireDataCallback()) {
-                m_endOfData = true;
-                break;
-            }
+            m_requireDataCallback();
 
             ALint refreshedQueued = 0;
             alGetSourcei(m_source, AL_BUFFERS_QUEUED, &refreshedQueued);
@@ -176,18 +136,17 @@ void OpenALAudioStream::update()
                 break;
             }
             num_queued = refreshedQueued;
-            m_stalledProbes = 0;  // GeneralsX @bugfix 04/07/2026 healthy refill: stalls must be CONSECUTIVE to latch EOF, not accumulated over the stream's lifetime
         }
     }
 
     // GeneralsX @bugfix fbraz3 27/04/2026 Restart after refill when a generic speech stream
     // began the frame with an empty queue; otherwise processPlayingList() can release it as
     // stopped before the newly buffered narrator audio ever starts playing.
-    // GeneralsX @bugfix 14/06/2026 As above, do not restart a source that has reached true EOF.
     alGetSourcei(m_source, AL_SOURCE_STATE, &sourceState);
-    if ((sourceState == AL_STOPPED || sourceState == AL_INITIAL || sourceState == AL_PAUSED) && num_queued > 0 && !m_endOfData) {
+    if ((sourceState == AL_STOPPED || sourceState == AL_INITIAL || sourceState == AL_PAUSED) && num_queued > 0) {
         play();
     }
+    m_newBuffersQueued = 0;
 }
 
 void OpenALAudioStream::reset()
@@ -207,8 +166,7 @@ void OpenALAudioStream::reset()
         num_queued--;
     }
     m_current_buffer_idx = 0;
-    m_endOfData = false;  // GeneralsX @bugfix 14/06/2026 streams are reused (handleToKill/replace); clear EOF latch
-    m_stalledProbes = 0;
+    m_newBuffersQueued = 0;
 }
 
 bool OpenALAudioStream::isPlaying()

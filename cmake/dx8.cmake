@@ -28,11 +28,20 @@ if(SAGE_USE_DX8)
   FetchContent_MakeAvailable(dx8)
   message(STATUS "Using DirectX 8 SDK (Windows native)")
 
+elseif(SAGE_USE_WEBGPU)
+  # GeneralsX @feature Reuse only Direct3D 8 API headers for the WebGPU backend.
+  FetchContent_Declare(
+    dxvk
+    URL https://github.com/doitsujin/dxvk/releases/download/v2.6/dxvk-native-2.6-steamrt-sniper.tar.gz
+  )
+  FetchContent_MakeAvailable(dxvk)
+  message(STATUS "Using DXVK Direct3D 8 headers with the WebGPU backend")
+
 elseif(APPLE AND SAGE_USE_MOLTENVK)
   # macOS: Build DXVK 2.6 from source using Meson + MoltenVK
   # GeneralsX @build BenderAI 24/02/2026 - Phase 5 macOS port (Session 61)
-  find_program(MESON_EXECUTABLE meson HINTS /usr/local/bin /opt/homebrew/bin)
-  find_program(NINJA_EXECUTABLE ninja HINTS /usr/local/bin /opt/homebrew/bin)
+  find_program(MESON_EXECUTABLE meson HINTS /opt/homebrew/bin /usr/local/bin)
+  find_program(NINJA_EXECUTABLE ninja HINTS /opt/homebrew/bin /usr/local/bin)
 
   if(NOT MESON_EXECUTABLE)
     message(FATAL_ERROR "DXVK macOS build requires meson: brew install meson")
@@ -61,8 +70,17 @@ elseif(APPLE AND SAGE_USE_MOLTENVK)
 
   include(ExternalProject)
   # GeneralsX @build BenderAI 13/03/2026 Add explicit source mode to keep remote branch updates deterministic by default.
-  set(DXVK_LOCAL_FORK_DIR "${CMAKE_SOURCE_DIR}/references/fbraz3-dxvk")
-  option(SAGE_DXVK_USE_LOCAL_FORK "Build DXVK from local references/fbraz3-dxvk checkout" OFF)
+  # GeneralsX @build fbraz 25/09/2026 Default local DXVK fork to workspace generalsx-dxvk repository.
+  if(NOT DEFINED DXVK_LOCAL_FORK_DIR)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/../generalsx-dxvk/.git")
+      set(DXVK_LOCAL_FORK_DIR "${CMAKE_SOURCE_DIR}/../generalsx-dxvk")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/references/fbraz3-dxvk/.git")
+      set(DXVK_LOCAL_FORK_DIR "${CMAKE_SOURCE_DIR}/references/fbraz3-dxvk")
+    else()
+      set(DXVK_LOCAL_FORK_DIR "${CMAKE_SOURCE_DIR}/../generalsx-dxvk")
+    endif()
+  endif()
+  option(SAGE_DXVK_USE_LOCAL_FORK "Build DXVK from local generalsx-dxvk checkout" OFF)
 
   if(SAGE_DXVK_USE_LOCAL_FORK AND EXISTS "${DXVK_LOCAL_FORK_DIR}/.git")
     set(DXVK_SOURCE_DIR "${DXVK_LOCAL_FORK_DIR}")
@@ -93,7 +111,7 @@ elseif(APPLE AND SAGE_USE_MOLTENVK)
     # here previously produced dylibs that die at Vulkan init on device.
     message(FATAL_ERROR "iOS DXVK requires the local fork submodule. Run: git submodule update --init references/fbraz3-dxvk")
   else()
-    set(DXVK_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-src-fbraz3")
+    set(DXVK_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-src-generalsx")
     message(STATUS "DXVK macOS build: using GitHub source clone at ${DXVK_SOURCE_DIR}")
   endif()
   set(DXVK_BUILD_DIR  "${CMAKE_BINARY_DIR}/_deps/dxvk-build-macos")
@@ -199,10 +217,13 @@ Cflags: -I\${includedir}
     )
   else()
     # GeneralsX @build copilot 01/04/2026 Pin remote DXVK to immutable commit produced by fix/macos-size_t-cstddef.
-    set(DXVK_REMOTE_REF 46a3bc018bcae408d49d3c500e4e536a11f6789a)
+    # GeneralsX @build 12/07/2026 Bumped to the merged commit that includes the macOS HiDPI WSI fix upstream.
+    # GeneralsX @build BenderAI 11/09/2026 Bump DXVK commit to fix libc++ try_key_extraction on modern macOS
+    set(DXVK_REMOTE_REF f66da559fd48cd55ddfebca38ed0f708c0f76a24)
     ExternalProject_Add(dxvk_macos_build
       # GeneralsX @build BenderAI 08/04/2026 Consume pre-patched source from pinned fork commit.
-      GIT_REPOSITORY    https://github.com/fbraz3/dxvk.git
+      # GeneralsX @build 17/09/2026 Migrate DXVK remote repository to generalsx-project org.
+      GIT_REPOSITORY    https://github.com/generalsx-project/dxvk.git
       GIT_TAG           ${DXVK_REMOTE_REF}
       # GeneralsX @build copilot 01/04/2026 Keep pinned commit fetch reliable across clean CI builds.
       GIT_SHALLOW       FALSE

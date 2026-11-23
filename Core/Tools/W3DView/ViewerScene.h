@@ -30,15 +30,13 @@
  *                                                                                             *
  *                    $Revision:: 6                                                           $*
  *                                                                                             *
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
 
-#include "scene.h"
-#include "aabox.h"
-#include "sphere.h"
+#include "WW3D2/scene.h"
+#include "WWMath/aabox.h"
+#include "WWMath/sphere.h"
 
 
 class RenderObjIterator;

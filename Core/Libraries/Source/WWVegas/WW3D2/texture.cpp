@@ -34,9 +34,6 @@
  *                                                                                             *
  * 06/27/02 KM Texture class abstraction																			*
  * 08/05/02 KM Texture class redesign (revisited)
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
- *   FileListTextureClass::Load_Frame_Surface -- Load source texture                           *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "texture.h"
@@ -44,19 +41,19 @@
 #include <d3d8.h>
 #include <d3dx8core.h>
 #include "dx8wrapper.h"
-#include "TARGA.h"
-#include <nstrdup.h>
+#include "WWLib/TARGA.h"
+#include <WWLib/nstrdup.h>
 #include "w3d_file.h"
 #include "assetmgr.h"
 #include "formconv.h"
 #include "textureloader.h"
 #include "missingtexture.h"
-#include "ffactory.h"
+#include "WWLib/ffactory.h"
 #include "dx8caps.h"
 #include "dx8texman.h"
 #include "meshmatdesc.h"
 #include "texturethumbnail.h"
-#include "wwprofile.h"
+#include "WWDebug/wwprofile.h"
 
 const unsigned DEFAULT_INACTIVATION_TIME=20000;
 
@@ -69,6 +66,15 @@ static unsigned unused_texture_id;
 // This throttles submissions to the background texture loading queue.
 static unsigned TexturesAppliedPerFrame;
 const unsigned MAX_TEXTURES_APPLIED_PER_FRAME=2;
+
+// GeneralsX @bugfix Copilot 24/08/2026 Preserve explicit mip requests while resolving all-level requests from authored metadata.
+static MipCountType Resolve_Mip_Level_Count(MipCountType requested, unsigned authored)
+{
+	if (requested==MIP_LEVELS_ALL || (requested!=MIP_LEVELS_1 && (unsigned)requested>authored))
+		return (MipCountType)authored;
+
+	return requested;
+}
 
 
 /*!
@@ -732,9 +738,9 @@ TextureClass::TextureClass
 	{
 		Width=thumb->Get_Original_Texture_Width();
 		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
+		MipLevelCount=Resolve_Mip_Level_Count(
+			MipLevelCount,
+			thumb->Get_Original_Texture_Mip_Level_Count());
 	}
 
 	LastAccessed=WW3D::Get_Sync_Time();
@@ -971,7 +977,7 @@ void TextureClass::Apply(unsigned int stage)
 //! Get surface from mip level
 /*!
 */
-SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level)
+SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level) const
 {
 	if (!Peek_D3D_Texture())
 	{
@@ -1477,9 +1483,9 @@ CubeTextureClass::CubeTextureClass
 	{
 		Width=thumb->Get_Original_Texture_Width();
 		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
+		MipLevelCount=Resolve_Mip_Level_Count(
+			MipLevelCount,
+			thumb->Get_Original_Texture_Mip_Level_Count());
 	}
 
 	LastAccessed=WW3D::Get_Sync_Time();
@@ -1762,9 +1768,9 @@ VolumeTextureClass::VolumeTextureClass
 	{
 		Width=thumb->Get_Original_Texture_Width();
 		Height=thumb->Get_Original_Texture_Height();
- 		if (MipLevelCount!=MIP_LEVELS_1) {
- 			MipLevelCount=(MipCountType)thumb->Get_Original_Texture_Mip_Level_Count();
- 		}
+		MipLevelCount=Resolve_Mip_Level_Count(
+			MipLevelCount,
+			thumb->Get_Original_Texture_Mip_Level_Count());
 	}
 
 	LastAccessed=WW3D::Get_Sync_Time();

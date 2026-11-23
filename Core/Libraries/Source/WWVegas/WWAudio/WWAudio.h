@@ -30,16 +30,15 @@
  *                                                                                             *
  *                    $Revision:: 19                                                          $*
  *                                                                                             *
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
 
-#include "always.h"
+#include "WWLib/always.h"
 
 // TheSuperHackers @build 09/02/2026 Conditionally include Miles (Windows only)
-#if !defined(SAGE_USE_OPENAL)
+// GeneralsX @feature fbraz 11/06/2026 Also use MilesStub when MiniAudio is enabled
+#if !defined(SAGE_USE_OPENAL) && !defined(SAGE_USE_MINIAUDIO)
 #pragma warning (push, 3)
 #include "mss.h"
 #pragma warning (pop)
@@ -47,10 +46,10 @@
 #include "MilesStub.h"
 #endif
 
-#include "Vector.h"
+#include "WWLib/Vector.h"
 #include "SoundBuffer.h"
 #include "AudioEvents.h"
-#include "wwstring.h"
+#include "WWLib/wwstring.h"
 
 /////////////////////////////////////////////////////////////////////////////////
 // Forward declaration
@@ -354,20 +353,6 @@ public:
 	void							Reset_Logical_Types ();
 	int							Get_Logical_Type_Count () const	{ return m_LogicalTypes.Count (); }
 	int							Get_Logical_Type (int index, StringClass &name);
-
-	//////////////////////////////////////////////////////////////////////
-	//	Definition related methods
-	//////////////////////////////////////////////////////////////////////
-
-	//
-	//	Sound creation methods
-	//
-	int						Create_Instant_Sound (int definition_id, const Matrix3D &tm, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	int						Create_Instant_Sound (const char *def_name, const Matrix3D &tm, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	AudibleSoundClass *	Create_Continuous_Sound (int definition_id, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	AudibleSoundClass *	Create_Continuous_Sound (const char *def_name, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	AudibleSoundClass *	Create_Sound (int definition_id, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
-	AudibleSoundClass *	Create_Sound (const char *def_name, RefCountClass *user_obj = nullptr, uint32 user_data = 0, int classid_hint = CLASSID_3D);
 
 	//////////////////////////////////////////////////////////////////////
 	//	Sound object lookup

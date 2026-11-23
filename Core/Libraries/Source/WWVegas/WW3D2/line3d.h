@@ -30,17 +30,15 @@
  *                                                                         *
  *                    $Revision:: 2                                       $*
  *                                                                         *
- *-------------------------------------------------------------------------*
- * Functions:                                                              *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
 
-#include "always.h"
+#include "WWLib/always.h"
 #include "rendobj.h"
-#include "vector3.h"
-#include "vector4.h"
-#include "shader.h"
+#include "WWMath/vector3.h"
+#include "WWMath/vector4.h"
+#include "WW3D2/shader.h"
 
 class	VertexMaterialClass;
 class RenderInfoClass;

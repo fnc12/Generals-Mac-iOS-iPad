@@ -1,11 +1,11 @@
 set(GAMEENGINEDEVICE_SRC
 #    Include/MilesAudioDevice/MilesAudioManager.h
 #    Include/VideoDevice/Bink/BinkVideoPlayer.h
-    Include/W3DDevice/Common/W3DConvert.h
-    Include/W3DDevice/Common/W3DFunctionLexicon.h
-    Include/W3DDevice/Common/W3DModuleFactory.h
+#    Include/W3DDevice/Common/W3DConvert.h
+#    Include/W3DDevice/Common/W3DFunctionLexicon.h
+#    Include/W3DDevice/Common/W3DModuleFactory.h
 #    Include/W3DDevice/Common/W3DRadar.h
-    Include/W3DDevice/Common/W3DThingFactory.h
+#    Include/W3DDevice/Common/W3DThingFactory.h
 #    Include/W3DDevice/GameClient/BaseHeightMap.h
 #    Include/W3DDevice/GameClient/camerashakesystem.h
 #    Include/W3DDevice/GameClient/FlatHeightMap.h
@@ -32,29 +32,27 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/TerrainTex.h
 #    Include/W3DDevice/GameClient/TileData.h
     Include/W3DDevice/GameClient/W3DAssetManager.h
-    Include/W3DDevice/GameClient/W3DAssetManagerExposed.h
     Include/W3DDevice/GameClient/W3DBibBuffer.h
     Include/W3DDevice/GameClient/W3DBridgeBuffer.h
     Include/W3DDevice/GameClient/W3DBufferManager.h
-    Include/W3DDevice/GameClient/W3DCustomEdging.h
     Include/W3DDevice/GameClient/W3DCustomScene.h
-    Include/W3DDevice/GameClient/W3DDebugDisplay.h
-    Include/W3DDevice/GameClient/W3DDebugIcons.h
-    Include/W3DDevice/GameClient/W3DDisplay.h
-    Include/W3DDevice/GameClient/W3DDisplayString.h
-    Include/W3DDevice/GameClient/W3DDisplayStringManager.h
+#    Include/W3DDevice/GameClient/W3DDebugDisplay.h
+#    Include/W3DDevice/GameClient/W3DDebugIcons.h
+#    Include/W3DDevice/GameClient/W3DDisplay.h
+#    Include/W3DDevice/GameClient/W3DDisplayString.h
+#    Include/W3DDevice/GameClient/W3DDisplayStringManager.h
     Include/W3DDevice/GameClient/W3DDynamicLight.h
     Include/W3DDevice/GameClient/W3DFileSystem.h
 #    Include/W3DDevice/GameClient/W3DGadget.h
     Include/W3DDevice/GameClient/W3DGameClient.h
-    Include/W3DDevice/GameClient/W3DGameFont.h
-    Include/W3DDevice/GameClient/W3DGameWindow.h
-    Include/W3DDevice/GameClient/W3DGameWindowManager.h
-    Include/W3DDevice/GameClient/W3DGUICallbacks.h
+#    Include/W3DDevice/GameClient/W3DGameFont.h
+#    Include/W3DDevice/GameClient/W3DGameWindow.h
+#    Include/W3DDevice/GameClient/W3DGameWindowManager.h
+#    Include/W3DDevice/GameClient/W3DGUICallbacks.h
     Include/W3DDevice/GameClient/W3DInGameUI.h
     Include/W3DDevice/GameClient/W3DMirror.h
 #    Include/W3DDevice/GameClient/W3DMouse.h
-    Include/W3DDevice/GameClient/W3DParticleSys.h
+#    Include/W3DDevice/GameClient/W3DParticleSys.h
     Include/W3DDevice/GameClient/W3DPoly.h
     Include/W3DDevice/GameClient/W3DProjectedShadow.h
 #    Include/W3DDevice/GameClient/W3DPropBuffer.h
@@ -76,14 +74,11 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DWater.h
 #    Include/W3DDevice/GameClient/W3DWaterTracks.h
     Include/W3DDevice/GameClient/W3DWaypointBuffer.h
-    Include/W3DDevice/GameClient/W3DWebBrowser.h
 #    Include/W3DDevice/GameClient/WorldHeightMap.h
     Include/W3DDevice/GameLogic/W3DGameLogic.h
     Include/W3DDevice/GameLogic/W3DGhostObject.h
     Include/W3DDevice/GameLogic/W3DTerrainLogic.h
-#    Include/Win32Device/Common/Win32BIGFile.h
-#    Include/Win32Device/Common/Win32BIGFileSystem.h
-    Include/Win32Device/Common/Win32GameEngine.h
+#    Include/Win32Device/Common/Win32GameEngine.h
 #    Include/Win32Device/Common/Win32LocalFile.h
 #    Include/Win32Device/Common/Win32LocalFileSystem.h
     # Linux SDL3/OpenAL devices (Phase 1 - TheSuperHackers @feature CnC_Generals_Linux 07/02/2026)
@@ -94,11 +89,11 @@ set(GAMEENGINEDEVICE_SRC
     Include/SDL3Device/GameClient/SDL3Keyboard.h
 #    Source/MilesAudioDevice/MilesAudioManager.cpp
 #    Source/VideoDevice/Bink/BinkVideoPlayer.cpp
-    Source/W3DDevice/Common/System/W3DFunctionLexicon.cpp
+#    Source/W3DDevice/Common/System/W3DFunctionLexicon.cpp
 #    Source/W3DDevice/Common/System/W3DRadar.cpp
-    Source/W3DDevice/Common/Thing/W3DModuleFactory.cpp
-    Source/W3DDevice/Common/Thing/W3DThingFactory.cpp
-    Source/W3DDevice/Common/W3DConvert.cpp
+#    Source/W3DDevice/Common/Thing/W3DModuleFactory.cpp
+#    Source/W3DDevice/Common/Thing/W3DThingFactory.cpp
+#    Source/W3DDevice/Common/W3DConvert.cpp
 #    Source/W3DDevice/GameClient/BaseHeightMap.cpp
 #    Source/W3DDevice/GameClient/camerashakesystem.cpp
 #    Source/W3DDevice/GameClient/Drawable/Draw/W3DDebrisDraw.cpp
@@ -132,12 +127,11 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/GUI/Gadget/W3DTabControl.cpp
 #    Source/W3DDevice/GameClient/GUI/Gadget/W3DTextEntry.cpp
 #    Source/W3DDevice/GameClient/GUI/Gadget/W3DVerticalSlider.cpp
-    Source/W3DDevice/GameClient/GUI/GUICallbacks/W3DControlBar.cpp
-    Source/W3DDevice/GameClient/GUI/GUICallbacks/W3DMainMenu.cpp
-    Source/W3DDevice/GameClient/GUI/GUICallbacks/W3DMOTD.cpp
-    Source/W3DDevice/GameClient/GUI/W3DGameFont.cpp
-    Source/W3DDevice/GameClient/GUI/W3DGameWindow.cpp
-    Source/W3DDevice/GameClient/GUI/W3DGameWindowManager.cpp
+#    Source/W3DDevice/GameClient/GUI/GUICallbacks/W3DControlBar.cpp
+#    Source/W3DDevice/GameClient/GUI/GUICallbacks/W3DMainMenu.cpp
+#    Source/W3DDevice/GameClient/GUI/W3DGameFont.cpp
+#    Source/W3DDevice/GameClient/GUI/W3DGameWindow.cpp
+#    Source/W3DDevice/GameClient/GUI/W3DGameWindowManager.cpp
 #    Source/W3DDevice/GameClient/HeightMap.cpp
     Source/W3DDevice/GameClient/Shadow/W3DBufferManager.cpp
     Source/W3DDevice/GameClient/Shadow/W3DProjectedShadow.cpp
@@ -146,21 +140,19 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/TerrainTex.cpp
 #    Source/W3DDevice/GameClient/TileData.cpp
     Source/W3DDevice/GameClient/W3DAssetManager.cpp
-    Source/W3DDevice/GameClient/W3DAssetManagerExposed.cpp
     Source/W3DDevice/GameClient/W3DBibBuffer.cpp
     Source/W3DDevice/GameClient/W3DBridgeBuffer.cpp
-    Source/W3DDevice/GameClient/W3DCustomEdging.cpp
-    Source/W3DDevice/GameClient/W3DDebugDisplay.cpp
-    Source/W3DDevice/GameClient/W3DDebugIcons.cpp
-    Source/W3DDevice/GameClient/W3DDisplay.cpp
-    Source/W3DDevice/GameClient/W3DDisplayString.cpp
-    Source/W3DDevice/GameClient/W3DDisplayStringManager.cpp
+#    Source/W3DDevice/GameClient/W3DDebugDisplay.cpp
+#    Source/W3DDevice/GameClient/W3DDebugIcons.cpp
+#    Source/W3DDevice/GameClient/W3DDisplay.cpp
+#    Source/W3DDevice/GameClient/W3DDisplayString.cpp
+#    Source/W3DDevice/GameClient/W3DDisplayStringManager.cpp
     Source/W3DDevice/GameClient/W3DDynamicLight.cpp
     Source/W3DDevice/GameClient/W3DFileSystem.cpp
     Source/W3DDevice/GameClient/W3DGameClient.cpp
     Source/W3DDevice/GameClient/W3DInGameUI.cpp
 #    Source/W3DDevice/GameClient/W3DMouse.cpp
-    Source/W3DDevice/GameClient/W3DParticleSys.cpp
+#    Source/W3DDevice/GameClient/W3DParticleSys.cpp
     Source/W3DDevice/GameClient/W3DPoly.cpp
 #    Source/W3DDevice/GameClient/W3DPropBuffer.cpp
     Source/W3DDevice/GameClient/W3DRoadBuffer.cpp
@@ -177,13 +169,18 @@ set(GAMEENGINEDEVICE_SRC
 #    Source/W3DDevice/GameClient/W3DVideoBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DView.cpp
     Source/W3DDevice/GameClient/W3dWaypointBuffer.cpp
-    Source/W3DDevice/GameClient/W3DWebBrowser.cpp
 #    Source/W3DDevice/GameClient/Water/W3DWater.cpp
 #    Source/W3DDevice/GameClient/Water/W3DWaterTracks.cpp
 #    Source/W3DDevice/GameClient/WorldHeightMap.cpp
     Source/W3DDevice/GameLogic/W3DGameLogic.cpp
     Source/W3DDevice/GameLogic/W3DGhostObject.cpp
     Source/W3DDevice/GameLogic/W3DTerrainLogic.cpp
+#    Source/Win32Device/Common/Win32GameEngine.cpp
+#    Source/Win32Device/Common/Win32LocalFile.cpp
+#    Source/Win32Device/Common/Win32LocalFileSystem.cpp
+#    Source/Win32Device/GameClient/Win32DIKeyboard.cpp
+#    #Source/Win32Device/GameClient/Win32DIMouse.cpp
+#    Source/Win32Device/GameClient/Win32Mouse.cpp
 )
 
 # GeneralsX @TheSuperHackers @build BenderAI 11/02/2026 Separate Windows and Linux platform-specific files
@@ -192,13 +189,12 @@ if(WIN32)
     list(APPEND GAMEENGINEDEVICE_SRC
 #        Source/Win32Device/Common/Win32BIGFile.cpp
 #        Source/Win32Device/Common/Win32BIGFileSystem.cpp
-        Source/Win32Device/Common/Win32GameEngine.cpp
+        ${CMAKE_SOURCE_DIR}/Core/GameEngineDevice/Source/Win32Device/Common/Win32GameEngine.cpp
 #        Source/Win32Device/Common/Win32LocalFile.cpp
 #        Source/Win32Device/Common/Win32LocalFileSystem.cpp
-        Source/Win32Device/Common/Win32OSDisplay.cpp
-        Source/Win32Device/GameClient/Win32DIKeyboard.cpp
+        ${CMAKE_SOURCE_DIR}/Core/GameEngineDevice/Source/Win32Device/GameClient/Win32DIKeyboard.cpp
 #        Source/Win32Device/GameClient/Win32DIMouse.cpp
-        Source/Win32Device/GameClient/Win32Mouse.cpp
+        ${CMAKE_SOURCE_DIR}/Core/GameEngineDevice/Source/Win32Device/GameClient/Win32Mouse.cpp
     )
 else()
     # Linux-specific files (SDL3, OpenAL+FFmpeg audio, DXVK)
@@ -212,7 +208,8 @@ else()
     # GeneralsX @refactor fbraz3 31/03/2026 OpenALAudioDevice sources moved to Core/GameEngineDevice
     # OpenALAudioManager.cpp, OpenALAudioStream.cpp, OpenALAudioCache.cpp and FFmpegFile.cpp
     # are now provided by corei_gameenginedevice_private when SAGE_USE_OPENAL is enabled.
-    if(NOT SAGE_USE_OPENAL)
+    # GeneralsX @feature fbraz 11/06/2026 MiniAudio sources also provided by Core when SAGE_USE_MINIAUDIO is enabled.
+    if(NOT SAGE_USE_OPENAL AND NOT SAGE_USE_MINIAUDIO)
         list(APPEND GAMEENGINEDEVICE_SRC
             Source/OpenALAudioManager.cpp
         )
@@ -228,11 +225,11 @@ target_include_directories(z_gameenginedevice PUBLIC
 )
 
 target_precompile_headers(z_gameenginedevice PRIVATE
-    [["Utility/CppMacros.h"]] # Must be first, to be removed when abandoning VC6
+    [["Precompiled/BasePrecomp.h"]] # Must be first
     [["Common/STLTypedefs.h"]]
     [["Common/SubsystemInterface.h"]]
-    [["INI.h"]]
-    [["WWCommon.h"]]
+    [["WWLib/INI.h"]]
+    [["WWLib/WWCommon.h"]]
     [["PchCompat.h"]] # TheSuperHackers @build 08/02/2026 Platform-safe windows.h wrapper
 )
 
@@ -264,31 +261,13 @@ if(SAGE_USE_OPENAL)
     # GeneralsX @refactor fbraz3 31/03/2026 Private include for OpenALAudioCache.h now provided by corei_gameenginedevice_private
 endif()
 
-# Phase 3: Video playback with FFmpeg (configured by Core/GameEngineDevice when RTS_BUILD_OPTION_FFMPEG=ON)
-# GeneralsX @feature BenderAI 21/02/2026 Video playback framework
-if(RTS_BUILD_OPTION_FFMPEG)
-    # Add VideoDevice FFmpeg implementation (video playback)
-    target_sources(z_gameenginedevice PUBLIC
-        Include/VideoDevice/Bink/BinkVideoPlayer.h
-        Include/VideoDevice/FFmpeg/FFmpegFile.h
-        Include/VideoDevice/FFmpeg/FFmpegVideoPlayer.h
-        Source/VideoDevice/FFmpeg/FFmpegFile.cpp
-        Source/VideoDevice/FFmpeg/FFmpegVideoPlayer.cpp
-    )
-    target_compile_definitions(z_gameenginedevice PUBLIC SAGE_USE_FFMPEG)
-    # GeneralsX @build felipebraz 20/06/2025 PkgConfig::FFMPEG is PRIVATE in corei_gameenginedevice_private so it
-    # does not propagate transitively to consumers of z_gameenginedevice (z_generals). Explicitly
-    # expose it as PUBLIC so the final linker of z_generals can resolve av_* symbols.
-    # Use IMPORTED_TARGET guard to avoid re-calling pkg_check_modules if Core already called it.
-    if(NOT TARGET PkgConfig::FFMPEG)
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavformat libavutil libswscale)
+# GeneralsX @feature fbraz 11/06/2026 MiniAudio audio backend (alternative to OpenAL)
+if(SAGE_USE_MINIAUDIO)
+    if(NOT TARGET miniaudio_lib)
+        message(FATAL_ERROR "SAGE_USE_MINIAUDIO is ON but miniaudio_lib target not found. Include cmake/miniaudio.cmake first.")
     endif()
-    # The imported target is directory-scoped, so the copy created here is NOT the
-    # one Core already fixed — re-apply the framework flag merge to this instance.
-    include(${CMAKE_SOURCE_DIR}/cmake/ffmpeg_framework_fix.cmake)
-    sage_fix_ffmpeg_framework_flags()
-    target_link_libraries(z_gameenginedevice PUBLIC PkgConfig::FFMPEG)
+    target_link_libraries(z_gameenginedevice PUBLIC miniaudio_lib)
 endif()
+
 
 # CURL::libcurl is now propagated transitively via corei_gameengine_public (Core/GameEngine/CMakeLists.txt).

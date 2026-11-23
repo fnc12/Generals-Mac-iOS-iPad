@@ -32,7 +32,6 @@
 
 #include "gamespy/ghttp/ghttp.h"
 
-#include "Lib/BaseType.h"
 #include "Common/GameEngine.h"
 #include "Common/GameState.h"
 #include "Common/GlobalData.h"
@@ -54,6 +53,7 @@
 #include "GameClient/KeyDefs.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GadgetStaticText.h"
+#include "GameClient/GadgetPushButton.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/WindowVideoManager.h"
 #include "GameClient/CampaignManager.h"
@@ -113,6 +113,8 @@ static NameKeyType buttonCustomMissionID = NAMEKEY_INVALID;
 static NameKeyType onlineID = NAMEKEY_INVALID;
 static NameKeyType networkID = NAMEKEY_INVALID;
 static NameKeyType optionsID = NAMEKEY_INVALID;
+// GeneralsX @feature fbraz3 14/10/2026 GeneralsX options menu button
+static NameKeyType generalsxID = NAMEKEY_INVALID;
 static NameKeyType exitID = NAMEKEY_INVALID;
 static NameKeyType motdID = NAMEKEY_INVALID;
 static NameKeyType worldBuilderID = NAMEKEY_INVALID;
@@ -398,7 +400,11 @@ static void initLabelVersion()
 	NameKeyType versionID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:LabelVersion" );
 	GameWindow *labelVersion = TheWindowManager->winGetWindowFromId( nullptr, versionID );
 	UnicodeString creditText;
-	creditText.translate("GeneralsX - Multiplatform C&C Generals");
+	if (TheVersion) {
+		creditText = TheVersion->getUnicodeProjectWatermark();
+	} else {
+		creditText.translate("GeneralsX - Multiplatform C&C Generals");
+	}
 
 	if (labelVersion)
 	{
@@ -419,7 +425,8 @@ static void initLabelVersion()
 			instData.m_style = GWS_STATIC_TEXT | GWS_MOUSE_TRACK;
 			instData.m_textLabelString = "GeneralsXCreditLabel";
 
-			const Int width = 560;
+			// GeneralsX @feature ClaudeCode 22/11/2026 Relative to the main menu parent, which spans the UI layout rect.
+			const Int width = TheDisplay->getUILayoutWidth() - 16;
 			const Int height = 28;
 			const Int x = 8;
 			const Int y = TheDisplay->getHeight() - height - 8;
@@ -437,12 +444,78 @@ static void initLabelVersion()
 			if (fallbackCreditLabel)
 			{
 				// GeneralsX @tweak BenderAI 31/03/2026 Keep fallback watermark subtle and aligned to bottom-left target placement.
-				fallbackCreditLabel->winSetFont(TheWindowManager->winFindFont("Arial", 12, FALSE));
+				int baseSize = 12;
+				float scaleY = TheDisplay ? ((float)TheDisplay->getHeight() / 600.0f) : 1.0f;
+				int scaledSize = (scaleY > 1.0f) ? (int)(baseSize * scaleY * 0.70f) : baseSize;
+				if (scaledSize < baseSize) scaledSize = baseSize;
+				fallbackCreditLabel->winSetFont(TheWindowManager->winFindFont("Arial", scaledSize, FALSE));
 				fallbackCreditLabel->winSetEnabledTextColors(GameMakeColor(255, 220, 60, 255), GameMakeColor(0, 0, 0, 0));
 				GadgetStaticTextSetText(fallbackCreditLabel, creditText);
 			}
 		}
 	}
+}
+
+// GeneralsX @bugfix fbraz3 20/11/2026 Dynamically inject ButtonGeneralsX instead of overriding MainMenu.wnd in generalsx.big
+static GameWindow *createGeneralsXMainMenuButton( GameWindow *buttonCredits, GameWindow *buttonExit, NameKeyType generalsxID )
+{
+	if (!buttonCredits || !buttonExit || !TheWindowManager)
+		return nullptr;
+
+	GameWindow *earthMap = buttonCredits->winGetParent();
+	if (!earthMap)
+		return nullptr;
+
+	ICoord2D credPos, credSize, exitPos;
+	buttonCredits->winGetPosition( &credPos.x, &credPos.y );
+	buttonCredits->winGetSize( &credSize.x, &credSize.y );
+	buttonExit->winGetPosition( &exitPos.x, &exitPos.y );
+
+	Int deltaY = exitPos.y - credPos.y;
+	if (deltaY <= 0)
+		deltaY = credSize.y + 4;
+
+	if (GameWindow *mapBorder = earthMap->winGetParent())
+	{
+		ICoord2D mapSize;
+		mapBorder->winGetSize( &mapSize.x, &mapSize.y );
+		mapBorder->winSetSize( mapSize.x, mapSize.y + deltaY );
+	}
+
+	ICoord2D earthSize;
+	earthMap->winGetSize( &earthSize.x, &earthSize.y );
+	earthMap->winSetSize( earthSize.x, earthSize.y + deltaY );
+
+	buttonCredits->winSetPosition( credPos.x, credPos.y + deltaY );
+	buttonExit->winSetPosition( exitPos.x, exitPos.y + deltaY );
+
+	WinInstanceData instData;
+	instData.init();
+	if (WinInstanceData *credInst = buttonCredits->winGetInstanceData())
+	{
+		instData = *credInst;
+		instData.m_text = nullptr;
+		instData.m_tooltip = nullptr;
+		instData.m_videoBuffer = nullptr;
+	}
+	instData.m_id = generalsxID;
+	instData.m_decoratedNameString = "MainMenu.wnd:ButtonGeneralsX";
+	instData.m_textLabelString = "GUI:GeneralsXOptions";
+	instData.m_tooltipString.clear();
+
+	GameWindow *btnGX = TheWindowManager->gogoGadgetPushButton(
+		earthMap,
+		buttonCredits->winGetStatus(),
+		credPos.x, credPos.y,
+		credSize.x, credSize.y,
+		&instData,
+		nullptr,
+		FALSE );
+
+	if (btnGX && buttonCredits->winGetFont())
+		btnGX->winSetFont( buttonCredits->winGetFont() );
+
+	return btnGX;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -473,6 +546,8 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 	onlineID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonOnline" );
 	networkID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonNetwork" );
 	optionsID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonOptions" );
+	// GeneralsX @feature fbraz3 14/10/2026 GeneralsX options menu button
+	generalsxID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonGeneralsX" );
 	exitID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonExit" );
 	motdID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonMOTD" );
 	worldBuilderID = TheNameKeyGenerator->nameToKey( "MainMenu.wnd:ButtonWorldBuilder" );
@@ -520,6 +595,24 @@ void MainMenuInit( WindowLayout *layout, void *userData )
 	buttonLoadReplay = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonLoadReplayID );
 	buttonLoad = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonLoadID );
 	buttonCredits = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonCreditsID );
+	GameWindow *btnGX = TheWindowManager->winGetWindowFromId( parentMainMenu, generalsxID );
+	if (!btnGX)
+	{
+		btnGX = createGeneralsXMainMenuButton( buttonCredits, buttonExit, generalsxID );
+	}
+	if (btnGX)
+	{
+		UnicodeString ustr = TheGameText->fetch("GUI:GeneralsXOptions");
+		GadgetButtonSetText(btnGX, ustr);
+
+		// GeneralsX @feature fbraz3 14/10/2026 Register ButtonGeneralsX in main menu transitions
+		if (TheTransitionHandler)
+		{
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenu", "MainMenu.wnd:ButtonGeneralsX", BUTTON_TRANSITION_FLASH, 11);
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenuLogoFade", "MainMenu.wnd:ButtonGeneralsX", BUTTON_TRANSITION_FLASH, 11);
+			TheTransitionHandler->addWindowToGroup("MainMenuDefaultMenuBack", "MainMenu.wnd:ButtonGeneralsX", TRANSITION_FLASH, 0);
+		}
+	}
 
 	buttonEasy = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonEasyID );
 	buttonMedium = TheWindowManager->winGetWindowFromId( parentMainMenu, buttonMediumID );
@@ -838,7 +931,8 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 			const Int btnW = 260;
 			const Int btnH = 26;
 			const Int margin = 8;
-			const Int x = TheDisplay->getWidth()  - btnW - margin;
+			// GeneralsX @feature ClaudeCode 22/11/2026 Relative to the main menu parent, which spans the UI layout rect.
+			const Int x = TheDisplay->getUILayoutWidth()  - btnW - margin;
 			const Int y = TheDisplay->getHeight() - btnH - margin;
 
 			WinInstanceData instData;
@@ -860,7 +954,11 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 
 			if (updateNotifyButton)
 			{
-				GameFont* font = TheWindowManager->winFindFont("Arial", 10, FALSE);
+				int baseSize = 10;
+				float scaleY = TheDisplay ? ((float)TheDisplay->getHeight() / 600.0f) : 1.0f;
+				int scaledSize = (scaleY > 1.0f) ? (int)(baseSize * scaleY * 0.70f) : baseSize;
+				if (scaledSize < baseSize) scaledSize = baseSize;
+				GameFont* font = TheWindowManager->winFindFont("Arial", scaledSize, FALSE);
 				if (font)
 					updateNotifyButton->winSetFont(font);
 
@@ -1478,7 +1576,11 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 				dropDownWindows[DROPDOWN_MULTIPLAYER]->winHide(FALSE);
 				TheTransitionHandler->reverse("MainMenuMultiPlayerMenuTransitionToNext");
 
+#if defined(SAGE_USE_NGMP)
+				TheShell->push( "Menus/GameSpyLoginProfile.wnd" );
+#else
 				StartPatchCheck();
+#endif
 //				localAnimateWindowManager->reverseAnimateWindow();
 				dropDown = DROPDOWN_NONE;
 
@@ -1509,6 +1611,16 @@ WindowMsgHandledType MainMenuSystem( GameWindow *window, UnsignedInt msg,
 				optLayout->runInit();
 				optLayout->hide(FALSE);
 				optLayout->bringForward();
+			}
+			// GeneralsX @feature fbraz3 14/10/2026 Open GeneralsX options menu
+			else if ( controlID == generalsxID )
+			{
+				if (dontAllowTransitions)
+					break;
+				dontAllowTransitions = TRUE;
+				TheShell->push( "Menus/GeneralsXMenu.wnd" );
+				dropDownWindows[DROPDOWN_MAIN]->winHide( FALSE );
+				TheTransitionHandler->reverse( "MainMenuDefaultMenu" );
 			}
 			else if( controlID == worldBuilderID )
 			{

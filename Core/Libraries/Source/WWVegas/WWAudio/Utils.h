@@ -30,14 +30,13 @@
  *                                                                                             *
  *                    $Revision:: 4                                                           $*
  *                                                                                             *
- *---------------------------------------------------------------------------------------------*
- * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
 
 // TheSuperHackers @build 09/02/2026 Conditionally include Miles (Windows only)
-#if !defined(SAGE_USE_OPENAL)
+// GeneralsX @feature fbraz 11/06/2026 Also use MilesStub when MiniAudio is enabled
+#if !defined(SAGE_USE_OPENAL) && !defined(SAGE_USE_MINIAUDIO)
 #pragma warning (push, 3)
 #include "mss.h"
 #pragma warning (pop)
@@ -70,24 +69,3 @@ class MMSLockClass
 
 	static CRITICAL_SECTION _MSSLockCriticalSection;
 };
-
-
-////////////////////////////////////////////////////////////////////////////
-//
-//  Get_Filename_From_Path
-//
-__inline LPCTSTR
-Get_Filename_From_Path (LPCTSTR path)
-{
-	// Find the last occurrence of the directory deliminator
-	LPCTSTR filename = ::strrchr (path, '\\');
-	if (filename != nullptr) {
-		// Increment past the directory deliminator
-		filename ++;
-	} else {
-		filename = path;
-	}
-
-	// Return the filename part of the path
-	return filename;
-}

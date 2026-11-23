@@ -1,5 +1,7 @@
 # GeneralsX @build fbraz 24/02/2026
 # GeneralsX @bugfix fbraz 10/03/2026 Use FetchContent for ALL platforms (macOS, Linux, Windows)
+# NOTE: OpenAL backend is legacy/deprecated and retained for legacy builds.
+# MiniAudio is the primary and supported audio backend across all platforms.
 # OpenAL audio library via FetchContent (openal-soft v1.24.2)
 #
 # On Linux, openal-soft is managed via vcpkg (see vcpkg.json). The vcpkg build compiles
@@ -25,41 +27,52 @@
 # Reference: jmarshall OpenAL implementation uses <AL/al.h> throughout.
 
 if(SAGE_USE_OPENAL)
-    message(STATUS "Configuring OpenAL Soft (v1.24.2) with FetchContent...")
+    set(OPENAL_FOUND FALSE)
+    set(OpenAL_FOUND FALSE)
 
-    include(FetchContent)
-
-    FetchContent_Declare(
-        openal_soft
-        URL "https://github.com/kcat/openal-soft/archive/refs/tags/1.24.2.tar.gz"
-        URL_HASH "SHA256=7efd383d70508587fbc146e4c508771a2235a5fc8ae05bf6fe721c20a348bd7c"
-    )
-
-    # Minimal build: no utilities, examples, or tests
-    set(ALSOFT_INSTALL_RUNTIME_LIBS  ON  CACHE BOOL "Install runtime libs" FORCE)
-    set(ALSOFT_EXAMPLES              OFF CACHE BOOL "Build examples"       FORCE)
-    set(ALSOFT_TESTS                 OFF CACHE BOOL "Build tests"          FORCE)
-    set(ALSOFT_UTILS                 OFF CACHE BOOL "Build utils"          FORCE)
-    set(ALSOFT_NO_CONFIG_UTIL        ON  CACHE BOOL "Disable config util"  FORCE)
-
-    if(WIN32)
-        # Windows: WASAPI is the modern low-latency audio API
-        set(ALSOFT_REQUIRE_WASAPI ON CACHE BOOL "Require WASAPI backend on Windows" FORCE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(OpenAL QUIET)
     endif()
 
-    FetchContent_MakeAvailable(openal_soft)
+    if(OPENAL_FOUND OR OpenAL_FOUND)
+        message(STATUS "✓ Found system OpenAL. Using it.")
+    else()
+        message(STATUS "Configuring OpenAL Soft (v1.24.2) with FetchContent...")
 
-    # Force the vendored fmt 11.1.1 headers ahead of any system include dirs.
-    # A Homebrew fmt (e.g. 12.x at /opt/homebrew/include) earlier on the include
-    # path makes openal sources compile against fmt::v12 inline-namespace headers
-    # while linking the vendored v11 static lib -> unresolved fmt::v12 symbols.
-    foreach(_alsoft_tgt OpenAL alsoft.common alsoft.excommon)
-        if(TARGET ${_alsoft_tgt})
-            target_include_directories(${_alsoft_tgt} BEFORE PRIVATE
-                "${openal_soft_SOURCE_DIR}/fmt-11.1.1/include")
+        include(FetchContent)
+
+        FetchContent_Declare(
+            openal_soft
+            URL "https://github.com/kcat/openal-soft/archive/refs/tags/1.24.2.tar.gz"
+            URL_HASH "SHA256=7efd383d70508587fbc146e4c508771a2235a5fc8ae05bf6fe721c20a348bd7c"
+        )
+
+        # Minimal build: no utilities, examples, or tests
+        set(ALSOFT_INSTALL_RUNTIME_LIBS  ON  CACHE BOOL "Install runtime libs" FORCE)
+        set(ALSOFT_EXAMPLES              OFF CACHE BOOL "Build examples"       FORCE)
+        set(ALSOFT_TESTS                 OFF CACHE BOOL "Build tests"          FORCE)
+        set(ALSOFT_UTILS                 OFF CACHE BOOL "Build utils"          FORCE)
+        set(ALSOFT_NO_CONFIG_UTIL        ON  CACHE BOOL "Disable config util"  FORCE)
+
+        if(WIN32)
+            # Windows: WASAPI is the modern low-latency audio API
+            set(ALSOFT_REQUIRE_WASAPI ON CACHE BOOL "Require WASAPI backend on Windows" FORCE)
         endif()
-    endforeach()
 
-    # openal-soft FetchContent creates the OpenAL::OpenAL imported target
-    message(STATUS "OpenAL Soft configured: target OpenAL::OpenAL available")
+        FetchContent_MakeAvailable(openal_soft)
+
+        # Force the vendored fmt 11.1.1 headers ahead of any system include dirs.
+        # A Homebrew fmt (e.g. 12.x at /opt/homebrew/include) earlier on the include
+        # path makes openal sources compile against fmt::v12 inline-namespace headers
+        # while linking the vendored v11 static lib -> unresolved fmt::v12 symbols.
+        foreach(_alsoft_tgt OpenAL alsoft.common alsoft.excommon)
+            if(TARGET ${_alsoft_tgt})
+                target_include_directories(${_alsoft_tgt} BEFORE PRIVATE
+                    "${openal_soft_SOURCE_DIR}/fmt-11.1.1/include")
+            endif()
+        endforeach()
+
+        # openal-soft FetchContent creates the OpenAL::OpenAL imported target
+        message(STATUS "OpenAL Soft configured: target OpenAL::OpenAL available")
+    endif()
 endif()

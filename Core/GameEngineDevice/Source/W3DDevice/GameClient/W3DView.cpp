@@ -34,6 +34,7 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
+#include "GameLogic/FPUControl.h"
 #include <windows.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
@@ -68,6 +69,7 @@
 #include "GameLogic/AI.h"			///< For AI debug (yes, I'm cheating for now)
 #include "GameLogic/AIPathfind.h"			///< For AI debug (yes, I'm cheating for now)
 #include "GameLogic/ExperienceTracker.h"
+#include "GameLogic/FPUControl.h"							///< GeneralsX @bugfix costin-alupului 20/07/2026 setFPMode() so screen->world pick math runs under the engine's expected FP mode
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/BodyModule.h"
@@ -92,23 +94,61 @@
 
 #include "WW3D2/dx8renderer.h"
 #include "WW3D2/light.h"
-#include "WW3D2/camera.h"
-#include "WW3D2/coltype.h"
 #include "WW3D2/predlod.h"
 #include "WW3D2/ww3d.h"
+#include "WW3D2/Renderer.h"
 
 #include "W3DDevice/GameClient/CameraShakeSystem.h"
 
 // 30 fps
 Real TheW3DFrameLengthInMsec = MSEC_PER_LOGICFRAME_REAL; // default is 33msec/frame == 30fps. but we may change it depending on sys config.
-static const Int MAX_REQUEST_CACHE_SIZE = 40;	// Any size larger than 10, or examine code below for changes. jkmcd.
 static const Real DRAWABLE_OVERSCAN = 75.0f;  ///< 3D world coords of how much to overscan in the 3D screen region
 
 constexpr const Real NearZ = MAP_XY_FACTOR; ///< Set the near to MAP_XY_FACTOR. Improves z buffer resolution.
 
-//=================================================================================================
-inline Real minf(Real a, Real b) { if (a < b) return a; else return b; }
-inline Real maxf(Real a, Real b) { if (a > b) return a; else return b; }
+// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ widescreen: views wider than this aspect ratio keep the
+// vertical field of view of the reference aspect ratio and widen the horizontal field of view instead.
+constexpr const Real HorPlusReferenceAspectRatio = 16.0f / 9.0f;
+constexpr const Real DefaultHorizontalFOVDegrees = 50.0f; ///< Default W3D horizontal fov for a full-screen view.
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ layout for a display of the given aspect ratio.
+// Up to the limit of TheGlobalData->m_ultrawideMaxHorizontalFOV the extra width is covered purely by
+// a wider horizontal fov. Past that limit the fov stops growing and the remaining aspect ratio is
+// covered by raising the camera, which keeps the vertical ground coverage of the reference aspect.
+// This is render-only math (CRT, not WWMath) and never feeds the simulation.
+//-------------------------------------------------------------------------------------------------
+struct HorPlusLayout
+{
+	Real widening;          ///< Factor applied to the view plane half-width of the base horizontal fov.
+	Real heightAspectRatio; ///< Aspect ratio the default camera height limits are derived from.
+	Real heightScale;       ///< Additional camera height factor for the width the fov limit left uncovered.
+};
+
+static HorPlusLayout calcHorPlusLayout(Real aspectRatio, Real baseHorizontalFOV)
+{
+	HorPlusLayout layout;
+	layout.widening = 1.0f;
+	layout.heightAspectRatio = aspectRatio;
+	layout.heightScale = 1.0f;
+
+	if (!TheGlobalData->m_ultrawideHorPlus || aspectRatio <= HorPlusReferenceAspectRatio)
+		return layout;
+
+	const Real tanHalfBase = tan(baseHorizontalFOV * 0.5f);
+	if (tanHalfBase <= 0.0f)
+		return layout;
+
+	const Real tanHalfMax = tan(DEG_TO_RADF(TheGlobalData->m_ultrawideMaxHorizontalFOV) * 0.5f);
+	const Real maxWidening = std::max(1.0f, tanHalfMax / tanHalfBase);
+	const Real fullWidening = aspectRatio / HorPlusReferenceAspectRatio;
+
+	layout.widening = std::min(fullWidening, maxWidening);
+	layout.heightAspectRatio = HorPlusReferenceAspectRatio;
+	layout.heightScale = fullWidening / layout.widening;
+
+	return layout;
+}
 
 //-------------------------------------------------------------------------------------------------
 // Normalizes angle to +- PI.
@@ -163,6 +203,7 @@ W3DView::W3DView()
 
 	m_3DCamera = nullptr;
 	m_2DCamera = nullptr;
+	m_timeMultiplier = 1;
 
 #if PRESERVE_RETAIL_SCRIPTED_CAMERA
 	m_initialGroundLevel = 10.0f;
@@ -176,9 +217,9 @@ W3DView::W3DView()
 	m_shakeIntensity = 0.0f;
 	m_FXPitch = 1.0f;
 	m_freezeTimeForCameraMovement = false;
-	m_cameraHasMovedSinceRequest = true;
-	m_locationRequests.clear();
-	m_locationRequests.reserve(MAX_REQUEST_CACHE_SIZE + 10);	// This prevents the vector from ever re-allocating
+	m_lastScreenToTerrainValid = false;
+	m_footprintTerrainDrawSize.x = 0;
+	m_footprintTerrainDrawSize.y = 0;
 
 	//Enhancements from CNC3 WST 4/15/2003. JSC Integrated 5/20/03.
 	m_scriptedState = 0;
@@ -213,7 +254,7 @@ void W3DView::setHeight(Int height)
 	View::setHeight(height);
 
 	Vector2 vMin,vMax;
-	m_3DCamera->Set_Aspect_Ratio((Real)getWidth()/(Real)height);
+	updateViewPlane(getDefaultHorizontalFOV());
  	m_3DCamera->Get_Viewport(vMin,vMax);
  	vMax.Y=(Real)(m_originY+height)/(Real)TheDisplay->getHeight();
  	m_3DCamera->Set_Viewport(vMin,vMax);
@@ -222,6 +263,21 @@ void W3DView::setHeight(Int height)
 	// showing or hiding the control bar will change the viewable area.
 	m_cameraAreaConstraintsValid = false;
 	m_recalcCamera = true;
+	m_lastScreenToTerrainValid = false;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature ClaudeCode 22/11/2026 See View::setFramingHeight.
+//-------------------------------------------------------------------------------------------------
+void W3DView::setFramingHeight(Int height)
+{
+	View::setFramingHeight(height);
+
+	updateViewPlane(getDefaultHorizontalFOV());
+
+	m_cameraAreaConstraintsValid = false;
+	m_recalcCamera = true;
+	m_lastScreenToTerrainValid = false;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -233,17 +289,61 @@ void W3DView::setWidth(Int width)
 	View::setWidth(width);
 
 	Vector2 vMin,vMax;
-	m_3DCamera->Set_Aspect_Ratio((Real)width/(Real)getHeight());
  	m_3DCamera->Get_Viewport(vMin,vMax);
  	vMax.X=(Real)(m_originX+width)/(Real)TheDisplay->getWidth();
  	m_3DCamera->Set_Viewport(vMin,vMax);
 
 	//we want to maintain the same scale, so we'll need to adjust the fov.
 	//default W3D fov for full-screen is 50 degrees.
-	m_3DCamera->Set_View_Plane((Real)width/(Real)TheDisplay->getWidth()*DEG_TO_RADF(50.0f),-1);
+	updateViewPlane(getDefaultHorizontalFOV());
 
 	m_cameraAreaConstraintsValid = false;
 	m_recalcCamera = true;
+	m_lastScreenToTerrainValid = false;
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Returns the horizontal field of view this view uses by default. It scales with the share of the
+	display width the view covers, so that a narrower view keeps the same scale. */
+//-------------------------------------------------------------------------------------------------
+Real W3DView::getDefaultHorizontalFOV() const
+{
+	return (Real)m_width / (Real)TheDisplay->getWidth() * DEG_TO_RADF(DefaultHorizontalFOVDegrees);
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Rebuilds the 3D camera view plane from a base horizontal field of view and the view size.
+	Picking, frustum culling, the radar view box and the camera area constraints all read the
+	camera view plane, so this is the single place that decides the projection. */
+// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ widescreen. Up to the reference aspect ratio the
+// base horizontal fov is used as is. Wider views keep the vertical fov of the reference aspect
+// ratio and extend the view sideways instead of narrowing it vertically, up to the configured
+// horizontal fov limit. With Hor+ switched off this reproduces the previous fixed horizontal fov.
+//-------------------------------------------------------------------------------------------------
+void W3DView::updateViewPlane(Real baseHorizontalFOV)
+{
+	const Int width = getWidth();
+	const Int height = getHeight();
+
+	if (width <= 0 || height <= 0)
+		return;
+
+	// The widening follows the aspect ratio of the whole display, not of this view. The tactical view
+	// is shorter than the display while the control bar is shown, and that must only crop the picture
+	// vertically, as it always did, instead of changing the horizontal fov.
+	const Real displayAspectRatio = (Real)TheDisplay->getWidth() / (Real)TheDisplay->getHeight();
+	const Int framingHeight = getFramingHeight();
+	const Real viewAspectRatio = (Real)width / (Real)framingHeight;
+	const Real halfWidth = tan(baseHorizontalFOV * 0.5f) * calcHorPlusLayout(displayAspectRatio, baseHorizontalFOV).widening;
+	const Real halfHeight = halfWidth / viewAspectRatio;
+
+	// GeneralsX @feature ClaudeCode 22/11/2026 The camera frames the scene for the framing height. Rows of the view below
+	// that keep the same scale and extend the view plane downwards (an off-centre projection), so the
+	// world shows beside and behind the centred control bar without shifting what the camera centres on.
+	// Picking, culling and the radar view box read this view plane, so they cover the extra rows as well.
+	const Real bottom = halfHeight - 2.0f * halfHeight * ((Real)height / (Real)framingHeight);
+
+	m_3DCamera->Set_View_Plane(Vector2(-halfWidth, bottom), Vector2(halfWidth, halfHeight));
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -377,8 +477,6 @@ void W3DView::buildCameraPosition( Vector3& sourcePos, Vector3& targetPos )
 void W3DView::buildCameraTransform( Matrix3D *transform, const Vector3 &sourcePos, const Vector3 &targetPos )
 {
 	//m_3DCamera->Set_View_Plane(DEG_TO_RADF(50.0f));
-	//DEBUG_LOG(("zoom %f, SourceZ %f, posZ %f, groundLevel %f CamOffZ %f",
-	//			zoom, sourcePos.Z, pos.z, groundLevel, getCameraOffsetZ()));
 
 	// build new camera transform
 	transform->Make_Identity();
@@ -582,7 +680,10 @@ Real W3DView::calcCameraAreaOffset(Real maxEdgeZ)
 
 	// Pick at the center
 	screen.x = 0.5f * getWidth() + m_originX;
-	screen.y = 0.5f * getHeight() + m_originY;
+	// GeneralsX @feature ClaudeCode 22/11/2026 Measure within the framed part of the view so rows drawn below it
+	// (behind the control bar) do not tighten the constraints.
+	const Int framingHeight = getFramingHeight();
+	screen.y = 0.5f * framingHeight + m_originY;
 	getPickRay(&screen, &rayStart, &rayEnd);
 
 	// Looking at the horizon would yield infinite numbers.
@@ -593,7 +694,7 @@ Real W3DView::calcCameraAreaOffset(Real maxEdgeZ)
 	center.y = Vector3::Find_Y_At_Z(maxEdgeZ, rayStart, rayEnd);
 
 	const Bool isLookingDown = rayStart.Z >= rayEnd.Z;
-	const Real height = isLookingDown ? getHeight() : 0.0f;
+	const Real height = isLookingDown ? framingHeight : 0.0f;
 	screen.y = height + m_originY;
 	getPickRay(&screen, &rayStart, &rayEnd);
 
@@ -629,7 +730,7 @@ void W3DView::clipCameraIntoAreaConstraints()
 Bool W3DView::isWithinCameraAreaConstraints() const
 {
 	const Coord3D &pos = getPosition();
-	return m_cameraAreaConstraints.isInRegion(pos.x, pos.y);
+	return m_cameraAreaConstraints.containsWithin(pos.x, pos.y);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -647,6 +748,13 @@ Bool W3DView::isWithinCameraHeightConstraints() const
 //-------------------------------------------------------------------------------------------------
 void W3DView::getPickRay(const ICoord2D *screen, Vector3 *rayStart, Vector3 *rayEnd)
 {
+	// GeneralsX @bugfix costin-alupului 20/07/2026 The projection/unproject math below relies on the
+	// engine's FP mode (the same mode GameLogic::update() re-asserts each frame for its fast
+	// float->int conversions). On macOS/ARM this can otherwise be left in an unexpected state, making
+	// picks resolve to the wrong world position. Re-assert it here so every caller of getPickRay()
+	// (screenToTerrain, pickDrawable, screenToWorldAtZ, ...) gets a correct ray. (#215, #222)
+	setFPMode();
+
 	Real logX;
 	Real logY;
 	Real screenX = screen->x - m_originX;
@@ -659,7 +767,7 @@ void W3DView::getPickRay(const ICoord2D *screen, Vector3 *rayStart, Vector3 *ray
 	m_3DCamera->Un_Project(*rayEnd,Vector2(logX,logY));	//get world space point
 	*rayEnd -= *rayStart;	//vector camera to world space point
 	rayEnd->Normalize();	//make unit vector
-	*rayEnd *= m_3DCamera->Get_Depth();	//adjust length to reach far clip plane
+	*rayEnd *= m_3DCamera->Get_Depth() * 2;	//adjust length to reach far clip plane and beyond
 	*rayEnd += *rayStart;	//get point on far clip plane along ray from camera.
 }
 
@@ -779,28 +887,18 @@ void W3DView::updateCameraClipPlanes(const Matrix3D &transform)
 		const Vector3 camPos = transform.Get_Translation();
 		const Vector3 camDir = -transform.Get_Z_Vector();
 
-		const Int loX = heightMap->getDrawOrgX() - heightMap->getBorderSize();
-		const Int loY = heightMap->getDrawOrgY() - heightMap->getBorderSize();
-		const Int hiX = loX + heightMap->getDrawWidth();
-		const Int hiY = loY + heightMap->getDrawHeight();
-
-		// Convert to world coordinates
-		const Real minX = loX * MAP_XY_FACTOR;
-		const Real minY = loY * MAP_XY_FACTOR;
-		const Real maxX = hiX * MAP_XY_FACTOR;
-		const Real maxY = hiY * MAP_XY_FACTOR;
-
+		const Region2D region = heightMap->getDrawRegion2D();
 		const Real minZ = TheTerrainRenderObject->getMinHeight();
 
 		// Bounding sphere
 		Vector3 center;
-		center.X = (minX + maxX) * 0.5f;
-		center.Y = (minY + maxY) * 0.5f;
+		center.X = (region.lo.x + region.hi.x) * 0.5f;
+		center.Y = (region.lo.y + region.hi.y) * 0.5f;
 		center.Z = minZ - 1.0f; // -1 to avoid Z clipping when looking straight down
 
 		// Half extents
-		const Real dx = (maxX - minX) * 0.5f;
-		const Real dy = (maxY - minY) * 0.5f;
+		const Real dx = (region.hi.x - region.lo.x) * 0.5f;
+		const Real dy = (region.hi.y - region.lo.y) * 0.5f;
 
 		// Project center
 		const Vector3 v = center - camPos;
@@ -810,7 +908,7 @@ void W3DView::updateCameraClipPlanes(const Matrix3D &transform)
 		const Real projectedRadiusToEdge = fabs(dx * camDir.X) + fabs(dy * camDir.Y);
 
 		// Final far plane
-		farZ = projectedDistanceToCenter + projectedRadiusToEdge;
+		farZ = std::max(projectedDistanceToCenter + projectedRadiusToEdge, 0.0f);
 	}
 	else
 	{
@@ -841,10 +939,10 @@ void W3DView::updateCameraClipPlanes(const Matrix3D &transform)
 //-------------------------------------------------------------------------------------------------
 void W3DView::setCameraTransform(const Matrix3D &transform)
 {
-	m_cameraHasMovedSinceRequest = true;
+	m_lastScreenToTerrainValid = false;
 
 #if defined(RTS_DEBUG)
-	m_3DCamera->Set_View_Plane( m_FOV, -1 );
+	updateViewPlane( m_FOV );
 #endif
 
 	m_3DCamera->Set_Transform(transform);
@@ -953,6 +1051,9 @@ void W3DView::reset()
 	setGuardBandBias( &gb );
 
 	m_recalcCameraConstraintsAfterScrolling = false;
+
+	m_footprintTerrainDrawSize.x = 0;
+	m_footprintTerrainDrawSize.y = 0;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1480,6 +1581,7 @@ void W3DView::update()
 						Matrix3D camXForm;
 						camXForm.Look_At(camtran,objPos,0);
 						m_3DCamera->Set_Transform(camXForm);
+						m_lastScreenToTerrainValid = false;
 					}
 				}
 			}
@@ -1538,7 +1640,7 @@ void W3DView::update()
 					if (cameraLockObj->isUsingAirborneLocomotor() && cameraLockObj->isAboveTerrainOrWater())
 					{
 						Matrix3D camXForm;
-						Real idealZRot = cameraLockObj->getOrientation() - M_PI_2;
+						Real idealZRot = cameraLockObj->getOrientation() - WWMATH_HALF_PI;
 
 						if (m_snapImmediate)
 						{
@@ -1696,8 +1798,7 @@ void W3DView::update()
 	}
 
 #ifdef DO_SEISMIC_SIMULATIONS
-  // Give the terrain a chance to refresh animating (Seismic) regions, if any.
-  TheTerrainVisual->updateSeismicSimulations();
+	TheTerrainVisual->updateSeismicSimulations();
 #endif
 
 	Region3D axisAlignedRegion;
@@ -1710,9 +1811,14 @@ void W3DView::update()
 
 //-------------------------------------------------------------------------------------------------
 /** Find region which contains all drawables in 3D space. */
+// TheSuperHackers @fix Now gives back a proper region on low camera pitch by falling back to
+// the drawn terrain area or map extents.
 //-------------------------------------------------------------------------------------------------
 void W3DView::getAxisAlignedViewRegion(Region3D &axisAlignedRegion)
 {
+	Region3D mapExtent;
+	TheTerrainLogic->getExtent( &mapExtent );
+
 	//
 	// get the 4 points in 3D space of the 4 corners of the view, we will use a z = 0.0f
 	// value so that we can get everything ... even stuff below the terrain
@@ -1721,18 +1827,29 @@ void W3DView::getAxisAlignedViewRegion(Region3D &axisAlignedRegion)
 	//   \     /
 	//    4---3
 	Coord3D box[ 4 ];
-	getScreenCornerWorldPointsAtZ( &box[ 0 ], &box[ 1 ], &box[ 2 ], &box[ 3 ], 0.0f );
-
-	//
-	// take those 4 corners projected into the world and create an axis aligned bounding
-	// box, we will use this box to iterate the drawables in 3D space
-	//
-	axisAlignedRegion.setFromPointsNoZ(box, ARRAY_SIZE(box));
+	if( getScreenCornerWorldPointsAtZ( &box[ 0 ], &box[ 1 ], &box[ 2 ], &box[ 3 ], 0.0f ) == PlaneClass::INSIDE_SEGMENT )
+	{
+		//
+		// take those 4 corners projected into the world and create an axis aligned bounding
+		// box, we will use this box to iterate the drawables in 3D space
+		//
+		axisAlignedRegion.setXYFromPoints(box, ARRAY_SIZE(box));
+	}
+	else
+	{
+		if( WorldHeightMap *heightMap = TheTerrainRenderObject->getMap() )
+		{
+			const Region2D region = heightMap->getDrawRegion2D();
+			axisAlignedRegion.setXY(region);
+		}
+		else
+		{
+			axisAlignedRegion = mapExtent;
+		}
+	}
 
 	// low and high regions will be based of the extent of the map
-	Region3D mapExtent;
-	Real safeValue = 999999;
-	TheTerrainLogic->getExtent( &mapExtent );
+	constexpr const Real safeValue = 999999;
 	axisAlignedRegion.lo.z = mapExtent.lo.z - safeValue;
 	axisAlignedRegion.hi.z = mapExtent.hi.z + safeValue;
 
@@ -1775,7 +1892,8 @@ Bool W3DView::setViewFilterMode(FilterModes filterMode)
 	if (m_viewFilterMode != FM_NULL_MODE &&
 		m_viewFilter != FT_NULL_FILTER) {
 		if (!W3DShaderManager::filterSetup(m_viewFilter, m_viewFilterMode))
-		{	//setup failed so restore previous mode.
+		{
+			//setup failed so restore previous mode.
 			m_viewFilterMode = oldMode;
 			return FALSE;
 		}
@@ -1793,7 +1911,8 @@ Bool W3DView::setViewFilter(FilterTypes filter)
 	if (m_viewFilterMode != FM_NULL_MODE &&
 		m_viewFilter != FT_NULL_FILTER) {
 		if (!W3DShaderManager::filterSetup(m_viewFilter, m_viewFilterMode))
-		{	//setup failed so restore previous mode.
+		{
+			//setup failed so restore previous mode.
 			m_viewFilter = oldFilter;
 			return FALSE;
 		};
@@ -1912,7 +2031,7 @@ void W3DView::draw()
 		//The pass that rendered into a texture may have left the z-buffer in a weird state
 		//so clear it before rendering normal scene.
 		///@todo: Don't clear z-buffer unless shader uses z-bias or anything else that would cause <= z to fail on normal render.
-		DX8Wrapper::Clear(false, true, Vector3(0.0f,0.0f,0.0f), TheWaterTransparency->m_minWaterOpacity);	// Clear z but not color
+		Renderer::Clear(false, true, Vector3(0.0f,0.0f,0.0f), TheWaterTransparency->m_minWaterOpacity);	// Clear z but not color
 		W3DDisplay::m_3DScene->setCustomPassMode(SCENE_PASS_DEFAULT);
 		W3DDisplay::m_3DScene->doRender( m_3DCamera );
 		Coord2D deltaScroll;
@@ -2236,6 +2355,17 @@ void W3DView::setCameraHeightAboveGroundLimitsToDefault(Real heightScale)
 	Real currentAspectRatio = (Real)TheTacticalView->getWidth() / (Real)TheTacticalView->getHeight();
 	Real aspectRatioScale = 0.0f;
 
+	// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ widescreen: beyond the reference aspect ratio the
+	// extra width is covered by the wider horizontal fov (see updateViewPlane), so the camera height
+	// stays at the value of the reference aspect ratio. Only the width that the horizontal fov limit
+	// leaves uncovered still raises the camera.
+	const Real displayAspectRatio = (Real)TheDisplay->getWidth() / (Real)TheDisplay->getHeight();
+	const HorPlusLayout horPlus = calcHorPlusLayout(displayAspectRatio, DEG_TO_RADF(DefaultHorizontalFOVDegrees));
+	if (horPlus.widening > 1.0f || horPlus.heightScale > 1.0f)
+	{
+		currentAspectRatio = horPlus.heightAspectRatio;
+	}
+
 	if (currentAspectRatio > baseAspectRatio)
 	{
 		aspectRatioScale = fabs(( 1 + ( currentAspectRatio - baseAspectRatio) ));
@@ -2244,6 +2374,8 @@ void W3DView::setCameraHeightAboveGroundLimitsToDefault(Real heightScale)
 	{
 		aspectRatioScale = fabs(( 1 - ( baseAspectRatio - currentAspectRatio) ));
 	}
+
+	aspectRatioScale *= horPlus.heightScale;
 
 	m_maxHeightAboveGround = TheGlobalData->m_maxCameraHeight * aspectRatioScale * heightScale;
 	m_minHeightAboveGround = TheGlobalData->m_minCameraHeight * aspectRatioScale;
@@ -2257,7 +2389,7 @@ void W3DView::setCameraHeightAboveGroundLimitsToDefault(Real heightScale)
 void W3DView::setDefaultView(Real pitch, Real angle, Real maxHeight)
 {
 	// MDC - we no longer want to rotate maps (design made all of them right to begin with)
-	//	m_defaultAngle = angle * M_PI/180.0f;
+	//	m_defaultAngle = angle * WWMATH_PI/180.0f;
 	setDefaultPitch(pitch);
 	m_maxHeightAboveGround = TheGlobalData->m_maxCameraHeight*maxHeight;
 	if (m_minHeightAboveGround > m_maxHeightAboveGround)
@@ -2507,6 +2639,7 @@ Int W3DView::iterateDrawablesInRegion( IRegion2D *screenRegion,
 //-------------------------------------------------------------------------------------------------
 Drawable *W3DView::pickDrawable( const ICoord2D *screen, Bool forceAttack, PickType pickType )
 {
+	ScopedFPUGuard fpuGuard;
 	RenderObjClass *renderObj = nullptr;
 	Drawable *draw = nullptr;
 	DrawableInfo *drawInfo = nullptr;
@@ -2555,6 +2688,63 @@ Drawable *W3DView::pickDrawable( const ICoord2D *screen, Bool forceAttack, PickT
 	if (drawInfo)
 		draw=drawInfo->m_drawable;
 
+	// GeneralsX @feature Mr. Meeseeks 16/10/2026 Allow picking airborne units by clicking their tactical ground indicator ring.
+	if( draw == nullptr && TheGlobalData && TheGlobalData->isAirUnitGroundIndicator() && TheGameClient != nullptr )
+	{
+		Coord3D terrainPos;
+		if( screenToTerrain( screen, &terrainPos ) )
+		{
+			Real bestDistSq = 1e9f;
+			Drawable *bestAirDraw = nullptr;
+
+			for( Drawable *cand = TheGameClient->getDrawableList(); cand; cand = cand->getNextDrawable() )
+			{
+				// GeneralsX @bugfix Mr. Meeseeks 08/11/2026 Allow tactical picking for friendly stealthed aircraft; only suppress if fully invisible or hidden
+				if( !cand->isKindOf( KINDOF_AIRCRAFT ) || cand->getStealthLook() == STEALTHLOOK_INVISIBLE || cand->isDrawableEffectivelyHidden() || cand->getFullyObscuredByShroud() )
+					continue;
+
+				const Object *candObj = cand->getObject();
+				if( !candObj || candObj->isEffectivelyDead() )
+					continue;
+
+				// Tactical ground indicator picking only applies to local player's airborne units
+				if( ThePlayerList && ThePlayerList->getLocalPlayer() && candObj->getControllingPlayer() != ThePlayerList->getLocalPlayer() )
+					continue;
+
+				if( !forceAttack && !candObj->isSelectable() )
+					continue;
+
+				// GeneralsX @tweak felipebraz 16/10/2026 Filter out unselectable and GUI-ignored aircraft
+				if( !cand->isKindOf(KINDOF_SELECTABLE) || cand->isKindOf(KINDOF_IGNORED_IN_GUI) )
+					continue;
+
+				Real heightAboveGround = cand->getHeightAboveTerrain();
+				if( !WWMath::Is_Valid_Float(heightAboveGround) || heightAboveGround < W3DModelDraw::MIN_AIR_GROUND_INDICATOR_HEIGHT )
+					continue;
+
+				Real size = W3DModelDraw::calculateAirGroundIndicatorSize(cand->getTemplate());
+
+				Real radius = size * 0.5f;
+				const Coord3D *pos = cand->getPosition();
+				if( pos == nullptr )
+					continue;
+
+				Real dx = terrainPos.x - pos->x;
+				Real dy = terrainPos.y - pos->y;
+				Real distSq = dx * dx + dy * dy;
+
+				if( WWMath::Is_Valid_Float(distSq) && distSq <= radius * radius && distSq < bestDistSq )
+				{
+					bestDistSq = distSq;
+					bestAirDraw = cand;
+				}
+			}
+
+			if( bestAirDraw != nullptr )
+				draw = bestAirDraw;
+		}
+	}
+
 	return draw;
 
 }
@@ -2562,36 +2752,26 @@ Drawable *W3DView::pickDrawable( const ICoord2D *screen, Bool forceAttack, PickT
 //-------------------------------------------------------------------------------------------------
 /** convert a pixel (x,y) to a location in the world on the terrain.
 	Screen coordinates assumed in absolute values relative to full display resolution.  */
+// TheSuperHackers @fix Now returns whether a terrain intersection exists to let callers handle the
+// failure condition.
 //-------------------------------------------------------------------------------------------------
-void W3DView::screenToTerrain( const ICoord2D *screen, Coord3D *world )
+Bool W3DView::screenToTerrain( const ICoord2D *screen, Coord3D *world )
 {
-	// sanity
 	if( screen == nullptr || world == nullptr || TheTerrainRenderObject == nullptr )
-		return;
+		return false;
 
-	if (m_cameraHasMovedSinceRequest) {
-		m_locationRequests.clear();
-		m_cameraHasMovedSinceRequest = false;
-	}
-
-	if (m_locationRequests.size() > MAX_REQUEST_CACHE_SIZE) {
-		m_locationRequests.erase(m_locationRequests.begin(), m_locationRequests.begin() + 10);
-	}
-
-
-	// We insert them at the end for speed (no copies needed), but using the princ of locality, we should
-	// start searching where we most recently inserted
-	for (int i = m_locationRequests.size() - 1; i >= 0; --i) {
-		if (m_locationRequests[i].first.x == screen->x && m_locationRequests[i].first.y == screen->y) {
-			(*world) = m_locationRequests[i].second;
-			return;
-		}
+	if (m_lastScreenToTerrainValid &&
+		m_lastScreenToTerrainScreen.x == screen->x && m_lastScreenToTerrainScreen.y == screen->y)
+	{
+		*world = m_lastScreenToTerrainWorld;
+		return true;
 	}
 
 	Vector3 rayStart,rayEnd;
 	LineSegClass lineseg;
 	CastResultStruct result;
 	Vector3 intersection(0,0,0);
+	Bool hasIntersection = false;
 
 	getPickRay(screen,&rayStart,&rayEnd);
 
@@ -2599,11 +2779,11 @@ void W3DView::screenToTerrain( const ICoord2D *screen, Coord3D *world )
 
 	RayCollisionTestClass raytest(lineseg,&result);
 
+	// Get the point of intersection according to W3D
 	if( TheTerrainRenderObject->Cast_Ray(raytest) )
 	{
-		// get the point of intersection according to W3D
 		intersection = result.ContactPoint;
-
+		hasIntersection = true;
 	}
 
 	// Pick bridges.
@@ -2611,17 +2791,21 @@ void W3DView::screenToTerrain( const ICoord2D *screen, Coord3D *world )
 	Drawable *bridge = TheTerrainLogic->pickBridge(rayStart, rayEnd, &bridgePt);
 	if (bridge && bridgePt.Z > intersection.Z) {
 		intersection = bridgePt;
+		hasIntersection = true;
 	}
+
+	if (!hasIntersection)
+		return false;
 
 	world->x = intersection.X;
 	world->y = intersection.Y;
 	world->z = intersection.Z;
 
-	PosRequest req;
-	req.first = (*screen);
-	req.second = (*world);
-	m_locationRequests.push_back(req);	// Insert this request at the end, requires no extra copies
+	m_lastScreenToTerrainScreen = *screen;
+	m_lastScreenToTerrainWorld = *world;
+	m_lastScreenToTerrainValid = true;
 
+	return true;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2647,7 +2831,7 @@ void W3DView::lookAt( const Coord3D *o )
 		m_3DCamera->Un_Project(rayEnd,Vector2(0.0f,0.0f));	//get world space point
 		rayEnd -= rayStart;	//vector camera to world space point
 		rayEnd.Normalize();	//make unit vector
-		rayEnd *= m_3DCamera->Get_Depth();	//adjust length to reach far clip plane
+		rayEnd *= m_3DCamera->Get_Depth() * 2;	//adjust length to reach far clip plane and beyond
 		rayStart.Set(pos.x, pos.y, pos.z);
 		rayEnd += rayStart;	//get point on far clip plane along ray from camera.
 		lineseg.Set(rayStart,rayEnd);
@@ -2663,8 +2847,7 @@ void W3DView::lookAt( const Coord3D *o )
 		}
 	}
 
-	Coord2D pos2D = { pos.x, pos.y };
-	setPosition2D(pos2D);
+	setPosition2D(pos.asCoord2D());
 
 	resetPivotToGround();
 
@@ -3491,10 +3674,10 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
 		setPosition(pos);
 		// Note - assuming that the scripter knows what he is doing, we adjust the constraints so that
 		// the scripted action can occur.
-		m_cameraAreaConstraints.lo.x = minf(m_cameraAreaConstraints.lo.x, pos.x);
-		m_cameraAreaConstraints.hi.x = maxf(m_cameraAreaConstraints.hi.x, pos.x);
-		m_cameraAreaConstraints.lo.y = minf(m_cameraAreaConstraints.lo.y, pos.y);
-		m_cameraAreaConstraints.hi.y = maxf(m_cameraAreaConstraints.hi.y, pos.y);
+		m_cameraAreaConstraints.lo.x = min(m_cameraAreaConstraints.lo.x, pos.x);
+		m_cameraAreaConstraints.hi.x = max(m_cameraAreaConstraints.hi.x, pos.x);
+		m_cameraAreaConstraints.lo.y = min(m_cameraAreaConstraints.lo.y, pos.y);
+		m_cameraAreaConstraints.hi.y = max(m_cameraAreaConstraints.hi.y, pos.y);
 		return;
 	}
 
@@ -3598,10 +3781,10 @@ void W3DView::moveAlongWaypointPath(Real milliseconds)
 	setPosition(result);
 	// Note - assuming that the scripter knows what he is doing, we adjust the constraints so that
 	// the scripted action can occur.
-	m_cameraAreaConstraints.lo.x = minf(m_cameraAreaConstraints.lo.x, result.x);
-	m_cameraAreaConstraints.hi.x = maxf(m_cameraAreaConstraints.hi.x, result.x);
-	m_cameraAreaConstraints.lo.y = minf(m_cameraAreaConstraints.lo.y, result.y);
-	m_cameraAreaConstraints.hi.y = maxf(m_cameraAreaConstraints.hi.y, result.y);
+	m_cameraAreaConstraints.lo.x = min(m_cameraAreaConstraints.lo.x, result.x);
+	m_cameraAreaConstraints.hi.x = max(m_cameraAreaConstraints.hi.x, result.x);
+	m_cameraAreaConstraints.lo.y = min(m_cameraAreaConstraints.lo.y, result.y);
+	m_cameraAreaConstraints.hi.y = max(m_cameraAreaConstraints.hi.y, result.y);
 
 }
 
@@ -3673,16 +3856,31 @@ void W3DView::shake( const Coord3D *epicenter, CameraShakeType shakeType )
 
 //-------------------------------------------------------------------------------------------------
 /** Transform the screen pixel coord passed in, to a world coordinate at the specified z value */
+// TheSuperHackers @fix Now returns whether a Z plane intersection exists to let callers handle the
+// failure condition.
 //-------------------------------------------------------------------------------------------------
-void W3DView::screenToWorldAtZ( const ICoord2D *s, Coord3D *w, Real z )
+PlaneClass::IntersectionResType W3DView::screenToWorldAtZ( const ICoord2D *screen, Coord3D *world, Real z )
 {
 	Vector3 rayStart, rayEnd;
 
-	getPickRay( s, &rayStart, &rayEnd );
-	w->x = Vector3::Find_X_At_Z( z, rayStart, rayEnd );
-	w->y = Vector3::Find_Y_At_Z( z, rayStart, rayEnd );
-	w->z = z;
+	getPickRay( screen, &rayStart, &rayEnd );
 
+	PlaneClass plane;
+	plane.N = Vector3(0, 0, 1);
+	plane.D = z;
+	float t;
+	PlaneClass::IntersectionResType intersectionType = plane.Compute_Intersection(rayStart, rayEnd, &t);
+
+	if (intersectionType != PlaneClass::NO_INTERSECTION)
+	{
+		Vector3 intersectPos;
+		intersectPos = rayStart + (rayEnd-rayStart) * t;
+		world->x = intersectPos.X;
+		world->y = intersectPos.Y;
+		world->z = z;
+	}
+
+	return intersectionType;
 }
 
 void W3DView::cameraEnableSlaveMode(const AsciiString & objectName, const AsciiString & boneName)
@@ -3727,37 +3925,154 @@ void W3DView::Add_Camera_Shake (const Coord3D & position,float radius,float dura
 	CameraShakerSystem.Add_Camera_Shake(vpos,radius,duration,power);
 }
 
+bool W3DView::getDesiredTerrainDrawSize(ICoord2D &dimensions) const
+{
+	if (TheGlobalData && TheGlobalData->m_drawEntireTerrain)
+	{
+		DEBUG_ASSERTCRASH(TheTerrainRenderObject != nullptr, ("TheTerrainRenderObject is null"));
+
+		if (const WorldHeightMap *heightMap = TheTerrainRenderObject->getMap())
+		{
+			dimensions.x = heightMap->getXExtent();
+			dimensions.y = heightMap->getYExtent();
+			return true;
+		}
+
+		return false;
+	}
+
+	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
+
+	if (cameraPitch > ViewDefaultLowPitchRadians || !m_isUserControlled)
+	{
+		// TheSuperHackers @info The scripted camera always uses the regular draw sizes
+		// and uses terrain oversize if it needs to enlarge.
+		dimensions.x = WorldHeightMap::NORMAL_DRAW_WIDTH;
+		dimensions.y = WorldHeightMap::NORMAL_DRAW_HEIGHT;
+		return true;
+	}
+
+	// TheSuperHackers @tweak xezon 31/12/2025 Increases visible terrain area when lowering the camera pitch.
+	// Note: The default camera pitch in Generals was 37.5, which we prefer to keep the normal draw size for.
+	dimensions.x = WorldHeightMap::LOW_ANGLE_DRAW_WIDTH;
+	dimensions.y = WorldHeightMap::LOW_ANGLE_DRAW_HEIGHT;
+	return true;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix ClaudeCode 22/11/2026 The normal terrain draw size is a fixed square that was
+// tuned for a 4:3 view at the default camera height. Wide views and high cameras see more ground
+// than that, which left untextured black areas with floating objects near the screen edges.
+// This projects the four view corners onto the lowest terrain height and returns the draw size,
+// in whole vertex buffer tiles, that covers the resulting footprint. Returns false when the view
+// reaches the horizon or the camera pitch is low, where the regular draw sizes apply.
+//-------------------------------------------------------------------------------------------------
+bool W3DView::getViewFootprintTerrainDrawSize(ICoord2D &dimensions) const
+{
+	if (TheTerrainRenderObject == nullptr)
+		return false;
+
+	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
+	if (cameraPitch <= ViewDefaultLowPitchRadians)
+		return false;
+
+	// Rays flatter than this are treated as reaching the horizon.
+	constexpr const Real minDownwardDirZ = -0.05f;
+	// Extra cells around the footprint for terrain that rises into view from just outside of it.
+	constexpr const Int marginCells = VERTEX_BUFFER_TILE_LENGTH;
+
+	static const Vector2 viewCorners[] =
+	{
+		Vector2(-1.0f, -1.0f), Vector2(1.0f, -1.0f), Vector2(1.0f, 1.0f), Vector2(-1.0f, 1.0f)
+	};
+
+	const Vector3 cameraPos = m_3DCamera->Get_Position();
+	const Real groundZ = TheTerrainRenderObject->getMinHeight();
+
+	Real minX = 0.0f;
+	Real maxX = 0.0f;
+	Real minY = 0.0f;
+	Real maxY = 0.0f;
+
+	for (Int i = 0; i < ARRAY_SIZE(viewCorners); ++i)
+	{
+		Vector3 direction;
+		m_3DCamera->Un_Project(direction, viewCorners[i]);
+		direction -= cameraPos;
+		direction.Normalize();
+
+		if (direction.Z > minDownwardDirZ)
+			return false;
+
+		const Real distance = (groundZ - cameraPos.Z) / direction.Z;
+		if (distance <= 0.0f)
+			return false;
+
+		const Real x = cameraPos.X + direction.X * distance;
+		const Real y = cameraPos.Y + direction.Y * distance;
+
+		if (i == 0)
+		{
+			minX = maxX = x;
+			minY = maxY = y;
+		}
+		else
+		{
+			minX = std::min(minX, x);
+			maxX = std::max(maxX, x);
+			minY = std::min(minY, y);
+			maxY = std::max(maxY, y);
+		}
+	}
+
+	const Int cellsX = (Int)ceil((maxX - minX) / MAP_XY_FACTOR) + 2 * marginCells;
+	const Int cellsY = (Int)ceil((maxY - minY) / MAP_XY_FACTOR) + 2 * marginCells;
+
+	// Draw sizes are one vertex larger than a whole number of vertex buffer tiles.
+	dimensions.x = 1 + ((cellsX + VERTEX_BUFFER_TILE_LENGTH - 1) / VERTEX_BUFFER_TILE_LENGTH) * VERTEX_BUFFER_TILE_LENGTH;
+	dimensions.y = 1 + ((cellsY + VERTEX_BUFFER_TILE_LENGTH - 1) / VERTEX_BUFFER_TILE_LENGTH) * VERTEX_BUFFER_TILE_LENGTH;
+	return true;
+}
+
 void W3DView::updateTerrain()
 {
 	DEBUG_ASSERTCRASH(TheTerrainRenderObject != nullptr, ("TheTerrainRenderObject is null"));
 
+	ICoord2D drawSize;
+
+	if (getDesiredTerrainDrawSize(drawSize))
+	{
+		// GeneralsX @bugfix fbraz3 15/10/2026 Guard terrainScale against non-finite values before casting
+		Real terrainScale = TheGlobalData->m_terrainDrawDistanceScale;
+		if (!isFinite(terrainScale) || terrainScale < 1.0f)
+			terrainScale = 1.0f;
+		else if (terrainScale > 2.0f)
+			terrainScale = 2.0f;
+
+		if (terrainScale != 1.0f)
+		{
+			drawSize.x = static_cast<Int>(drawSize.x * terrainScale);
+			drawSize.y = static_cast<Int>(drawSize.y * terrainScale);
+		}
+
+		// GeneralsX @bugfix ClaudeCode 22/11/2026 Enlarge the draw size to cover the visible ground on
+		// wide views and high cameras. setTerrainDrawSize() bounds it by the map extent.
+		ICoord2D footprintSize;
+		if (getViewFootprintTerrainDrawSize(footprintSize))
+		{
+			m_footprintTerrainDrawSize.x = std::max(m_footprintTerrainDrawSize.x, footprintSize.x);
+			m_footprintTerrainDrawSize.y = std::max(m_footprintTerrainDrawSize.y, footprintSize.y);
+		}
+		drawSize.x = std::max(drawSize.x, m_footprintTerrainDrawSize.x);
+		drawSize.y = std::max(drawSize.y, m_footprintTerrainDrawSize.y);
+
+		TheTerrainRenderObject->setTerrainDrawSize(drawSize.x, drawSize.y);
+	}
+
 	RefRenderObjListIterator *it = W3DDisplay::m_3DScene->createLightsIterator();
+
 	const Vector3 cameraPivot(m_pos.x, m_pos.y, m_pos.z);
-	const Real cameraPitch = asin(fabs(m_3DCamera->Get_Forward_Dir().Z));
-	Int drawWidth;
-	Int drawHeight;
 
-	if (cameraPitch > ViewDefaultLowPitchRadians)
-	{
-		drawWidth = WorldHeightMap::NORMAL_DRAW_WIDTH;
-		drawHeight = WorldHeightMap::NORMAL_DRAW_HEIGHT;
-	}
-	else
-	{
-		// TheSuperHackers @tweak xezon 31/12/2025 Increases visible terrain area when lowering the camera pitch.
-		// Note: The default camera pitch in Generals was 37.5, which we prefer to keep the normal draw size for.
-		drawWidth = WorldHeightMap::LOW_ANGLE_DRAW_WIDTH;
-		drawHeight = WorldHeightMap::LOW_ANGLE_DRAW_HEIGHT;
-	}
-
-	const Real terrainScale = TheGlobalData->m_terrainDrawDistanceScale;
-	if (terrainScale != 1.0f)
-	{
-		drawWidth = static_cast<Int>(drawWidth * terrainScale);
-		drawHeight = static_cast<Int>(drawHeight * terrainScale);
-	}
-
-	TheTerrainRenderObject->setTerrainDrawSize(drawWidth, drawHeight);
 	TheTerrainRenderObject->updateCenter(m_3DCamera, &cameraPivot, it);
 
 	if (it)

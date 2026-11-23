@@ -1,15 +1,7 @@
 # GeneralsX: Instructions for AI Coding Agents
 
 ## What I Am
-GeneralsX is a cross-platform port of Command & Conquer: Generals Zero Hour for **Linux and macOS**, porting legacy Windows DirectX 8 + Miles Sound code to a modern stack (SDL3 + DXVK + OpenAL + 64-bit). This is a **massive C++ game engine** (~500k LOC) preserving retail gameplay while modernizing the platform layer.
-
-## Must-Load Context
-Before starting work, read:
-- `.github/copilot-instructions.md` – quick reference
-- `.github/instructions/generalsx.instructions.md` – full architecture
-- `.github/instructions/git-commit.instructions.md` – commit standards
-- `.github/instructions/docs.instructions.md` – documentation workflow
-- `docs/DEV_BLOG/YYYY-MM-DIARY.md` – current development notes
+GeneralsX is a cross-platform port of Command & Conquer: Generals Zero Hour for **Linux and macOS**, porting legacy Windows DirectX 8 + Miles Sound code to a modern stack (SDL3 + DXVK + MiniAudio + 64-bit). This is a **massive C++ game engine** (~500k LOC) preserving retail gameplay while modernizing the platform layer.
 
 ## Key Entry Points
 - `GeneralsMD/Code/Main/WinMain.cpp`
@@ -17,69 +9,132 @@ Before starting work, read:
 - `Core/GameEngineDevice/Source/`
 
 ## Platform Focus
-- **Active**: Linux (`linux64-deploy`), macOS (`macos-vulkan`)
+- **Active**: Linux (`linux64-deploy`), macOS (`macos-vulkan`), WebAssembly + WebGPU (`webgpu`, `GeneralsXZH` / `z_generals`)
 - **Future/Exploratory**: Windows (MinGW path, issue #29)
 - **Legacy**: VC6 + DirectX 8 + Miles (reference only)
 
 ## Architecture
 | Layer   | Technology          | Replaces                     |
 |---------|---------------------|------------------------------|
-| Graphics| DXVK                | DirectX 8 (d3d8.dll)         |
-| Windowing| SDL3              | Win32 API                    |
-| Audio   | OpenAL              | Miles Sound System           |
+| Graphics| DXVK (WebGPU on WASM) | DirectX 8 (d3d8.dll)       |
+| Windowing| SDL3               | Win32 API                    |
+| Audio   | MiniAudio           | Miles Sound System           |
 | Video   | FFmpeg              | Bink Video (intro/videos)    |
-| Platform| SDL3 + libc         | Win32 POSIX calls            |
+| Platform| SDL3 + libc / Emscripten | Win32 POSIX calls       |
 
 **CRITICAL**: Platform code must be isolated to `Core/GameEngineDevice/` and `Core/Libraries/Source/Platform/`. No native Win32/Cocoa/X11 calls in game logic.
+**Web/WASM Exception**: The Emscripten WebAssembly target (`webgpu` preset) is an explicit exception to "DXVK everywhere" and "everything in `Core/`": it translates DirectX 8 via `Core/GameEngineDevice/Source/WebGPUDevice/` (using browser WebGPU instead of DXVK/Vulkan) and hosts the browser Vite/TypeScript frontend + static server config under `web/`.
 
 ## Golden Rules
-1. **Single codebase** – Linux and macOS build from same source
+1. **Single codebase** – Linux, macOS, and WebAssembly/WebGPU build from same source
 2. **SDL3 everywhere** – No native platform calls in game code
-3. **DXVK everywhere** – DX8 → Vulkan translation on all platforms
-4. **OpenAL everywhere** – Cross-platform audio stack
+3. **DXVK everywhere (desktop)** – DX8 → Vulkan translation on Linux/macOS (WebGPU via `WebGPUDevice` on Emscripten `webgpu` builds)
+4. **MiniAudio backend** – Cross-platform audio stack. MiniAudio is the primary and stable audio backend for all platforms (Linux, macOS). OpenAL is legacy/deprecated and no longer maintained.
 5. **64-bit native** – x86_64 only (32-bit via VC6 upstream)
 6. **Retail compatibility** – Original replays and mods must work
 7. **Determinism** – Rendering/audio changes must not affect gameplay logic
 8. **No band-aids** – Fix underlying issues, not symptoms
-9. **Update dev blog** – `docs/DEV_BLOG/YYYY-MM-DIARY.md` before committing
+9. **Update worklog** – Update `docs/WORKLOG/YYYY-MM-DIARY.md` before committing (see [.github/instructions/docs.instructions.md](.github/instructions/docs.instructions.md) for details)
 10. **Reference repos** – Study patterns, don't copy-paste
+11. **Backport to Generals** – Bugfixes and improvements must be backported to the Generals base game.
+12. **NGMP over GameSpy** – The legacy GameSpy online backend is being discontinued. NGMP (`GeneralsOnline`) is the sole online multiplayer target. Singleplayer, Skirmish (vs AI), and LAN multiplayer must remain fully functional. GameSpy online compatibility is explicitly NOT required and must NOT block NGMP work. See [ngmp.instructions.md](.github/instructions/ngmp.instructions.md) for the full compatibility policy.
+
+## Cross-Platform Determinism (Mac vs Linux)
+To guarantee cross-play between macOS ARM64 and Linux x86_64 without SyncCrash desyncs, you must obey the following rules:
+
+1. **Deterministic Math in GameLogic (Simulation Scope)** – Upstream PR #2670 established the gold standard for cross-platform deterministic math: simulation math in `GameLogic` (and shared math primitives `Trig.cpp`, `Coord2D`, `Coord3D`, `BezierSegment`) must be routed through deterministic `WWMath` wrappers. Rendering, UI, audio, and client visuals (`GameClient`, `W3DDevice`, `WW3D2`) do not contribute to simulation CRCs and should use standard CRT math (`sinf`, `cosf`, `sqrtf`, `tanf`, etc.) to avoid unnecessary overhead.
+    Standard `WWMath` functions:
+    - `sqrt` / `sqrtf` -> `WWMath::Sqrt` / `WWMath::Sqrtf`
+    - `sin` / `sinf` -> `WWMath::Sin` / `WWMath::Sinf`
+    - `cos` / `cosf` -> `WWMath::Cos` / `WWMath::Cosf`
+    - `tan` / `tanf` -> `WWMath::Tan` / `WWMath::Tanf`
+    - `acos` / `acosf` -> `WWMath::Acos` / `WWMath::Acosf`
+    - `asin` / `asinf` -> `WWMath::Asin` / `WWMath::Asinf`
+    - `atan` / `atanf` -> `WWMath::Atan` / `WWMath::Atanf`
+    - `atan2` / `atan2f` -> `WWMath::Atan2` / `WWMath::Atan2f`
+    - `ceil` / `ceilf` -> `WWMath::Ceil` / `WWMath::Ceilf`
+    - `floor` / `floorf` -> `WWMath::Floor` / `WWMath::Floorf`
+    - `pow` / `powf` -> `WWMath::Pow` / `WWMath::Powf`
+    - `fabs` / `fabsf` -> `WWMath::Fabs` / `WWMath::Fabsf`
+2. **NaN/Inf Division Safety** – ARM64 casts `(Int)NaN` to `0`, while x86 casts it to `INT_MIN`. Any division by potentially zero (e.g. `val / maxHealth`) whose result might be cast to an integer or affect simulation flow MUST be guarded (`if (maxHealth > 0)`) or use `WWMath::Div_Safe(dividend, divisor, default_value)` to avoid immediate CRC desyncs.
+3. **Double-Precision Isolation** – Do not allow implicit `double` promotion in transcendental/power math evaluations (e.g. `gm_sqrt`, `gm_pow`, `gm_atan`). x87 (24-bit mantissa) and NEON (53-bit mantissa) diverge by 1-ULP on double-precision. Ensure all `WWMath` wrappers explicitly accept/return `float` or internally downcast `double` to `float` prior to `gm_*f` execution to guarantee cross-platform bit-identical outputs.
+4. **FPU Environment State Leaks** – Audio drivers (MiniAudio) and OS callbacks aggressively alter hardware FPU registers (e.g., Flush-To-Zero, Rounding mode) for DSP performance. If this state leaks into the main thread, the simulation math diverges. **Always inject `ScopedFPUGuard`** at the boundaries of `GameLogic::update()`, audio thread callbacks, and mouse-picking logic (e.g., `View::pickDrawable()`).
+5. **FMA Contraction** – Fused Multiply-Add combines instructions with infinite intermediate precision, yielding different results on ARM64 vs x86_64. We strictly enforce `-ffp-contract=off` globally (and `/fp:precise` for MSVC). Never bypass this with `-ffast-math` or `/fp:fast`.
+6. **Deep CRC Memory Buffer Logging** – When a sync crash occurs and the root cause isn't obvious, the game automatically dumps a `Debug/deep_crc_YYYY-MM-DD-HH-MM-SS.bin` file containing a binary snapshot of the last 64 frames of state transfers. Use `scripts/qa/parse_deep_crc.py` to inspect these dumps and identify the exact object ID and state data that first diverged between players. Note: This requires the `RTS_BUILD_OPTION_DEEP_CRC=ON` CMake flag (which is enabled by default).
 
 ## Reference Repositories
 - **fighter19-dxvk-port** – Primary graphics/platform reference (DXVK + SDL3 on Linux)
-- **jmarshall-win64-modern** – Audio reference (OpenAL implementation, Generals-only)
+- **jmarshall-win64-modern** – Audio reference (legacy OpenAL implementation, Generals-only)
 - **thesuperhackers-main** – Upstream baseline for regression checks
 
 ## Build Commands
 
-### Docker (recommended on Linux host)
-```bash
-# Linux build
-./scripts/build/linux/docker-configure-linux.sh linux64-deploy
-./scripts/build/linux/docker-build-linux-zh.sh linux64-deploy
+### Linux (Docker-based)
+Docker is the recommended build method on Linux hosts to ensure all toolchain requirements are met.
 
-# Optional: Windows via MinGW cross-build
-./scripts/build/linux/docker-build-mingw-zh.sh mingw-w64-i686
-```
+*   **Configure Build**:
+    ```bash
+    ./scripts/build/linux/docker-configure-linux.sh linux64-deploy
+    ```
+*   **Build Zero Hour**:
+    ```bash
+    ./scripts/build/linux/docker-build-linux-zh.sh linux64-deploy
+    ```
+*   **Build Generals (Base Game)**:
+    ```bash
+    ./scripts/build/linux/docker-build-linux-generals.sh linux64-deploy
+    ```
+*   **Flatpak Bundle Packaging**:
+    ```bash
+    ./scripts/build/linux/build-linux-flatpak.sh linux64-deploy Generals    # Base game
+    ./scripts/build/linux/build-linux-flatpak.sh linux64-deploy GeneralsMD  # Zero Hour
+    ```
+*   **Optional MinGW Windows Cross-build**:
+    ```bash
+    ./scripts/build/linux/docker-build-mingw-zh.sh mingw-w64-i686
+    ```
 
 ### Native Linux
-```bash
-cmake --preset linux64-deploy
-cmake --build build/linux64-deploy --target z_generals
-```
+*   **Configure & Build via CMake**:
+    ```bash
+    cmake --preset linux64-deploy
+    cmake --build build/linux64-deploy --target z_generals
+    ```
+*   **Deploy**:
+    ```bash
+    ./scripts/build/linux/deploy-linux.sh     # Generals base game
+    ./scripts/build/linux/deploy-linux-zh.sh  # Generals Zero Hour
+    ```
 
 ### Native macOS
-```bash
-cmake --preset macos-vulkan
-cmake --build build/macos-vulkan --target z_generals
-```
+*   **Configure Build**:
+    ```bash
+    cmake --preset macos-vulkan
+    ```
+*   **Build via Scripts**:
+    ```bash
+    ./scripts/build/macos/build-macos-generals.sh  # Generals base game
+    ./scripts/build/macos/build-macos-zh.sh        # Generals Zero Hour
+    ```
+    *(Alternatively, build via CMake: `cmake --build build/macos-vulkan --target z_generals`)*
+*   **Deploy**:
+    ```bash
+    ./scripts/build/macos/deploy-macos-generals.sh  # Generals base game
+    ./scripts/build/macos/deploy-macos-zh.sh        # Generals Zero Hour
+    ```
+*   **App Bundle Packaging**:
+    ```bash
+    ./scripts/build/macos/bundle-macos-generals.sh  # Generals Mac app bundle
+    ./scripts/build/macos/bundle-macos-zh.sh        # Generals Zero Hour Mac app bundle
+    ```
 
 ## Target Priority
 1. **GeneralsXZH** (Zero Hour) – Primary target, most feature-complete
-2. **GeneralsX** (Base game) – Backport only when changes are clearly shared
+2. **GeneralsX** (Base game) – Stable and functional. Bugfixes and improvements must be backported.
 
 ## Backport Rules
 **Backport to Generals when:**
-- Change is platform/backend code (SDL3, DXVK, OpenAL)
+- Change is platform/backend code (SDL3, DXVK, MiniAudio) or a general bugfix/improvement
 - Change is in shared Core libraries
 - Change is low-risk and clearly applicable
 
@@ -100,6 +155,7 @@ cmake --build build/macos-vulkan --target z_generals
 - **SDL3 from source**: Fetched via CMake FetchContent. No system package needed.
 - **Manual memory**: Always delete/delete[]. Use STLPort for VC6 legacy builds.
 - **Debug options break replays**: Use `RTS_BUILD_OPTION_DEBUG=OFF` for replay tests.
+- **Windows executable icons (.ico)**: Windows builds embed `Generals/Code/Main/Generals.ico` and `GeneralsMD/Code/Main/Generals.ico` via `RTS.RC`. If source PNG icon assets (`assets/generalsx_icon.png` or `assets/generalsx-zh_icon.png`) are updated, regenerate the multi-resolution `.ico` files (sizes 16, 24, 32, 48, 64, 128, 256) to keep Windows executables in sync.
 
 ## Testing & Validation
 ### Smoke test
@@ -117,22 +173,6 @@ cd ~/GeneralsX/GeneralsMD
 ```bash
 mkdir -p logs && gdb -batch -ex "run -win" -ex "bt full" -ex "thread apply all bt" \
   ./build/linux64-deploy/GeneralsMD/GeneralsXZH 2>&1 | tee logs/gdb.log
-```
-
-## Important Commands
-```bash
-# Linux deployment
-./scripts/build/linux/deploy-linux-zh.sh
-./scripts/build/linux/run-linux-zh.sh -win
-
-# macOS workflow
-./scripts/build/macos/build-macos-zh.sh
-./scripts/build/macos/deploy-macos-zh.sh
-./scripts/build/macos/run-macos-zh.sh -win
-
-# VS Code tasks recommended
-# Linux: [Linux] Configure (Docker), [Linux] Build GeneralsXZH, [Linux] Run GeneralsXZH
-# macOS: [macOS] Configure, [macOS] Build GeneralsXZH, [macOS] Run GeneralsXZH
 ```
 
 ## Branching & Sync
@@ -154,10 +194,27 @@ git merge thesuperhackers/main
 - **Attribution**: Add upstream PR references with author and GitHub URL
 - **English only**: All code, comments, documentation
 - **No lazy code**: No empty stubs, empty catch blocks, or commented-out code
+- **Console Debug Logging**: For diagnostic/troubleshooting logs that must remain visible in release/non-debug builds (since `DEBUG_LOG` is disabled and compiled out in release builds), use `fprintf(stderr, ...)` paired with `fflush(stderr)` instead of `DEBUG_LOG` to output directly to the console.
+  - ✗ *Wrong (compiled out in release builds)*:
+    ```cpp
+    DEBUG_LOG(("LanLobbyMenuInit - SetLocalIP ok %d.%d.%d.%d", PRINTF_IP_AS_4_INTS(IP)));
+    ```
+  - ✓ *Right (will print to console in release/testing environments)*:
+    ```cpp
+    fprintf(stderr, "[LAN86] LanLobbyMenuInit SetLocalIP ok %d.%d.%d.%d\n", PRINTF_IP_AS_4_INTS(IP));
+    fflush(stderr);
+    ```
 
 ## GitHub PR/Issue Formatting
 - Use `--body-file` with real Markdown file instead of `--body`
 - Avoid literal `\n` sequences; prefer actual newlines in multi-line strings
+- Do not write `#<number>` in commit messages, PR descriptions, or comments unless linking that exact GitHub issue/PR (GitHub cross-links it permanently); number local items as `F7` or `item 7` instead
+
+## Git Commit Standards
+- **Conventional Commits**: Format must be `<type>(optional scope): <description>`. (e.g. `fix(audio): restart sound groups in reset`)
+- **DO NOT use `@` in subject/type**: The commit subject/title must never contain an `@` symbol (e.g. no `@refactor:`). The `// GeneralsX @keyword` format is strictly for inline code annotations in C++ files and must not be appended to commit messages. Note that `@` is permitted in commit bodies/footers for mentions, emails, and `Co-authored-by` trailers.
+- **Imperative mood**: Use "add", "fix", "change" (not "added" or "fixes").
+- **Read the Docs**: For full details, valid types, and PR standards, you **MUST** read `.github/instructions/git-commit.instructions.md`.
 
 ## VS Code Tasks
 - Prefer task-first execution for build/test/debug
@@ -165,12 +222,18 @@ git merge thesuperhackers/main
 - Primary labels: `[Linux]`, `[macOS]`, `[Linux] Pipeline: Build + Deploy + Run ZH`
 
 ## Docs Workflow
-1. Monthly diary in `docs/DEV_BLOG/YYYY-MM-DIARY.md` (YYYY=year, MM=month only, e.g., `2026-05-DIARY.md`)
+1. Monthly diary in `docs/WORKLOG/YYYY-MM-DIARY.md` (YYYY=year, MM=month only, e.g., `2026-05-DIARY.md`), always including the standard AI-generated content disclosure note at the top
 2. Active work notes in `docs/WORKDIR/` (phases/planning/reports/support/audit/lessons)
-3. Step-by-step tutorials in `docs/HOWTO/` (user-facing guides for common tasks)
+3. User guides & tutorials reside in the GitHub Wiki (with temporary redirection stubs in `docs/HOWTO/`)
 4. Never drop working docs directly under `docs/` root
 
 ## GitHub CLI Examples
+
+> [!IMPORTANT]
+> When running `gh` commands within the agent sandbox environment, if `GITHUB_TOKEN=github_pat_antigravitydummytoken` is present, it will override local credentials and cause `HTTP 401: Bad credentials`. Unset the dummy token by prepending `env -u GITHUB_TOKEN -u GH_TOKEN` to your `gh` commands.
+> 
+> Example: `env -u GITHUB_TOKEN -u GH_TOKEN gh pr create ...`
+
 **Create issues:**
 ```bash
 gh issue create \
@@ -209,24 +272,28 @@ printf "%s" "$body" | rg '\\n' && echo "HAS_LITERAL_BACKSLASH_N=YES" || echo "HA
 - `GeneralsMD/`: Zero Hour.
 - `Generals/`: base game.
 - `Core/`: shared libraries.
-- `references/`: thesuperhackers-main, fbraz3-dxvk (active); archive/ (historical).
+- `references/`: workspace reference directory (`../references/` with GameClient, GameServer).
 - `docs/WORKDIR/`: current work docs.
-- `docs/HOWTO/`: user-facing step-by-step tutorials (SagePatch config, etc.)
+- `docs/HOWTO/`: redirection stubs pointing to the GitHub Wiki (user tutorials, SagePatch config, etc.)
 - `logs/`: build/run/debug logs.
 
 ## Instruction Context Loading
 
-`AGENTS.md` is the source of truth. The `.github/instructions/` files are scoped VS Code hints — they load only when the file path matches.
+The `.github/instructions/` files are scoped VS Code hints — they load only when the file path matches.
+
+You MUST load the files below to your context when the file/dir you are working on matches the applyTo column pattern.
+
+The `**` at applyTo means all files, you MUST load it everytime.
 
 | Instruction File | applyTo | Purpose |
 |---|---|---|
-| `generalsx.instructions.md` | `**` | Stub → points to AGENTS.md |
-| `git-commit.instructions.md` | `**` | Commit/PR message standards |
-| `cpp-conventions.instructions.md` | `**/*.{cpp,h,hpp,c}` | Code style, annotations, platform isolation |
-| `build.instructions.md` | `cmake/**,CMakeLists.txt,CMakePresets.json` | Build presets, DXVK source of truth |
-| `platform-linux.instructions.md` | `scripts/build/linux/**` | Linux build notes |
-| `platform-macos.instructions.md` | `scripts/build/macos/**,references/fbraz3-dxvk/**` | macOS/DXVK build notes |
-| `docs.instructions.md` | `**/*.md` | Documentation structure and workflow |
-| `scripts.instructions.md` | `scripts/**` | Script organization and naming |
+| [.github/instructions/git-commit.instructions.md](.github/instructions/git-commit.instructions.md) | `**` | Commit/PR message standards |
+| [.github/instructions/cpp-conventions.instructions.md](.github/instructions/cpp-conventions.instructions.md) | `**/*.{cpp,h,hpp,c}` | Code style, annotations, platform isolation |
+| [.github/instructions/build.instructions.md](.github/instructions/build.instructions.md) | `cmake/**,CMakeLists.txt,CMakePresets.json` | Build presets, DXVK source of truth |
+| [.github/instructions/platform-linux.instructions.md](.github/instructions/platform-linux.instructions.md) | `scripts/build/linux/**` | Linux build notes |
+| [.github/instructions/platform-macos.instructions.md](.github/instructions/platform-macos.instructions.md) | `scripts/build/macos/**` | macOS/DXVK build notes |
+| [.github/instructions/docs.instructions.md](.github/instructions/docs.instructions.md) | `**/*.md` | Documentation structure and workflow |
+| [.github/instructions/scripts.instructions.md](.github/instructions/scripts.instructions.md) | `scripts/**` | Script organization and naming |
+| [.github/instructions/ngmp.instructions.md](.github/instructions/ngmp.instructions.md) | `**/GeneralsOnline/**,**/NextGenMP/**` | NGMP cross-platform multiplayer integration guidelines |
 
 Update this table when instruction files are added, removed, or renamed.

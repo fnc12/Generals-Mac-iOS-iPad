@@ -38,6 +38,7 @@
 #include "Common/OptionPreferences.h"
 
 #include "GameClient/ClientInstance.h"
+#include "GameClient/Display.h"
 #include "GameClient/LookAtXlat.h"
 #include "GameClient/Mouse.h"
 
@@ -203,6 +204,126 @@ Bool OptionPreferences::getAlternateMouseModeEnabled()
 	return FALSE;
 }
 
+Bool OptionPreferences::getRightMouseScrollWithAlternateMouseEnabled() const
+{
+	OptionPreferences::const_iterator it = find("UseRightMouseScrollWithAlternateMouse");
+	if (it == end())
+		return TheGlobalData->m_useRightMouseScrollWithAlternateMouse;
+
+	if (stricmp(it->second.str(), "yes") == 0) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+// GeneralsX @feature fbraz3 20/11/2026 Option to enable/disable Command+Left-Click-Drag map panning on macOS
+Bool OptionPreferences::getCommandDragScrollEnabled() const
+{
+	OptionPreferences::const_iterator it = find("UseCommandDragScroll");
+	if (it == end())
+		return TheGlobalData->m_useCommandDragScroll;
+
+	if (stricmp(it->second.str(), "yes") == 0) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+void OptionPreferences::setCommandDragScrollEnabled(Bool val)
+{
+	(*this)["UseCommandDragScroll"] = val ? "yes" : "no";
+}
+
+// GeneralsX @feature ClaudeCode 22/11/2026 Hor+ camera projection switch for displays wider than 16:9.
+// The GENERALSX_ULTRAWIDE_HORPLUS environment variable overrides the Options.ini key UltrawideHorPlus.
+Bool OptionPreferences::getUltrawideHorPlusEnabled() const
+{
+	const char *value = getenv("GENERALSX_ULTRAWIDE_HORPLUS");
+	if (value == nullptr || value[0] == '\0')
+	{
+		OptionPreferences::const_iterator it = find("UltrawideHorPlus");
+		if (it == end())
+			return TheGlobalData->m_ultrawideHorPlus;
+
+		value = it->second.str();
+	}
+
+	if (stricmp(value, "no") == 0 || stricmp(value, "0") == 0 || stricmp(value, "false") == 0 || stricmp(value, "off") == 0)
+		return FALSE;
+
+	return TRUE;
+}
+
+void OptionPreferences::setUltrawideHorPlusEnabled(Bool val)
+{
+	(*this)["UltrawideHorPlus"] = val ? "yes" : "no";
+}
+
+// GeneralsX @feature ClaudeCode 22/11/2026 Upper limit in degrees for the Hor+ horizontal field of view.
+// The GENERALSX_ULTRAWIDE_MAX_HFOV environment variable overrides the Options.ini key UltrawideMaxHorizontalFOV.
+Real OptionPreferences::getUltrawideMaxHorizontalFOV() const
+{
+	constexpr const Real minFOV = 50.0f;
+	constexpr const Real maxFOV = 170.0f;
+
+	Real fov = TheGlobalData->m_ultrawideMaxHorizontalFOV;
+
+	const char *value = getenv("GENERALSX_ULTRAWIDE_MAX_HFOV");
+	if (value != nullptr && value[0] != '\0')
+	{
+		fov = (Real)atof(value);
+	}
+	else
+	{
+		OptionPreferences::const_iterator it = find("UltrawideMaxHorizontalFOV");
+		if (it != end())
+			fov = (Real)atof(it->second.str());
+	}
+
+	if (!(fov >= minFOV))
+		fov = minFOV;
+	else if (fov > maxFOV)
+		fov = maxFOV;
+
+	return fov;
+}
+
+void OptionPreferences::setUltrawideMaxHorizontalFOV(Real val)
+{
+	if (!(val >= 50.0f))
+		val = 50.0f;
+	else if (val > 170.0f)
+		val = 170.0f;
+	AsciiString s;
+	s.format("%.1f", val);
+	(*this)["UltrawideMaxHorizontalFOV"] = s;
+}
+
+// GeneralsX @feature ClaudeCode 22/11/2026 Centred 16:9 layout for menus and the HUD on displays wider than 16:9.
+// The GENERALSX_ULTRAWIDE_UI environment variable overrides the Options.ini key UltrawideUI.
+Bool OptionPreferences::getUltrawideUIEnabled() const
+{
+	const char *value = getenv("GENERALSX_ULTRAWIDE_UI");
+	if (value == nullptr || value[0] == '\0')
+	{
+		OptionPreferences::const_iterator it = find("UltrawideUI");
+		if (it == end())
+			return TheGlobalData->m_ultrawideUI;
+
+		value = it->second.str();
+	}
+
+	if (stricmp(value, "no") == 0 || stricmp(value, "0") == 0 || stricmp(value, "false") == 0 || stricmp(value, "off") == 0)
+		return FALSE;
+
+	return TRUE;
+}
+
+void OptionPreferences::setUltrawideUIEnabled(Bool val)
+{
+	(*this)["UltrawideUI"] = val ? "yes" : "no";
+}
+
 Bool OptionPreferences::getRetaliationModeEnabled()
 {
 	OptionPreferences::const_iterator it = find("Retaliation");
@@ -225,6 +346,18 @@ Bool OptionPreferences::getDoubleClickAttackMoveEnabled()
 		return TRUE;
 
 	return FALSE;
+}
+
+Int OptionPreferences::getJpegQuality() const
+{
+	OptionPreferences::const_iterator it = find("JpegQuality");
+	if (it == end())
+		return DEFAULT_JPEG_QUALITY;
+
+	// TheSuperHackers @info bobtista 14/07/2026 Clamp the quality to 50-95: above 95 the file
+	// size increases significantly with no visible benefit, below 50 the image degrades visibly.
+	const Int quality = atoi(it->second.str());
+	return clamp(50, quality, 95);
 }
 
 Real OptionPreferences::getScrollFactor()
@@ -424,18 +557,6 @@ Int OptionPreferences::getStaticGameDetail()
 		return TheGameLODManager->getStaticLODLevel();
 
 	return TheGameLODManager->getStaticGameLODIndex(it->second);
-}
-
-Bool OptionPreferences::getSendDelay()
-{
-	OptionPreferences::const_iterator it = find("SendDelay");
-	if (it == end())
-		return TheGlobalData->m_firewallSendDelay;
-
-	if (stricmp(it->second.str(), "yes") == 0) {
-		return TRUE;
-	}
-	return FALSE;
 }
 
 Int OptionPreferences::getFirewallBehavior()
@@ -876,16 +997,19 @@ Bool OptionPreferences::getShowMoneyPerMinute() const
 	return FALSE;
 }
 
+// GeneralsX @bugfix fbraz3 15/10/2026 Guard against non-finite values for cross-platform determinism
 Real OptionPreferences::getMaxCameraHeight() const
 {
 	OptionPreferences::const_iterator it = find("MaxCameraHeight");
 	if (it == end())
-		return TheGlobalData->m_maxCameraHeight;
+	{
+		return TheGlobalData ? TheGlobalData->m_maxCameraHeight : 300.0f;
+	}
 
 	Real val = (Real)atof(it->second.str());
-	if (val < 100.0f)
+	if (!isFinite(val) || val < 100.0f)
 		val = 100.0f;
-	if (val > 1000.0f)
+	else if (val > 1000.0f)
 		val = 1000.0f;
 	return val;
 }
@@ -894,12 +1018,19 @@ Real OptionPreferences::getMinCameraHeight() const
 {
 	OptionPreferences::const_iterator it = find("MinCameraHeight");
 	if (it == end())
-		return TheGlobalData->m_minCameraHeight;
+	{
+		Real fallback = TheGlobalData ? TheGlobalData->m_minCameraHeight : 50.0f;
+		if (!isFinite(fallback) || fallback < 50.0f)
+			fallback = 50.0f;
+		else if (fallback > 300.0f)
+			fallback = 300.0f;
+		return fallback;
+	}
 
 	Real val = (Real)atof(it->second.str());
-	if (val < 50.0f)
+	if (!isFinite(val) || val < 50.0f)
 		val = 50.0f;
-	if (val > 300.0f)
+	else if (val > 300.0f)
 		val = 300.0f;
 	return val;
 }
@@ -908,12 +1039,19 @@ Real OptionPreferences::getCameraPitch() const
 {
 	OptionPreferences::const_iterator it = find("CameraPitch");
 	if (it == end())
-		return TheGlobalData->m_cameraPitch;
+	{
+		Real fallback = TheGlobalData ? TheGlobalData->m_cameraPitch : 37.5f;
+		if (!isFinite(fallback) || fallback < 20.0f)
+			fallback = 20.0f;
+		else if (fallback > 60.0f)
+			fallback = 60.0f;
+		return fallback;
+	}
 
 	Real val = (Real)atof(it->second.str());
-	if (val < 20.0f)
+	if (!isFinite(val) || val < 20.0f)
 		val = 20.0f;
-	if (val > 60.0f)
+	else if (val > 60.0f)
 		val = 60.0f;
 	return val;
 }
@@ -922,12 +1060,250 @@ Real OptionPreferences::getTerrainDrawDistanceScale() const
 {
 	OptionPreferences::const_iterator it = find("TerrainDrawDistanceScale");
 	if (it == end())
-		return TheGlobalData->m_terrainDrawDistanceScale;
+	{
+		return TheGlobalData ? TheGlobalData->m_terrainDrawDistanceScale : 1.0f;
+	}
 
 	Real val = (Real)atof(it->second.str());
-	if (val < 1.0f)
+	if (!isFinite(val) || val < 1.0f)
 		val = 1.0f;
-	if (val > 2.0f)
+	else if (val > 2.0f)
 		val = 2.0f;
 	return val;
 }
+
+// GeneralsX @feature fbraz3 14/10/2026 Camera height preference setter
+void OptionPreferences::setMaxCameraHeight(Real val)
+{
+	if (!isFinite(val) || val < 100.0f)
+		val = 100.0f;
+	else if (val > 1000.0f)
+		val = 1000.0f;
+	AsciiString s;
+	s.format("%.1f", val);
+	(*this)["MaxCameraHeight"] = s;
+}
+
+// GeneralsX @feature fbraz3 14/10/2026 Terrain draw distance scale preference setter
+void OptionPreferences::setTerrainDrawDistanceScale(Real val)
+{
+	if (!isFinite(val) || val < 1.0f)
+		val = 1.0f;
+	else if (val > 2.0f)
+		val = 2.0f;
+	AsciiString s;
+	s.format("%.2f", val);
+	(*this)["TerrainDrawDistanceScale"] = s;
+}
+
+Real OptionPreferences::getGameWindowTransitionSpeedMultiplier() const
+{
+	OptionPreferences::const_iterator it = find("GameWindowTransitionSpeedMultiplier");
+	if (it == end())
+		return 1.0f;
+
+	Real speed = (Real) atof(it->second.str());
+	return clamp(1.0f, speed, 1000.0f);
+}
+
+// GeneralsX @feature felipebraz 17/09/2026 Skirmish simulation tick rate configuration (#281)
+Int OptionPreferences::getSkirmishTickRate() const
+{
+	OptionPreferences::const_iterator it = find("TickRate");
+	if (it == end())
+	{
+		it = find("GameSpeed");
+	}
+	if (it == end())
+	{
+		it = find("SkirmishTickRate");
+	}
+	if (it == end())
+	{
+		return LOGICFRAMES_PER_SECOND;
+	}
+
+	Int rate = atoi(it->second.str());
+	if (rate <= 0)
+	{
+		return LOGICFRAMES_PER_SECOND;
+	}
+
+	return clamp(5, rate, 120);
+}
+
+// GeneralsX @feature fbraz3 08/10/2026 Enhanced graphics & lighting options helpers
+static Bool parsePrefBool(OptionPreferences::const_iterator it, OptionPreferences::const_iterator endIt, Bool defaultVal)
+{
+	if (it == endIt)
+		return defaultVal;
+	AsciiString str = it->second;
+	if (str.compareNoCase("yes") == 0 || str.compareNoCase("true") == 0 || str.compareNoCase("1") == 0)
+		return TRUE;
+	if (str.compareNoCase("no") == 0 || str.compareNoCase("false") == 0 || str.compareNoCase("0") == 0)
+		return FALSE;
+	return defaultVal;
+}
+
+Bool OptionPreferences::getAdvancedShadows(Bool defaultVal) const
+{
+	return parsePrefBool(find("AdvancedShadows"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getAdvancedLighting(Bool defaultVal) const
+{
+	return parsePrefBool(find("AdvancedLighting"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getUseShadowVolumesForSkins(Bool defaultVal) const
+{
+	return parsePrefBool(find("UseShadowVolumesForSkins"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getExtendedShadowFrustumCulling(Bool defaultVal) const
+{
+	return parsePrefBool(find("ExtendedShadowFrustumCulling"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getNaturalSunElevation(Bool defaultVal) const
+{
+	return parsePrefBool(find("NaturalSunElevation"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getShadowsForProjectiles(Bool defaultVal) const
+{
+	return parsePrefBool(find("ShadowsForProjectiles"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getShadowsForProps(Bool defaultVal) const
+{
+	return parsePrefBool(find("ShadowsForProps"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getBridgeShadows(Bool defaultVal) const
+{
+	return parsePrefBool(find("BridgeShadows"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getWaterReflections(Bool defaultVal) const
+{
+	return parsePrefBool(find("WaterReflections"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getExplosionDynamicLights(Bool defaultVal) const
+{
+	return parsePrefBool(find("ExplosionDynamicLights"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getVehicleHeadlights(Bool defaultVal) const
+{
+	return parsePrefBool(find("VehicleHeadlights"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getEnablePostProcessing(Bool defaultVal) const
+{
+	return parsePrefBool(find("EnablePostProcessing"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getPostProcessBloom(Bool defaultVal) const
+{
+	return parsePrefBool(find("PostProcessBloom"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getPostProcessHDR(Bool defaultVal) const
+{
+	return parsePrefBool(find("PostProcessHDR"), end(), defaultVal);
+}
+
+Bool OptionPreferences::getPostProcessFXAA(Bool defaultVal) const
+{
+	return parsePrefBool(find("PostProcessFXAA"), end(), defaultVal);
+}
+
+// GeneralsX @feature Mr. Meeseeks 16/10/2026 Option to toggle air unit ground indicator
+Bool OptionPreferences::getAirUnitGroundIndicator(Bool defaultVal) const
+{
+	return parsePrefBool(find("AirUnitGroundIndicator"), end(), defaultVal);
+}
+
+void OptionPreferences::setAdvancedShadows(Bool val)
+{
+	(*this)["AdvancedShadows"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setAdvancedLighting(Bool val)
+{
+	(*this)["AdvancedLighting"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setUseShadowVolumesForSkins(Bool val)
+{
+	(*this)["UseShadowVolumesForSkins"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setExtendedShadowFrustumCulling(Bool val)
+{
+	(*this)["ExtendedShadowFrustumCulling"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setNaturalSunElevation(Bool val)
+{
+	(*this)["NaturalSunElevation"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setShadowsForProjectiles(Bool val)
+{
+	(*this)["ShadowsForProjectiles"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setShadowsForProps(Bool val)
+{
+	(*this)["ShadowsForProps"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setBridgeShadows(Bool val)
+{
+	(*this)["BridgeShadows"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setWaterReflections(Bool val)
+{
+	(*this)["WaterReflections"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setExplosionDynamicLights(Bool val)
+{
+	(*this)["ExplosionDynamicLights"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setVehicleHeadlights(Bool val)
+{
+	(*this)["VehicleHeadlights"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setEnablePostProcessing(Bool val)
+{
+	(*this)["EnablePostProcessing"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setPostProcessBloom(Bool val)
+{
+	(*this)["PostProcessBloom"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setPostProcessHDR(Bool val)
+{
+	(*this)["PostProcessHDR"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setPostProcessFXAA(Bool val)
+{
+	(*this)["PostProcessFXAA"] = val ? "yes" : "no";
+}
+
+void OptionPreferences::setAirUnitGroundIndicator(Bool val)
+{
+	(*this)["AirUnitGroundIndicator"] = val ? "yes" : "no";
+}
+
+

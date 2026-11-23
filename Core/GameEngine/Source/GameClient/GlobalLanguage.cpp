@@ -76,6 +76,7 @@ static const LookupListRec ResolutionFontSizeMethodNames[] =
 	{ "BALANCED", GlobalLanguage::ResolutionFontSizeMethod_Balanced },
 	{ nullptr, 0 }
 };
+static_assert(ARRAY_SIZE(ResolutionFontSizeMethodNames) == GlobalLanguage::ResolutionFontSizeMethod_Count + 1, "Incorrect array size");
 
 static const FieldParse TheGlobalLanguageDataFieldParseTable[] =
 {
@@ -151,24 +152,13 @@ GlobalLanguage::~GlobalLanguage()
 void GlobalLanguage::init()
 {
 	// GeneralsX @bugfix GitHubCopilot 27/05/2026 Implement Language.ini fallback chain so stock values fill missing override keys.
-	char log_buffer[512];
 	{
 		AsciiString registryLanguage = GetRegistryLanguage();
 		AsciiString fname;
 		fname.format("Data\\%s\\Language", registryLanguage.str());
 
-		sprintf(log_buffer,
-			"[GX-ISSUE144] GlobalLanguage init registryLanguage=%s primaryIni=%s",
-			registryLanguage.str(),
-			fname.str());
-		fprintf(stderr, "%s\n", log_buffer);
-
 		INI ini;
 		ini.loadFileDirectory( fname, INI_LOAD_OVERWRITE, nullptr );
-		sprintf(log_buffer,
-			"[GX-ISSUE144] GlobalLanguage init loaded primary unicodeFont=%s",
-			m_unicodeFontName.isNotEmpty() ? m_unicodeFontName.str() : "<empty>");
-		fprintf(stderr, "%s\n", log_buffer);
 
 		// GeneralsX @bugfix fbraz 04/06/2026 Only fall back to stock English if the primary language
 		// did not set UnicodeFontName. This protects two scenarios:
@@ -185,31 +175,9 @@ void GlobalLanguage::init()
 			stockFnameWithExt.concat(".ini");
 			if (TheFileSystem->doesFileExist(stockFnameWithExt.str()))
 			{
-				sprintf(log_buffer,
-					"[GX-ISSUE144] GlobalLanguage init loading stock fallback=%s",
-					stockFname.str());
-				fprintf(stderr, "%s\n", log_buffer);
 				ini.loadFileDirectory( stockFname, INI_LOAD_MULTIFILE, nullptr );
-				sprintf(log_buffer,
-					"[GX-ISSUE144] GlobalLanguage init fallback merged unicodeFont=%s (may have been filled)",
-					m_unicodeFontName.isNotEmpty() ? m_unicodeFontName.str() : "<empty>");
-				fprintf(stderr, "%s\n", log_buffer);
-			}
-			else
-			{
-				sprintf(log_buffer,
-					"[GX-ISSUE144] GlobalLanguage init stock fallback skipped, file not present: %s",
-					stockFnameWithExt.str());
-				fprintf(stderr, "%s\n", log_buffer);
 			}
 		}
-
-		sprintf(log_buffer,
-			"[GX-ISSUE144] GlobalLanguage init final unicodeFont=%s drawableCaption=%s defaultWindow=%s",
-			m_unicodeFontName.isNotEmpty() ? m_unicodeFontName.str() : "<empty>",
-			m_drawableCaptionFont.name.isNotEmpty() ? m_drawableCaptionFont.name.str() : "<empty>",
-			m_defaultWindowFont.name.isNotEmpty() ? m_defaultWindowFont.name.str() : "<empty>");
-		fprintf(stderr, "%s\n", log_buffer);
 	}
 
 	StringList::iterator it = m_localFonts.begin();
@@ -218,15 +186,7 @@ void GlobalLanguage::init()
 		AsciiString font = *it;
 		if(AddFontResource(font.str()) == 0)
 		{
-			sprintf(log_buffer, "[GX-ISSUE144] GlobalLanguage local font add FAILED file=%s", font.str());
-			fprintf(stderr, "%s\n", log_buffer);
 			DEBUG_CRASH(("GlobalLanguage::init Failed to add font %s", font.str()));
-		}
-		else
-		{
-			sprintf(log_buffer, "[GX-ISSUE144] GlobalLanguage local font add OK file=%s", font.str());
-			fprintf(stderr, "%s\n", log_buffer);
-			//SendMessage( HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
 		}
 		++it;
 	}
@@ -234,12 +194,6 @@ void GlobalLanguage::init()
 	// override values with user preferences
 	OptionPreferences optionPref;
 	m_userResolutionFontSizeAdjustment = optionPref.getResolutionFontAdjustment();
-	sprintf(log_buffer,
-		"[GX-ISSUE144] GlobalLanguage resolutionAdjustment effective=%.3f user=%.3f base=%.3f",
-		getResolutionFontSizeAdjustment(),
-		m_userResolutionFontSizeAdjustment,
-		m_resolutionFontSizeAdjustment);
-	fprintf(stderr, "%s\n", log_buffer);
 }
 
 void GlobalLanguage::reset()
@@ -273,6 +227,11 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 {
 	Real adjustFactor;
 
+	// GeneralsX @bugfix ClaudeCode 22/11/2026 Fonts scale with the width of the UI layout rect, not the display width.
+	// On displays wider than 16:9 the windows keep their 16:9 size, so fonts sized from the full display width
+	// overflowed buttons and list rows (most visibly at 32:9).
+	const Real uiWidth = (Real)TheDisplay->getUILayoutWidth();
+
 	switch (method)
 	{
 	default:
@@ -280,7 +239,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	{
 		// TheSuperHackers @info The original font scaling for this game.
 		// Useful for not breaking legacy Addons and Mods. Scales poorly with large resolutions.
-		adjustFactor = TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+		adjustFactor = uiWidth / (Real)DEFAULT_DISPLAY_WIDTH;
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
 		if (adjustFactor > 2.0f)
 			adjustFactor = 2.0f;
@@ -290,7 +249,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	{
 		// TheSuperHackers @feature The original font scaling, but without ceiling.
 		// Useful for not changing the original look of the game. Scales alright with large resolutions.
-		adjustFactor = TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+		adjustFactor = uiWidth / (Real)DEFAULT_DISPLAY_WIDTH;
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
 		break;
 	}
@@ -298,7 +257,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 	{
 		// TheSuperHackers @feature The strict method scales fonts based on the smallest screen
 		// dimension so they scale independent of aspect ratio.
-		const Real wScale = TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+		const Real wScale = uiWidth / (Real)DEFAULT_DISPLAY_WIDTH;
 		const Real hScale = TheDisplay->getHeight() / (Real)DEFAULT_DISPLAY_HEIGHT;
 		adjustFactor = min(wScale, hScale);
 		adjustFactor = 1.0f + (adjustFactor - 1.0f) * scaler;
@@ -311,7 +270,7 @@ Real GlobalLanguage::getResolutionFontSizeScale(ResolutionFontSizeMethod method,
 		// prevent oversizing.
 		constexpr const Real maxAspect = 1.8f;
 		constexpr const Real minAspect = 1.0f;
-		Real w = TheDisplay->getWidth();
+		Real w = uiWidth;
 		Real h = TheDisplay->getHeight();
 		const Real aspect = w / h;
 		Real wScale = w / (Real)DEFAULT_DISPLAY_WIDTH;

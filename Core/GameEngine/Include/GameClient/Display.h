@@ -33,6 +33,16 @@
 #include "GameClient/GameFont.h"
 #include "GameClient/View.h"
 
+enum ScreenshotFormat
+{
+	SCREENSHOT_JPEG,
+	SCREENSHOT_PNG,
+
+	SCREENSHOT_FORMAT_COUNT
+};
+
+constexpr const Int DEFAULT_JPEG_QUALITY = 80;
+
 struct ShroudLevel
 {
 	Short m_currentShroud;		///< A Value of 1 means shrouded.  0 is not.  Negative is the count of people looking.
@@ -76,6 +86,14 @@ public:
 	virtual void setHeight( UnsignedInt height );									///< Sets the height of the display
 	virtual UnsignedInt getWidth() { return m_width; }			///< Returns the width of the display
 	virtual UnsignedInt getHeight() { return m_height; }		///< Returns the height of the display
+
+	// GeneralsX @feature ClaudeCode 22/11/2026 Ultrawide UI layout rect. Window layouts and HUD art are designed for 4:3
+	// and scaled to the display. On displays wider than UILayoutMaxAspectRatio they are laid out in a centred
+	// rect of that aspect ratio instead of being stretched across the whole width. With the option off, or on
+	// narrower displays, the rect is the whole display.
+	static constexpr Real UILayoutMaxAspectRatio = 16.0f / 9.0f;	///< The one place that defines the widest UI layout aspect ratio
+	Int getUILayoutWidth();				///< Width in pixels of the rect the UI is laid out in
+	Int getUILayoutOriginX();			///< Left edge in pixels of the rect the UI is laid out in
 	virtual void setBitDepth( UnsignedInt bitDepth ) { m_bitDepth = bitDepth; }
 	virtual UnsignedInt getBitDepth() { return m_bitDepth; }
 	virtual void setWindowed( Bool windowed ) { m_windowed = windowed; }  ///< set windowed/fullscreen flag
@@ -154,7 +172,6 @@ public:
 													Int endX, Int endY ) = 0;
 
 	/// FullScreen video playback
-	virtual void playLogoMovie( AsciiString movieName, Int minMovieLength, Int minCopyrightLength );
 	virtual void playMovie( AsciiString movieName );
 	virtual void stopMovie();
 	virtual Bool isMoviePlaying();
@@ -173,7 +190,7 @@ public:
 	virtual void preloadModelAssets( AsciiString model ) = 0;	///< preload model asset
 	virtual void preloadTextureAssets( AsciiString texture ) = 0;	///< preload texture asset
 
-	virtual void takeScreenShot() = 0;										///< saves screenshot to a file
+	virtual void takeScreenShot(ScreenshotFormat format, Int jpegQuality = DEFAULT_JPEG_QUALITY) = 0;			///< saves screenshot in specified format
 	virtual void toggleMovieCapture() = 0;							///< starts saving frames to an avi or frame sequence
 	virtual void toggleLetterBox() = 0;										///< enabled letter-boxed display
 	virtual void enableLetterBox(Bool enable) = 0;						///< forces letter-boxed display on/off
@@ -185,6 +202,7 @@ public:
 	virtual void setCinematicTextFrames( Int frames ) { m_cinematicTextFrames = frames; }
 
 	virtual Real getAverageFPS() = 0;	///< returns the average FPS.
+	virtual Real getLow1PercentFPS() = 0;	///< returns the 1% low FPS.
 	virtual Real getCurrentFPS() = 0;	///< returns the current FPS.
 	virtual Int getLastFrameDrawCalls() = 0;  ///< returns the number of draw calls issued in the previous frame
 
@@ -217,11 +235,6 @@ protected:
 	Real	m_letterBoxFadeLevel;	///<tracks the current alpha level for fading letter-boxed mode in/out.
 	Bool	m_letterBoxEnabled;		///<current state of letterbox
 	UnsignedInt	m_letterBoxFadeStartTime;		///< time of letterbox fade start
-	Int		m_movieHoldTime;									///< time that we hold on the last frame of the movie
-	Int		m_copyrightHoldTime;							///< time that the copyright must be on the screen
-	UnsignedInt m_elapsedMovieTime;					///< used to make sure we show the stuff long enough
-	UnsignedInt m_elapsedCopywriteTime;			///< Hold on the last frame until both have expired
-	DisplayString *m_copyrightDisplayString;///< this'll hold the display string
 };
 
 // the singleton

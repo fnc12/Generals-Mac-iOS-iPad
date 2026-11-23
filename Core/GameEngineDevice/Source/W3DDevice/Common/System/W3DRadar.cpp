@@ -76,7 +76,7 @@ inline Bool legalRadarPoint( Int px, Int py )
 
 //-------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-static WW3DFormat findFormat(const WW3DFormat formats[], WW3DFormat fallback)
+static WW3DFormat findFormat(const WW3DFormat formats[], WW3DFormat fallback = WW3D_FORMAT_X8R8G8B8)
 {
 	for( Int i = 0; formats[ i ] != WW3D_FORMAT_UNKNOWN; i++ )
 	{
@@ -89,20 +89,12 @@ static WW3DFormat findFormat(const WW3DFormat formats[], WW3DFormat fallback)
 		}
 
 	}
-	// GeneralsX @bugfix BenderAI 24/02/2026 W3DRadar: When DXVK/MoltenVK caps query returns no supported
-	// format (e.g. CheckDeviceFormat fails on macOS for R8G8B8/R5G6B5), fall back to a guaranteed format.
-	// Without this, texture creation silently produces a null D3D texture and crashes in buildTerrainTexture.
-	//
-	// GeneralsX @bugfix 14/06/2026 (iOS): the fallback MUST preserve an alpha channel for the
-	// overlay and shroud textures. On iOS, MoltenVK's caps query reports NO radar format as
-	// supported, so ALL THREE radar textures hit this fallback. The original code always returned
-	// X8R8G8B8 (no alpha); the shroud/overlay are then opaque and render solid black over the
-	// terrain -> black minimap in modes where the map starts shrouded (e.g. Generals Challenge).
-	// Each caller now passes the correct guaranteed-supported fallback: X8R8G8B8 for the opaque
-	// terrain layer, A8R8G8B8 (alpha) for the overlay and shroud layers. Both are universally
-	// supported on any Vulkan/Metal GPU.
+	// GeneralsX @bugfix W3DRadar: When DXVK/MoltenVK caps query returns no supported
+	// format (e.g. CheckDeviceFormat fails on macOS for R8G8B8/R5G6B5), fall back to 
+	// the provided fallback which is guaranteed to be supported on any modern Vulkan-capable GPU. 
+	// Without this, texture creation silently produces a null D3D texture and crashes later in buildTerrainTexture.
 #if !defined(_WIN32)
-	fprintf(stderr, "W3DRadar: findFormat: no supported format found in caps query - falling back to format %d\n", (int)fallback);
+	fprintf(stderr, "W3DRadar: findFormat: no supported format found in caps query - falling back to %d\n", fallback);
 	fflush(stderr);
 #endif
 	DEBUG_CRASH(("WW3DRadar: No appropriate texture format") );
@@ -137,13 +129,13 @@ void W3DRadar::initializeTextureFormats()
 		WW3D_FORMAT_UNKNOWN				// keep this one last
 	};
 
-	// find a format for the terrain texture (opaque base layer; no alpha needed)
+	// find a format for the terrain texture
 	m_terrainTextureFormat = findFormat(terrainFormats, WW3D_FORMAT_X8R8G8B8);
 
-	// find a format for the overlay texture (alpha-blended over terrain; MUST keep alpha)
+	// find a format for the overlay texture
 	m_overlayTextureFormat = findFormat(overlayFormats, WW3D_FORMAT_A8R8G8B8);
 
-	// find a format for the shroud texture (alpha-blended over terrain; MUST keep alpha)
+	// find a format for the shroud texture
 	m_shroudTextureFormat = findFormat(shroudFormats, WW3D_FORMAT_A8R8G8B8);
 
 }
@@ -194,19 +186,19 @@ void W3DRadar::deleteResources()
 //-------------------------------------------------------------------------------------------------
 void W3DRadar::reconstructViewBox()
 {
+	m_reconstructViewBox = FALSE;
+
 	Coord3D world[ 4 ];
 	ICoord2D radar[ 4 ];
 	Int i;
 
-	// get the 4 points of the view corners in the 3D world at the average Z height in the map
+	// Get the 4 points of the view corners in the 3D world at the average Z height in the map
+	//
 	//  1-------2
 	//   \     /
 	//    4---3
-	TheTacticalView->getScreenCornerWorldPointsAtZ( &world[ 0 ],
-																									&world[ 1 ],
-																									&world[ 2 ],
-																									&world[ 3 ],
-																									getTerrainAverageZ() );
+	if( TheTacticalView->getScreenCornerWorldPointsAtZ(&world[0], &world[1], &world[2], &world[3], getTerrainAverageZ()) == PlaneClass::NO_INTERSECTION )
+		return;
 
 	// convert each of the 4 points in the world to radar cell positions
 	for( i = 0; i < 4; i++ )
@@ -236,8 +228,6 @@ void W3DRadar::reconstructViewBox()
 		}
 
 	}
-
-	m_reconstructViewBox = FALSE;
 
 }
 
@@ -298,8 +288,8 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	ICoord2D ulScreen;
 	ICoord2D ulRadar;
 	Coord3D ulWorld;
-	ICoord2D ulStart = { 0, 0 };
-	ICoord2D start, end;
+	ICoord2D ulPixel;
+	ICoord2D pixelStart, pixelEnd;
 	ICoord2D clipStart, clipEnd;
 	Real lineWidth = 1.0f;
 	Color topColor = GameMakeColor( 225, 225, 0, 255 );
@@ -320,7 +310,8 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 
 	// convert top left of screen into world position
 	TheTacticalView->getOrigin( &ulScreen.x, &ulScreen.y );
-	TheTacticalView->screenToWorldAtZ( &ulScreen, &ulWorld, getTerrainAverageZ() );
+	if( TheTacticalView->screenToWorldAtZ( &ulScreen, &ulWorld, getTerrainAverageZ() ) == PlaneClass::NO_INTERSECTION )
+		return;
 
 	// convert world to radar coords
  	ulRadar.x = ulWorld.x / (m_mapExtent.width() / static_cast<float>(RADAR_CELL_WIDTH));
@@ -331,7 +322,7 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	// into position on the radar for where the radar is drawn and the size of the
 	// area that the radar is drawn in
 	//
-	radarToPixel( &ulRadar, &ulStart, pixelX, pixelY, width, height );
+	radarToPixel( &ulRadar, &ulPixel, pixelX, pixelY, width, height );
 
 	//
 	// using our view box offset array, convert each of those radar cell offset points
@@ -343,36 +334,36 @@ void W3DRadar::drawViewBox( Int pixelX, Int pixelY, Int width, Int height )
 	ICoord2D radar;
 
 	// top line
-	start = ulStart;
+	pixelStart = ulPixel;
 	radar.x = ulRadar.x + m_viewBox[ 1 ].x;
 	radar.y = ulRadar.y + m_viewBox[ 1 ].y;
-	radarToPixel( &radar, &end, pixelX, pixelY, width, height );
-	if( ClipLine2D( &start, &end, &clipStart, &clipEnd, &clipRegion ) )
+	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
+	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
 		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, topColor );
 
   // right line
-	start = end;
+	pixelStart = pixelEnd;
 	radar.x += m_viewBox[ 2 ].x;
 	radar.y += m_viewBox[ 2 ].y;
-	radarToPixel( &radar, &end, pixelX, pixelY, width, height );
-	if( ClipLine2D( &start, &end, &clipStart, &clipEnd, &clipRegion ) )
+	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
+	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
 		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, topColor, bottomColor );
 
   // bottom line
-	start = end;
+	pixelStart = pixelEnd;
 	radar.x += m_viewBox[ 3 ].x;
 	radar.y += m_viewBox[ 3 ].y;
-	radarToPixel( &radar, &end, pixelX, pixelY, width, height );
-	if( ClipLine2D( &start, &end, &clipStart, &clipEnd, &clipRegion ) )
+	radarToPixel( &radar, &pixelEnd, pixelX, pixelY, width, height );
+	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
 		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, bottomColor );
 
   // left line
-	start = end;
-	end = ulStart;
-	if( ClipLine2D( &start, &end, &clipStart, &clipEnd, &clipRegion ) )
+	pixelStart = pixelEnd;
+	pixelEnd = ulPixel;
+	if( ClipLine2D( &pixelStart, &pixelEnd, &clipStart, &clipEnd, &clipRegion ) )
 		TheDisplay->drawLine( clipStart.x, clipStart.y, clipEnd.x, clipEnd.y,
 													lineWidth, bottomColor, topColor );
 
@@ -886,10 +877,7 @@ W3DRadar::W3DRadar()
 
 	for( Int i = 0; i < 4; i++ )
 	{
-
-		m_viewBox[ i ].x = 0;
-		m_viewBox[ i ].y = 0;
-
+		m_viewBox[ i ].zero();
 	}
 
 }
@@ -1673,12 +1661,12 @@ void W3DRadar::notifyViewChanged()
 		  Real alphaScale = INT_TO_REAL(TheGameLogic->getFrame() % framesForTransition) / (framesForTransition * 0.5f);
       minAlpha <<= 2; // decoy
 
- 			if ( ( obj->isLocallyControlled() == (Bool)a ) // another decoy, comparing the return of this non-inline with a local
-        && !obj->testStatus( OBJECT_STATUS_DISGUISED )
-        && !obj->testStatus( OBJECT_STATUS_DETECTED )
-        && ++a != 0 // The trick is that this increment does not occur unless all three above conditions are true
-        && minAlpha == 32  // tricksy hobbit decoy
-        && c != 0 )        // ditto
+ 			if ( ( obj->isLocallyControlled() == (Bool)a ) && // another decoy, comparing the return of this non-inline with a local
+        !obj->testStatus( OBJECT_STATUS_DISGUISED ) &&
+        !obj->testStatus( OBJECT_STATUS_DETECTED ) &&
+        ++a != 0 && // The trick is that this increment does not occur unless all three above conditions are true
+        minAlpha == 32 &&  // tricksy hobbit decoy
+        c != 0 )        // ditto
       {
         g = (UnsignedByte)(rObj->getColor());
         continue;

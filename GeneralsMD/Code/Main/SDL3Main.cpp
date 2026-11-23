@@ -71,7 +71,6 @@ static CriticalSection critSec1;
 static CriticalSection critSec2;
 static CriticalSection critSec3;
 static CriticalSection critSec4;
-static CriticalSection critSec5;
 
 // GLOBAL COMMAND LINE ARGUMENTS
 // TheSuperHackers @build felipebraz 13/02/2026
@@ -439,7 +438,6 @@ int main(int argc, char* argv[])
 		TheUnicodeStringCriticalSection = &critSec2;
 		TheDmaCriticalSection = &critSec3;
 		TheMemoryPoolCriticalSection = &critSec4;
-		TheDebugLogCriticalSection = &critSec5;
 
 		// Initialize memory manager early (required by NEW operator)
 		initMemoryManager();
@@ -456,6 +454,10 @@ int main(int argc, char* argv[])
 		CommandLine::parseCommandLineForStartup();
 
 		// GeneralsX @bugfix Copilot 17/05/2026 Skip SDL3 window bootstrap for CLI/headless replay execution.
+#if defined(SAGE_USE_WEBGPU)
+		setenv("CNC_GENERALS_ZH_PATH", "/GeneralsZH", 0);
+		setenv("CNC_GENERALS_PATH", "/Generals", 0);
+#endif
 		const bool isHeadlessMode = (TheGlobalData != nullptr && TheGlobalData->m_headless);
 		if (isHeadlessMode) {
 			fprintf(stderr, "INFO: Headless mode detected, skipping SDL3 video/Vulkan window initialization\n");
@@ -478,6 +480,10 @@ int main(int argc, char* argv[])
 		}
 
 		// Set DXVK WSI driver before loading Vulkan
+#if defined(SAGE_USE_WEBGPU)
+		setenv("CNC_GENERALS_ZH_PATH", "/GeneralsZH", 1);
+		setenv("CNC_GENERALS_PATH", "/Generals", 1);
+#else
 		setenv("DXVK_WSI_DRIVER", "SDL3", 1);
 
 		// GeneralsX @bugfix BenderAI 06/03/2026 - Exclude LLVMpipe Vulkan ICD before loading Vulkan.
@@ -492,14 +498,21 @@ int main(int argc, char* argv[])
 			fprintf(stderr, "WARNING: Failed to load Vulkan: %s\n", SDL_GetError());
 			fprintf(stderr, "WARNING: Continuing without Vulkan (may use software rendering)\n");
 		}
+#endif
 
-		// Create SDL3 window with Vulkan support
-		fprintf(stderr, "INFO: Creating SDL3 Vulkan window...\n");
+		// Create SDL3 window
+		fprintf(stderr, "INFO: Creating SDL3 window...\n");
+#if defined(SAGE_USE_WEBGPU)
+		// Browser canvas size is synced by WebGPUContext/W3DDisplay; avoid SDL_WINDOW_RESIZABLE so CSS letterboxing does not skew mouse scaling.
+		Uint32 windowFlags = SDL_WINDOW_HIDDEN;
+#else
 		Uint32 windowFlags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;  // Start hidden, show after D3D init
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-		// Request a native-resolution Metal drawable (e.g. 2868x1320 instead of the
-		// 956x440 point size). Without this the swapchain renders at point size and
-		// the display upscales 3x, visibly blurring textures and terrain.
+#endif
+#ifdef __APPLE__
+		// GeneralsX @bugfix macOS HiDPI: request a native-resolution (Retina) Metal drawable so the
+		// DXVK swapchain renders at physical pixels instead of being upscaled by the compositor.
+		// Requires NSHighResolutionCapable=true in the app bundle, the DXVK SDL3 WSI querying pixels
+		// (SDL_GetWindowSizeInPixels), and the density-aware pillarbox/mouse mapping in DX8Wrapper.
 		windowFlags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
 		TheSDL3Window = SDL_CreateWindow(
@@ -513,6 +526,27 @@ int main(int argc, char* argv[])
 			SDL_Quit();
 			return 1;
 		}
+
+		// GeneralsX @bugfix Claude 11/08/2026 Multi-monitor: SDL_CreateWindow() takes no position and
+		// resolves to SDL_WINDOWPOS_UNDEFINED, which SDL maps to display index 0 of its own enumeration
+		// order — not necessarily the OS primary display. On multi-monitor setups the game could open on
+		// a secondary monitor, and fullscreen then inherited that same wrong display. Pin the initial
+		// placement to the primary display while the window is still hidden, so there is no visible jump.
+#if !defined(SAGE_USE_WEBGPU)
+		{
+			const SDL_DisplayID primaryDisplay = SDL_GetPrimaryDisplay();
+			if (primaryDisplay != 0) {
+				const int centered = SDL_WINDOWPOS_CENTERED_DISPLAY(primaryDisplay);
+				if (!SDL_SetWindowPosition(TheSDL3Window, centered, centered)) {
+					// Wayland refuses programmatic positioning and lets the compositor place the window.
+					// Not fatal — the game is still usable, it just lands wherever the compositor decides.
+					fprintf(stderr, "WARNING: SDL_SetWindowPosition(primary display) failed: %s\n", SDL_GetError());
+				}
+			} else {
+				fprintf(stderr, "WARNING: SDL_GetPrimaryDisplay failed: %s\n", SDL_GetError());
+			}
+		}
+#endif
 
 		// Store window handle globally (cast SDL_Window* to HWND for compatibility)
 		ApplicationHWnd = (HWND)TheSDL3Window;
@@ -607,7 +641,6 @@ int main(int argc, char* argv[])
 	TheUnicodeStringCriticalSection = nullptr;
 	TheDmaCriticalSection = nullptr;
 	TheMemoryPoolCriticalSection = nullptr;
-	TheDebugLogCriticalSection = nullptr;
 
 	fprintf(stderr, "\nExiting with code %d\n", exitcode);
 

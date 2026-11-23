@@ -137,8 +137,6 @@ static UnicodeString formatIncomeValue(UnsignedInt cashPerMin)
 /// The InGameUI singleton instance.
 InGameUI *TheInGameUI = nullptr;
 
-GameWindow *m_replayWindow = nullptr;
-
 // ------------------------------------------------------------------------------------------------
 struct KindOfSelectionData
 {
@@ -163,13 +161,13 @@ static Bool kindOfUnitSelection( Drawable *test, void *userData )
 		Bool isKindOfMatch = object->isKindOfMulti(data->m_mustbeSet, data->m_mustbeClear);
 
 		// only select objects if not already selected
-		if( object && isKindOfMatch
-					&& object->isLocallyControlled()
-					&& !object->isContained()
-					&& !object->getDrawable()->isSelected()
-					&& !object->isEffectivelyDead()
-					&& object->isMassSelectable()
-					&& !object->isOffMap()
+		if( object && isKindOfMatch &&
+					object->isLocallyControlled() &&
+					!object->isContained() &&
+					!object->getDrawable()->isSelected() &&
+					!object->isEffectivelyDead() &&
+					object->isMassSelectable() &&
+					!object->isOffMap()
 				)
 		{
 			// enforce optional unit cap
@@ -223,12 +221,12 @@ static Bool similarUnitSelection( Drawable *test, void *userData )
 		}
 
 		// only select objects if not already selected
-		if( object && isEquivalent
-			  && object->isLocallyControlled()
-				&& !object->isContained()
-				&& !( object->getDrawable()->isSelected() )
-				&& object->isMassSelectable() // And only if they can be multiply selected. (otherwise the drawable will be, but the object will not be)
-				&& !object->isOffMap()
+		if( object && isEquivalent &&
+			  object->isLocallyControlled() &&
+				!object->isContained() &&
+				!( object->getDrawable()->isSelected() ) &&
+				object->isMassSelectable() && // And only if they can be multiply selected. (otherwise the drawable will be, but the object will not be)
+				!object->isOffMap()
 				)
 		{
 			// enforce optional unit cap
@@ -252,38 +250,6 @@ static Bool similarUnitSelection( Drawable *test, void *userData )
 		}
 	}
 	return FALSE;
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void showReplayControls()
-{
-	if (m_replayWindow)
-	{
-		Bool show = TheGameLogic->isInReplayGame();
-		m_replayWindow->winHide(!show);
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void hideReplayControls()
-{
-	if (m_replayWindow)
-	{
-		m_replayWindow->winHide(TRUE);
-	}
-}
-
-// ------------------------------------------------------------------------------------------------
-// ------------------------------------------------------------------------------------------------
-void toggleReplayControls()
-{
-	if (m_replayWindow)
-	{
-		Bool show = TheGameLogic->isInReplayGame() && m_replayWindow->winIsHidden();
-		m_replayWindow->winHide(!show);
-	}
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -467,7 +433,7 @@ void InGameUI::xfer( Xfer *xfer )
 					xfer->xferBool(&swInfo->m_hiddenByScript);
 					xfer->xferBool(&swInfo->m_hiddenByScience);
 					xfer->xferBool(&swInfo->m_ready);
-          if ( currentVersion >= 3 )
+          if ( version >= 3 )
           {
             xfer->xferBool( &swInfo->m_evaReadyPlayed );
           }
@@ -514,7 +480,7 @@ void InGameUI::xfer( Xfer *xfer )
 			xfer->xferBool(&hiddenByScript);
 			xfer->xferBool(&hiddenByScience);
 			xfer->xferBool(&ready);
-      if ( currentVersion >= 3 )
+      if ( version >= 3 )
       {
         xfer->xferBool( &evaReadyPlayed );
       }
@@ -919,6 +885,7 @@ const FieldParse InGameUI::s_fieldParseTable[] =
 	{ "RenderFpsBold",          INI::parseBool,         nullptr, offsetof( InGameUI, m_renderFpsBold ) },
 	{ "RenderFpsPosition",      INI::parseCoord2D,      nullptr, offsetof( InGameUI, m_renderFpsPosition ) },
 	{ "RenderFpsColor",         INI::parseColorInt,     nullptr, offsetof( InGameUI, m_renderFpsColor ) },
+	{ "RenderFpsLowColor",      INI::parseColorInt,     nullptr, offsetof( InGameUI, m_renderFpsLowColor ) },
 	{ "RenderFpsLimitColor",    INI::parseColorInt,     nullptr, offsetof( InGameUI, m_renderFpsLimitColor ) },
 	{ "RenderFpsDropColor",     INI::parseColorInt,     nullptr, offsetof( InGameUI, m_renderFpsDropColor ) },
 	{ "RenderFpsRefreshMs",     INI::parseUnsignedInt,  nullptr, offsetof( InGameUI, m_renderFpsRefreshMs ) },
@@ -955,7 +922,21 @@ void INI::parseInGameUIDefinition( INI* ini )
 	{
 		// parse the ini weapon definition
 		ini->initFromINI( TheInGameUI, TheInGameUI->getFieldParse() );
+		TheInGameUI->validate();
 	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void InGameUI::validate()
+{
+#if ENABLE_GUI_HACKS
+	// TheSuperHackers @bugfix bobtista 02/09/2026 Correct the known retail InGameUI.ini message delay typo
+	if (m_messageDelayMS == 75000)
+	{
+		m_messageDelayMS = 7500;
+	}
+#endif
+	m_messageDelayMS = max(0, m_messageDelayMS);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1009,6 +990,7 @@ void InGameUI::PlayerInfoList::init(const AsciiString &fontName, Int pointSize, 
 
 	labels[LabelType_Team]->setText(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:PlayerInfoListLabelTeam", L"T"));
 	labels[LabelType_Money]->setText(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:PlayerInfoListLabelMoney", L"$"));
+	labels[LabelType_MoneyPerMinute]->setText(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:PlayerInfoListLabelMoneyPerMinute", L"+"));
 	labels[LabelType_Rank]->setText(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:PlayerInfoListLabelRank", L"*"));
 	labels[LabelType_Xp]->setText(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:PlayerInfoListLabelXp", L"XP"));
 }
@@ -1150,6 +1132,7 @@ InGameUI::InGameUI()
 
 	}
 
+	m_controlBarWindow = nullptr;
 	m_replayWindow = nullptr;
 	m_messagesOn = TRUE;
 
@@ -1165,6 +1148,7 @@ InGameUI::InGameUI()
 	m_lastNetworkLatencyFrames = ~0u;
 
 	m_renderFpsString = nullptr;
+	m_renderFpsLowString = nullptr;
 	m_renderFpsLimitString = nullptr;
 	m_renderFpsFont = "Tahoma";
 	m_renderFpsPointSize = TheGlobalData->m_renderFpsFontSize;
@@ -1172,10 +1156,12 @@ InGameUI::InGameUI()
 	m_renderFpsPosition.x = kHudAnchorX;
 	m_renderFpsPosition.y = kHudAnchorY;
 	m_renderFpsColor = GameMakeColor( 255, 255, 0, 255 );
+	m_renderFpsLowColor = GameMakeColor( 190, 180, 130, 255 );
 	m_renderFpsLimitColor = GameMakeColor(119, 119, 119, 255);
 	m_renderFpsDropColor = GameMakeColor( 0, 0, 0, 255 );
 	m_renderFpsRefreshMs = 1000;
 	m_lastRenderFps = ~0u;
+	m_lastRenderFpsLow = ~0u;
 	m_lastRenderFpsLimit = ~0u;
 	m_lastRenderFpsUpdateMs = 0u;
 
@@ -1302,6 +1288,9 @@ InGameUI::~InGameUI()
 	// clear world animations
 	clearWorldAnimations();
 	resetIdleWorker();
+
+	destroyReplayControl();
+	destroyControlBar();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1309,13 +1298,8 @@ InGameUI::~InGameUI()
 //-------------------------------------------------------------------------------------------------
 void InGameUI::init()
 {
-	// GeneralsX @tweak GitHubCopilot 27/05/2026 Trace final in-game UI font slots after language overrides.
-	char log_buffer[512];
-
 	INI ini;
 	ini.loadFileDirectory( "Data\\INI\\InGameUI", INI_LOAD_OVERWRITE, nullptr );
-	sprintf(log_buffer, "[GX-ISSUE144] InGameUI init loaded Data\\INI\\InGameUI");
-	fprintf(stderr, "%s\\n", log_buffer);
 
 	//override INI values with language localized values:
 	if (TheGlobalLanguageData)
@@ -1375,22 +1359,6 @@ void InGameUI::init()
 			m_namedTimerReadyPointSize = TheGlobalLanguageData->m_namedTimerCountdownReadyFont.size;
 			m_namedTimerReadyBold = TheGlobalLanguageData->m_namedTimerCountdownReadyFont.bold;
 		}
-
-		sprintf(log_buffer,
-			"[GX-ISSUE144] InGameUI font override drawableCaption=%s size=%d bold=%d defaultWindow=%s size=%d bold=%d unicode=%s",
-			m_drawableCaptionFont.str(),
-			m_drawableCaptionPointSize,
-			m_drawableCaptionBold,
-			TheGlobalLanguageData->m_defaultWindowFont.name.str(),
-			TheGlobalLanguageData->m_defaultWindowFont.size,
-			TheGlobalLanguageData->m_defaultWindowFont.bold,
-			TheGlobalLanguageData->m_unicodeFontName.isNotEmpty() ? TheGlobalLanguageData->m_unicodeFontName.str() : "<empty>");
-		fprintf(stderr, "%s\\n", log_buffer);
-	}
-	else
-	{
-		sprintf(log_buffer, "[GX-ISSUE144] InGameUI init without TheGlobalLanguageData");
-		fprintf(stderr, "%s\\n", log_buffer);
 	}
 
 	/**@ todo we used to put in the hint spy translator, but it's difficult
@@ -1541,19 +1509,6 @@ void InGameUI::handleRadiusCursor()
 {
 	if (!m_curRadiusCursor.isEmpty())
 	{
-		const MouseIO* mouseIO = TheMouse->getMouseStatus();
-		Coord3D pos;
-
-		//
-		// if the mouse is in the radar window, the position in the world is that which is
-		// represented by the radar, otherwise we use the mouse position itself transformed
-		// from screen to world
-		// But only if the radar is on.
-		//
-		if( !rts::localPlayerHasRadar()  ||  (TheRadar->screenPixelToWorld( &mouseIO->pos, &pos ) == FALSE) )// if radar off, or point not on radar
-			TheTacticalView->screenToTerrain( &mouseIO->pos, &pos );
-
-
     if ( TheGlobalData->m_doubleClickAttackMove && m_duringDoubleClickAttackMoveGuardHintTimer > 0 )
     {
       m_curRadiusCursor.setOpacity( m_duringDoubleClickAttackMoveGuardHintTimer * 0.1f );
@@ -1562,8 +1517,31 @@ void InGameUI::handleRadiusCursor()
     }
     else
     {
-  		m_curRadiusCursor.setPosition(pos);	//world space position of center of decal
-      m_curRadiusCursor.update();
+			const MouseIO* mouseIO = TheMouse->getMouseStatus();
+			Coord3D pos;
+			Bool hasPos = false;
+
+			//
+			// if the mouse is in the radar window, the position in the world is that which is
+			// represented by the radar, otherwise we use the mouse position itself transformed
+			// from screen to world, but only if the radar is on.
+			//
+			if( rts::localPlayerHasRadar() )
+			{
+				hasPos = TheRadar->screenPixelToWorld( &mouseIO->pos, &pos );
+			}
+
+			if( !hasPos )
+			{
+				// if radar off, or point not on radar
+				hasPos = TheTacticalView->screenToTerrain( &mouseIO->pos, &pos );
+			}
+
+			if( hasPos )
+			{
+				m_curRadiusCursor.setPosition(pos);	//world space position of center of decal
+				m_curRadiusCursor.update();
+			}
     }
 
   }
@@ -1572,9 +1550,11 @@ void InGameUI::handleRadiusCursor()
 
 void InGameUI::triggerDoubleClickAttackMoveGuardHint()
 {
-  m_duringDoubleClickAttackMoveGuardHintTimer = 11;
 	const MouseIO* mouseIO = TheMouse->getMouseStatus();
-	TheTacticalView->screenToTerrain( &mouseIO->pos, &m_duringDoubleClickAttackMoveGuardHintStashedPosition );
+	if( TheTacticalView->screenToTerrain( &mouseIO->pos, &m_duringDoubleClickAttackMoveGuardHintStashedPosition ) )
+	{
+		m_duringDoubleClickAttackMoveGuardHintTimer = 11;
+	}
 }
 
 
@@ -1667,20 +1647,21 @@ void InGameUI::handleBuildPlacements()
 				Coord3D worldStart, worldEnd;
 
 				// project the start and the end points of the line anchor into the 3D world
-				TheTacticalView->screenToTerrain( &start, &worldStart );
-				TheTacticalView->screenToTerrain( &end, &worldEnd );
-
-				Coord2D v;
-				v.x = worldEnd.x - worldStart.x;
-				v.y = worldEnd.y - worldStart.y;
-				angle = v.toAngle();
-
-				// TheSuperHackers @tweak Stubbjax 04/08/2025 Snap angle to nearest 45 degrees
-				// while using force attack mode for convenience.
-				if (isInForceAttackMode())
+				if( TheTacticalView->screenToTerrain( &start, &worldStart ) &&
+					TheTacticalView->screenToTerrain( &end, &worldEnd ) )
 				{
-					const Real snapRadians = DEG_TO_RADF(45);
-					angle = WWMath::Round(angle / snapRadians) * snapRadians;
+					Coord2D v;
+					v.x = worldEnd.x - worldStart.x;
+					v.y = worldEnd.y - worldStart.y;
+					angle = v.toAngle();
+
+					// TheSuperHackers @tweak Stubbjax 04/08/2025 Snap angle to nearest 45 degrees
+					// while using force attack mode for convenience.
+					if (isInForceAttackMode())
+					{
+						const Real snapRadians = DEG_TO_RADF(45);
+						angle = WWMath::Roundf(angle / snapRadians) * snapRadians;
+					}
 				}
 			}
 
@@ -1697,56 +1678,52 @@ void InGameUI::handleBuildPlacements()
 		// set the location and angle of the place icon
 		/**@todo this whole orientation vector thing is LAME! Must replace, all I want to
 		to do is set a simple angle and have it automatically change, ug! */
-		TheTacticalView->screenToTerrain( &loc, &world );
-		m_placeIcon[ 0 ]->setPosition( &world );
-		m_placeIcon[ 0 ]->setOrientation( angle );
-
-
-		//
-		// check to see if this is a legal location to build something at and tint or "un-tint"
-		// the cursor icons as appropriate.  This involves a pathfind which could be
-		// expensive so we don't want to do it on every frame (although that would be ideal)
-		// If we discover there are cases that this is just too slow we should increase the
-		// delay time between checks or we need to come up with a way of recording what is
-		// valid and what isn't or "fudge" the results to feel "ok"
-		//
-		if( TheGameClient->getFrame() & 0x1 )
+		if( TheTacticalView->screenToTerrain( &loc, &world ) )
 		{
-			TheTerrainVisual->removeAllBibs();
+			m_placeIcon[ 0 ]->setPosition( &world );
+			m_placeIcon[ 0 ]->setOrientation( angle );
 
-			Object *builderObject = TheGameLogic->findObjectByID( getPendingPlaceSourceObjectID() );
-
-			LegalBuildCode lbc;
-			lbc = TheBuildAssistant->isLocationLegalToBuild( &world,
-																											 m_pendingPlaceType,
-																											 angle,
-																											 BuildAssistant::USE_QUICK_PATHFIND |
-																											 BuildAssistant::TERRAIN_RESTRICTIONS |
-																											 BuildAssistant::CLEAR_PATH |
-																											 BuildAssistant::NO_OBJECT_OVERLAP |
-																											 BuildAssistant::SHROUD_REVEALED |
-																											 BuildAssistant::IGNORE_STEALTHED,
-																											 builderObject,
-																											 nullptr );
-
-			if( lbc != LBC_OK )
-				m_placeIcon[ 0 ]->colorTint( &IllegalBuildColor );
-			else
-				m_placeIcon[ 0 ]->colorTint( nullptr );
-
-
-
-
-			// Add the bibs around the structure.
-			if (lbc != LBC_OK)
+			//
+			// check to see if this is a legal location to build something at and tint or "un-tint"
+			// the cursor icons as appropriate.  This involves a pathfind which could be
+			// expensive so we don't want to do it on every frame (although that would be ideal)
+			// If we discover there are cases that this is just too slow we should increase the
+			// delay time between checks or we need to come up with a way of recording what is
+			// valid and what isn't or "fudge" the results to feel "ok"
+			//
+			if( TheGameClient->getFrame() & 0x1 )
 			{
-				TheTerrainVisual->addFactionBibDrawable(m_placeIcon[0], lbc != LBC_OK);
-			} else {
-				TheTerrainVisual->removeFactionBibDrawable(m_placeIcon[0]);
+				TheTerrainVisual->removeAllBibs();
+
+				Object *builderObject = TheGameLogic->findObjectByID( getPendingPlaceSourceObjectID() );
+
+				LegalBuildCode lbc;
+				lbc = TheBuildAssistant->isLocationLegalToBuild( &world,
+																												 m_pendingPlaceType,
+																												 angle,
+																												 BuildAssistant::USE_QUICK_PATHFIND |
+																												 BuildAssistant::TERRAIN_RESTRICTIONS |
+																												 BuildAssistant::CLEAR_PATH |
+																												 BuildAssistant::NO_OBJECT_OVERLAP |
+																												 BuildAssistant::SHROUD_REVEALED |
+																												 BuildAssistant::IGNORE_STEALTHED,
+																												 builderObject,
+																												 nullptr );
+
+				if( lbc != LBC_OK )
+					m_placeIcon[ 0 ]->colorTint( &IllegalBuildColor );
+				else
+					m_placeIcon[ 0 ]->colorTint( nullptr );
+
+				// Add the bibs around the structure.
+				if (lbc != LBC_OK)
+				{
+					TheTerrainVisual->addFactionBibDrawable(m_placeIcon[0], lbc != LBC_OK);
+				} else {
+					TheTerrainVisual->removeFactionBibDrawable(m_placeIcon[0]);
+				}
 			}
 		}
-
-
 
 		//
 		// we have additional place icons when we're placing down a line of walls or other
@@ -1755,77 +1732,78 @@ void InGameUI::handleBuildPlacements()
 		//
 		if( isPlacementAnchored() && TheBuildAssistant->isLineBuildTemplate( m_pendingPlaceType ) )
 		{
-			Int i;
-
 			// get our line placement points
 			ICoord2D screenStart, screenEnd;
 			getPlacementPoints( &screenStart, &screenEnd );
 
 			// project the start and the end points of the line anchor into the 3D world
 			Coord3D worldStart, worldEnd;
-			TheTacticalView->screenToTerrain( &screenStart, &worldStart );
-			TheTacticalView->screenToTerrain( &screenEnd, &worldEnd );
-
-			// how big are each of our objects
-			Real objectSize = m_pendingPlaceType->getTemplateGeometryInfo().getMajorRadius() * 2.0f;
-
-			// what is our max tiling length we can make
-			Int maxObjects = TheGlobalData->m_maxLineBuildObjects;
-
-			// get the builder object that will be constructing things
-			Object *builderObject = TheGameLogic->findObjectByID( getPendingPlaceSourceObjectID() );
-
-			//
-			// given the start/end points in the world and the the angle of the wall, fill
-			// out an array of positions that "tile" this wall across the landscape
-			//
-			BuildAssistant::TileBuildInfo *tileBuildInfo;
-			tileBuildInfo = TheBuildAssistant->buildTiledLocations( m_pendingPlaceType, angle,
-																															&worldStart, &worldEnd,
-																															objectSize, maxObjects,
-																															builderObject );
-
-			// create any necessary drawables we need to "fill out" the line
-			for( i = 0; i < tileBuildInfo->tilesUsed; i++ )
+			if( TheTacticalView->screenToTerrain( &screenStart, &worldStart ) &&
+				TheTacticalView->screenToTerrain( &screenEnd, &worldEnd ) )
 			{
+				// how big are each of our objects
+				Real objectSize = m_pendingPlaceType->getTemplateGeometryInfo().getMajorRadius() * 2.0f;
 
-				if( m_placeIcon[ i ] == nullptr )
+				// what is our max tiling length we can make
+				Int maxObjects = TheGlobalData->m_maxLineBuildObjects;
+
+				// get the builder object that will be constructing things
+				Object *builderObject = TheGameLogic->findObjectByID( getPendingPlaceSourceObjectID() );
+
+				//
+				// given the start/end points in the world and the the angle of the wall, fill
+				// out an array of positions that "tile" this wall across the landscape
+				//
+				BuildAssistant::TileBuildInfo *tileBuildInfo;
+				tileBuildInfo = TheBuildAssistant->buildTiledLocations( m_pendingPlaceType, angle,
+																																&worldStart, &worldEnd,
+																																objectSize, maxObjects,
+																																builderObject );
+
+				// create any necessary drawables we need to "fill out" the line
+				Int i;
+				for( i = 0; i < tileBuildInfo->tilesUsed; i++ )
 				{
-					UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES;
-					drawableStatus |= TheGlobalData->m_objectPlacementShadows ? DRAWABLE_STATUS_SHADOWS : 0;
-					m_placeIcon[ i ] = TheThingFactory->newDrawable( m_pendingPlaceType, drawableStatus );
+
+					if( m_placeIcon[ i ] == nullptr )
+					{
+						UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES;
+						drawableStatus |= TheGlobalData->m_objectPlacementShadows ? DRAWABLE_STATUS_SHADOWS : 0;
+						m_placeIcon[ i ] = TheThingFactory->newDrawable( m_pendingPlaceType, drawableStatus );
+					}
+
 				}
 
-			}
+				//
+				// destroy any drawables that we're not using anymore because a previous
+				// line length was longer
+				//
+				for( i = tileBuildInfo->tilesUsed; i < maxObjects; i++ )
+				{
 
-			//
-			// destroy any drawables that we're not using anymore because a previous
-			// line length was longer
-			//
-			for( i = tileBuildInfo->tilesUsed; i < maxObjects; i++ )
-			{
+					if( m_placeIcon[ i ] != nullptr )
+						TheGameClient->destroyDrawable( m_placeIcon[ i ] );
+					m_placeIcon[ i ] = nullptr;
 
-				if( m_placeIcon[ i ] != nullptr )
-					TheGameClient->destroyDrawable( m_placeIcon[ i ] );
-				m_placeIcon[ i ] = nullptr;
+				}
 
-			}
+				//
+				// march down each drawable and set the position based on its position in the
+				// line and set their angles all the same
+				//
+				for( i = 0; i < tileBuildInfo->tilesUsed; i++ )
+				{
 
-			//
-			// march down each drawable and set the position based on its position in the
-			// line and set their angles all the same
-			//
-			for( i = 0; i < tileBuildInfo->tilesUsed; i++ )
-			{
+					// set the drawable position
+					m_placeIcon[ i ]->setPosition( &tileBuildInfo->positions[ i ] );
 
-				// set the drawable position
-				m_placeIcon[ i ]->setPosition( &tileBuildInfo->positions[ i ] );
+					// set opacity for the drawable
+					m_placeIcon[ i ]->setDrawableOpacity( TheGlobalData->m_objectPlacementOpacity );
 
-				// set opacity for the drawable
-				m_placeIcon[ i ]->setDrawableOpacity( TheGlobalData->m_objectPlacementOpacity );
+					// set the drawable angle
+					m_placeIcon[ i ]->setOrientation( angle );
 
-				// set the drawable angle
-				m_placeIcon[ i ]->setOrientation( angle );
+				}
 
 			}
 
@@ -1900,7 +1878,8 @@ void InGameUI::update()
 	// frame
 	//
 	UnsignedInt currLogicFrame = TheGameLogic->getFrame();
-	const int messageTimeout = m_messageDelayMS / static_cast<float>(LOGICFRAMES_PER_SECOND) / 1000;
+	// TheSuperHackers @bugfix bobtista 13/08/2026 Convert milliseconds to logic frames
+	const int messageTimeout = REAL_TO_INT_CEIL( ConvertDurationFromMsecsToFrames( (Real)m_messageDelayMS ) );
 	UnsignedByte r, g, b, a;
 	Int amount;
 	for( i = MAX_UI_MESSAGES - 1; i >= 0; i-- )
@@ -2298,6 +2277,8 @@ void InGameUI::freeCustomUiResources()
 	m_networkLatencyString = nullptr;
 	TheDisplayStringManager->freeDisplayString(m_renderFpsString);
 	m_renderFpsString = nullptr;
+	TheDisplayStringManager->freeDisplayString(m_renderFpsLowString);
+	m_renderFpsLowString = nullptr;
 	TheDisplayStringManager->freeDisplayString(m_renderFpsLimitString);
 	m_renderFpsLimitString = nullptr;
 	TheDisplayStringManager->freeDisplayString(m_systemTimeString);
@@ -3552,9 +3533,10 @@ void InGameUI::deselectDrawable( Drawable *draw )
 //-------------------------------------------------------------------------------------------------
 /** Clear all drawables' "select" status */
 //-------------------------------------------------------------------------------------------------
-void InGameUI::deselectAllDrawables( Bool postMsg )
+void InGameUI::deselectAllDrawables()
 {
 	const DrawableList *selected = getAllSelectedDrawables();
+	const Bool hadSelectedDrawables = !selected->empty();
 
 	// loop through all the selected drawables
 	for ( DrawableListCIt it = selected->begin(); it != selected->end(); )
@@ -3575,16 +3557,11 @@ void InGameUI::deselectAllDrawables( Bool postMsg )
 	// our selection can no longer consist of exactly one angry mob
 	m_soloNexusSelectedDrawableID = INVALID_DRAWABLE_ID;
 
-
-	///@todo don't we want to not emit this message if there wasn't a group at all? (CBD)
-	/** @todo also, we probably are sending this message too much, we should come up with
-	some kind of "selections are dirty" status that we can check once per frame and send
-	the correct group info over the network ... could be tricky tho (or impossible) given
-	the order of operations of things happening in the code (CBD) */
-	if( postMsg )
+	// TheSuperHackers @tweak Only send this message when objects were previously selected.
+	if (hadSelectedDrawables)
 	{
 		// TheSuperHackers @tweak Originally this message had one boolean argument, but it wasn't used for anything.
-		TheMessageStream->appendMessage( GameMessage::MSG_DESTROY_SELECTED_GROUP );
+		TheMessageStream->appendMessage(GameMessage::MSG_DESTROY_SELECTED_GROUP);
 	}
 }
 
@@ -3799,7 +3776,8 @@ void InGameUI::postDraw()
 		Color dropColor;
 		UnsignedByte r, g, b, a;
 
-		x = m_messagePosition.x;
+		// GeneralsX @feature ClaudeCode 22/11/2026 Game messages start at the left edge of the UI layout rect instead of the far screen corner.
+		x = m_messagePosition.x + TheDisplay->getUILayoutOriginX();
 		y = m_messagePosition.y;
 		for( i = MAX_UI_MESSAGES - 1; i >= 0; i-- )
 		{
@@ -3859,10 +3837,12 @@ void InGameUI::postDraw()
 	if (TheGameLogic->getFrame() > 0 )
 	{
 //	Int superweaponCount = 0;
-		Int startX = (Int)(m_superweaponPosition.x * TheDisplay->getWidth());
+		// GeneralsX @feature ClaudeCode 22/11/2026 Superweapon timers are placed within the UI layout rect.
+		Int startX = TheDisplay->getUILayoutOriginX() + (Int)(m_superweaponPosition.x * TheDisplay->getUILayoutWidth());
 		Int startY = (Int)(m_superweaponPosition.y * TheDisplay->getHeight());
 
-		Int bottomMargin = (Int)( (Real)TheTacticalView->getHeight() * 0.82f );
+		// GeneralsX @feature ClaudeCode 22/11/2026 Stay above the control bar even when the view is drawn at full height behind it.
+		Int bottomMargin = (Int)( (Real)TheTacticalView->getFramingHeight() * 0.82f );
 
 
 
@@ -4069,7 +4049,8 @@ void InGameUI::postDraw()
 	{
 //		Int namedTimerCount = 0;
 		Bool reverseXDir = (m_namedTimerPosition.x >= 0.5f);
-		Int startX = (Int)(m_namedTimerPosition.x * TheDisplay->getWidth());
+		// GeneralsX @feature ClaudeCode 22/11/2026 Named timers are placed within the UI layout rect.
+		Int startX = TheDisplay->getUILayoutOriginX() + (Int)(m_namedTimerPosition.x * TheDisplay->getUILayoutWidth());
 		Int startY = (Int)(m_namedTimerPosition.y * TheDisplay->getHeight());
 		Color bgColor = GameMakeColor( 0, 0, 0, 255 );
 		for (NamedTimerMapIt mapIt = m_namedTimers.begin(); mapIt != m_namedTimers.end(); ++mapIt)
@@ -4208,7 +4189,7 @@ void InGameUI::expireHint( HintType type, UnsignedInt hintIndex )
 void InGameUI::createControlBar()
 {
 
-	TheWindowManager->winCreateFromScript( "ControlBar.wnd" );
+	m_controlBarWindow = TheWindowManager->winCreateFromScript( "ControlBar.wnd" );
 	HideControlBar();
 /*
 	// hide all windows created from this layout
@@ -4217,6 +4198,16 @@ void InGameUI::createControlBar()
 		window->winHide( TRUE );
 */
 
+}
+
+void InGameUI::destroyControlBar()
+{
+	if (m_controlBarWindow != nullptr)
+	{
+		TheWindowManager->winDestroy(m_controlBarWindow);
+		m_controlBarWindow = nullptr;
+		m_idleWorkerWin = nullptr; // This window belongs to the Control Bar and is implicitly deleted as well.
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -4236,11 +4227,48 @@ void InGameUI::createReplayControl()
 
 }
 
+void InGameUI::destroyReplayControl()
+{
+	if (m_replayWindow != nullptr)
+	{
+		TheWindowManager->winDestroy(m_replayWindow);
+		m_replayWindow = nullptr;
+	}
+}
+
+void InGameUI::showReplayControls()
+{
+	if (m_replayWindow)
+	{
+		Bool show = TheGameLogic->isInReplayGame();
+		m_replayWindow->winHide(!show);
+	}
+}
+
+void InGameUI::hideReplayControls()
+{
+	if (m_replayWindow)
+	{
+		m_replayWindow->winHide(TRUE);
+	}
+}
+
+void InGameUI::toggleReplayControls()
+{
+	if (m_replayWindow)
+	{
+		Bool show = TheGameLogic->isInReplayGame() && m_replayWindow->winIsHidden();
+		m_replayWindow->winHide(!show);
+	}
+}
+
 // ------------------------------------------------------------------------------------------------
 // InGameUI::playMovie
 // ------------------------------------------------------------------------------------------------
 void InGameUI::playMovie( const AsciiString& movieName )
 {
+	if (TheGlobalData->m_headless)
+		return;
 
 	stopMovie();
 
@@ -4296,6 +4324,8 @@ VideoBuffer* InGameUI::videoBuffer()
 // ------------------------------------------------------------------------------------------------
 void InGameUI::playCameoMovie( const AsciiString& movieName )
 {
+	if (TheGlobalData->m_headless)
+		return;
 
 	stopCameoMovie();
 
@@ -4430,7 +4460,8 @@ void InGameUI::militarySubtitle( const AsciiString& label, Int duration )
 
 	// calculate where this screen position should be since the position being passed in is based off 8x6
 	Coord2D multiplier;
-	multiplier.x = (Real)TheDisplay->getWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
+	// GeneralsX @feature ClaudeCode 22/11/2026 Military subtitles are placed within the UI layout rect.
+	multiplier.x = (Real)TheDisplay->getUILayoutWidth() / (Real)DEFAULT_DISPLAY_WIDTH;
 	multiplier.y = (Real)TheDisplay->getHeight() / (Real)DEFAULT_DISPLAY_HEIGHT;
 
 	// lets bring out the data structure!
@@ -4440,7 +4471,7 @@ void InGameUI::militarySubtitle( const AsciiString& label, Int duration )
 	m_militarySubtitle->blockDrawn = TRUE;
 	m_militarySubtitle->blockBeginFrame = currLogicFrame;
 	m_militarySubtitle->lifetime = messageTimeout;
-	m_militarySubtitle->blockPos.x =  m_militarySubtitle->position.x = m_militaryCaptionPosition.x * multiplier.x;
+	m_militarySubtitle->blockPos.x =  m_militarySubtitle->position.x = m_militaryCaptionPosition.x * multiplier.x + TheDisplay->getUILayoutOriginX();
 	m_militarySubtitle->blockPos.y =  m_militarySubtitle->position.y = m_militaryCaptionPosition.y * multiplier.y;
 	m_militarySubtitle->incrementOnFrame = currLogicFrame + (Int)(((Real)LOGICFRAMES_PER_SECOND * TheGlobalLanguageData->m_militaryCaptionDelayMS)/1000.0f);
 	m_militarySubtitle->index = 0;
@@ -4683,8 +4714,8 @@ Bool InGameUI::canSelectedObjectsDoAction( ActionType action, const Object *obje
 			case ACTIONTYPE_REPAIR_OBJECT:
 			{
 				ObjectID currentRepairer = objectToInteractWith->getSoleHealingBenefactor();
-				success = ( TheActionManager->canRepairObject( other->getObject(), objectToInteractWith, CMD_FROM_PLAYER )
-										&& ( currentRepairer == INVALID_ID || currentRepairer == other->getObject()->getID() ) );
+				success = ( TheActionManager->canRepairObject( other->getObject(), objectToInteractWith, CMD_FROM_PLAYER ) &&
+										( currentRepairer == INVALID_ID || currentRepairer == other->getObject()->getID() ) );
 											// unless someone else is already healing it...
 											// please note that this add'l test is left out of canRepairObject() since canRepairObject
 											// gets called from within the Dozer/WorkerAIUpdates' stateMachines as they continue the repair process.
@@ -5456,9 +5487,9 @@ void InGameUI::drawFloatingText()
 		ThePartitionManager->worldToCell(ftd->m_pos3D.x, ftd->m_pos3D.y, &pCX, &pCY);
 
 		// translate it's 3d pos into a 2d screen pos
-		if( TheTacticalView->worldToScreen(&ftd->m_pos3D, &pos)
-			&& ftd->m_dString
-			&& ThePartitionManager->getShroudStatusForPlayer(playerIndex, pCX, pCY) == CELLSHROUD_CLEAR )
+		if( TheTacticalView->worldToScreen(&ftd->m_pos3D, &pos) &&
+			ftd->m_dString &&
+			ThePartitionManager->getShroudStatusForPlayer(playerIndex, pCX, pCY) == CELLSHROUD_CLEAR )
 		{
 			pos.y -= ftd->m_frameCount * m_floatingTextMoveUpSpeed;
 			Color dropColor;
@@ -5525,7 +5556,8 @@ void InGameUI::popupMessage( const AsciiString& identifier, Int x, Int y, Int wi
 	if( y < 0 )
 		y = 0;
 
-	m_popupMessageData->x = TheDisplay->getWidth() * (INT_TO_REAL(x) / 100);
+	// GeneralsX @feature ClaudeCode 22/11/2026 Popup messages are placed within the UI layout rect.
+	m_popupMessageData->x = TheDisplay->getUILayoutOriginX() + TheDisplay->getUILayoutWidth() * (INT_TO_REAL(x) / 100);
 	m_popupMessageData->y = TheDisplay->getHeight() * (INT_TO_REAL(y) / 100);
 	// cap the lower limit of the width
 	if(width < 50)
@@ -5674,6 +5706,9 @@ static const UnsignedInt FRAMES_BEFORE_EXPIRE_TO_FADE = static_cast<float>(LOGIC
 // ------------------------------------------------------------------------------------------------
 void InGameUI::updateAndDrawWorldAnimations()
 {
+	// TheSuperHackers @tweak bobtista World animation Z-rise is now decoupled from the render update.
+	const Real zRiseTimeScale = TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
+
 	// go through all animations
 	for( WorldAnimationListIterator it = m_worldAnimationList.begin();
 			 it != m_worldAnimationList.end(); /*empty*/ )
@@ -5682,31 +5717,27 @@ void InGameUI::updateAndDrawWorldAnimations()
 		// get data
 		WorldAnimationData *wad = *it;
 
-		// update portion ... only when the game is in motion
-		if( TheGameLogic->isGamePaused() == FALSE )
+		//
+		// see if it's time to expire this animation based on animation type and options or
+		// the expire frame
+		//
+		if( TheGameLogic->getFrame() >= wad->m_expireFrame ||
+				(BitIsSet( wad->m_options, WORLD_ANIM_PLAY_ONCE_AND_DESTROY ) &&
+				 BitIsSet( wad->m_anim->getStatus(), ANIM_2D_STATUS_COMPLETE )) )
 		{
 
-			//
-			// see if it's time to expire this animation based on animation type and options or
-			// the expire frame
-			//
-			if( TheGameLogic->getFrame() >= wad->m_expireFrame ||
-					(BitIsSet( wad->m_options, WORLD_ANIM_PLAY_ONCE_AND_DESTROY ) &&
-					 BitIsSet( wad->m_anim->getStatus(), ANIM_2D_STATUS_COMPLETE )) )
-			{
+			// delete this element and continue
+			deleteInstance(wad->m_anim);
+			delete wad;
+			it = m_worldAnimationList.erase( it );
+			continue;
 
-				// delete this element and continue
-				deleteInstance(wad->m_anim);
-				delete wad;
-				it = m_worldAnimationList.erase( it );
-				continue;
+		}
 
-			}
-
-			// update the Z value
-			if( wad->m_zRisePerSecond )
-				wad->m_worldPos.z += wad->m_zRisePerSecond / static_cast<float>(LOGICFRAMES_PER_SECOND);
-
+		// update the Z value
+		if( wad->m_zRisePerSecond )
+		{
+			wad->m_worldPos.z += wad->m_zRisePerSecond / LOGICFRAMES_PER_SECOND * zRiseTimeScale;
 		}
 
 		//
@@ -5987,11 +6018,7 @@ void InGameUI::resetIdleWorker()
 
 void InGameUI::recreateControlBar()
 {
-	GameWindow *win = TheWindowManager->winGetWindowFromId(nullptr, TheNameKeyGenerator->nameToKey("ControlBar.wnd"));
-	deleteInstance(win);
-
-	m_idleWorkerWin = nullptr;
-
+	destroyControlBar();
 	createControlBar();
 
 	delete TheControlBar;
@@ -6031,6 +6058,12 @@ void InGameUI::refreshRenderFpsResources()
 		m_lastRenderFpsUpdateMs = 0u;
 	}
 
+	if (!m_renderFpsLowString)
+	{
+		m_renderFpsLowString = TheDisplayStringManager->newDisplayString();
+		m_lastRenderFpsLow = ~0u;
+	}
+
 	if (!m_renderFpsLimitString)
 	{
 		m_renderFpsLimitString = TheDisplayStringManager->newDisplayString();
@@ -6041,6 +6074,7 @@ void InGameUI::refreshRenderFpsResources()
 	Int adjustedRenderFpsFontSize = TheGlobalLanguageData->adjustFontSize(m_renderFpsPointSize);
 	GameFont *fpsFont = TheWindowManager->winFindFont(m_renderFpsFont, adjustedRenderFpsFontSize, m_renderFpsBold);
 	m_renderFpsString->setFont(fpsFont);
+	m_renderFpsLowString->setFont(fpsFont);
 	m_renderFpsLimitString->setFont(fpsFont);
 
 	if (m_renderFpsPointSize > 0)
@@ -6153,6 +6187,15 @@ void InGameUI::updateRenderFpsString()
 		m_renderFpsString->setText(fpsStr);
 		m_lastRenderFps = renderFps;
 	}
+
+	const UnsignedInt renderFpsLow = (UnsignedInt)(TheDisplay->getLow1PercentFPS() + 0.5f);
+	if (renderFpsLow != m_lastRenderFpsLow)
+	{
+		UnicodeString fpsLowStr;
+		fpsLowStr.format(L"\x25BC%u", renderFpsLow);
+		m_renderFpsLowString->setText(fpsLowStr);
+		m_lastRenderFpsLow = renderFpsLow;
+	}
 }
 
 void InGameUI::drawNetworkLatency(Int &x, Int &y)
@@ -6196,19 +6239,22 @@ void InGameUI::drawRenderFps(Int &x, Int &y)
 		updateRenderFpsString();
 	}
 
-	UnsignedInt renderFpsLimit = 0u;
+	UnsignedInt renderFpsLimit = RenderFpsPreset::UncappedFpsValue;
 	if (TheGlobalData->m_useFpsLimit)
 	{
 		renderFpsLimit = (UnsignedInt)TheFramePacer->getFramesPerSecondLimit();
-		if (renderFpsLimit == RenderFpsPreset::UncappedFpsValue)
-		{
-			renderFpsLimit = 0u;
-		}
 	}
 	if (renderFpsLimit != m_lastRenderFpsLimit)
 	{
 		UnicodeString fpsLimitStr;
-		fpsLimitStr.format(L"[%u]", renderFpsLimit);
+		if (renderFpsLimit == RenderFpsPreset::UncappedFpsValue)
+		{
+			fpsLimitStr.format(L"\x25B2X");
+		}
+		else
+		{
+			fpsLimitStr.format(L"\x25B2%u", renderFpsLimit);
+		}
 		m_renderFpsLimitString->setText(fpsLimitStr);
 		m_lastRenderFpsLimit = renderFpsLimit;
 	}
@@ -6219,14 +6265,20 @@ void InGameUI::drawRenderFps(Int &x, Int &y)
 		const Int drawY = kHudAnchorY + y;
 
 		m_renderFpsString->draw(kHudAnchorX + x, drawY, m_renderFpsColor, m_renderFpsDropColor);
-		x += m_renderFpsString->getWidth();
+		x += m_renderFpsString->getWidth() + kHudGapPx / 2;
+		m_renderFpsLowString->draw(kHudAnchorX + x, drawY, m_renderFpsLowColor, m_renderFpsDropColor);
+		x += m_renderFpsLowString->getWidth() + kHudGapPx / 2;
 		m_renderFpsLimitString->draw(kHudAnchorX + x, drawY, m_renderFpsLimitColor, m_renderFpsDropColor);
 		x += m_renderFpsLimitString->getWidth() + kHudGapPx;
 	}
 	else
 	{
-		m_renderFpsString->draw(m_renderFpsPosition.x, m_renderFpsPosition.y, m_renderFpsColor, m_renderFpsDropColor);
-		m_renderFpsLimitString->draw(m_renderFpsPosition.x + m_renderFpsString->getWidth(), m_renderFpsPosition.y, m_renderFpsLimitColor, m_renderFpsDropColor);
+		Int currentX = m_renderFpsPosition.x;
+		m_renderFpsString->draw(currentX, m_renderFpsPosition.y, m_renderFpsColor, m_renderFpsDropColor);
+		currentX += m_renderFpsString->getWidth() + kHudGapPx / 2;
+		m_renderFpsLowString->draw(currentX, m_renderFpsPosition.y, m_renderFpsLowColor, m_renderFpsDropColor);
+		currentX += m_renderFpsLowString->getWidth() + kHudGapPx / 2;
+		m_renderFpsLimitString->draw(currentX, m_renderFpsPosition.y, m_renderFpsLimitColor, m_renderFpsDropColor);
 	}
 }
 
@@ -6284,19 +6336,17 @@ void InGameUI::drawPlayerInfoList()
 	const Int lineH = m_playerInfoList.labels[PlayerInfoList::LabelType_Team]->getFont()->height;
 	const Int columnGap = static_cast<Int>(lineH * (6.0f / 12.0f) + 0.5f);
 
-	AsciiString name;
 	UnicodeString playerInfoListValue;
 	Int rowCount = 0;
 	Int maxValueWidths[PlayerInfoList::LabelType_Count] = {0};
 	Color rowColors[MAX_PLAYER_COUNT] = {0};
 	Int nameValueWidth[MAX_PLAYER_COUNT] = {0};
+	const Bool showMoneyPerMinute = TheGlobalData->m_showMoneyPerMinute;
 	Int column;
 
 	for (Int slotIndex = 0; slotIndex < MAX_SLOTS && rowCount < MAX_PLAYER_COUNT; ++slotIndex)
 	{
-		name.format("player%d", slotIndex);
-		const NameKeyType key = TheNameKeyGenerator->nameToKey(name);
-		Player *player = ThePlayerList->findPlayerWithNameKey(key);
+		Player *player = ThePlayerList->getPlayerFromSlotIndex(slotIndex);
 		if (!player || player->isPlayerObserver())
 			continue;
 
@@ -6304,18 +6354,37 @@ void InGameUI::drawPlayerInfoList()
 
 		const Int row = rowCount++;
 		const UnsignedInt teamValue = (slot && slot->getTeamNumber() >= 0) ? static_cast<UnsignedInt>(slot->getTeamNumber() + 1) : 0;
-		const UnsignedInt moneyValue = player->getMoney()->countMoney();
+		const Money *money = player->getMoney();
+		const UnsignedInt moneyValue = money->countMoney();
+		const UnsignedInt moneyPerMinuteValue = money->getCashPerMinute();
 		const UnsignedInt rankValue = static_cast<UnsignedInt>(player->getRankLevel());
 		const UnsignedInt xpValue = static_cast<UnsignedInt>(player->getSkillPoints());
 		const UnicodeString nameValue = player->getPlayerDisplayName();
 
-		const UnsignedInt currentValues[] = {teamValue, moneyValue, rankValue, xpValue};
+		const UnsignedInt currentValues[] = {
+			teamValue,
+			moneyValue,
+			moneyPerMinuteValue,
+			rankValue,
+			xpValue
+		};
+		static_assert(ARRAY_SIZE(currentValues) == PlayerInfoList::LabelType_Count, "Incorrect array size");
 		for (column = 0; column < ARRAY_SIZE(currentValues); ++column)
 		{
 			UnsignedInt &lastValue = m_playerInfoList.lastValues.values[column][row];
 			if (lastValue != currentValues[column])
 			{
-				playerInfoListValue.format(L"%u", currentValues[column]);
+				if (column == PlayerInfoList::ValueType_MoneyPerMinute)
+				{
+					if (!showMoneyPerMinute)
+						continue;
+
+					playerInfoListValue = formatIncomeValue(currentValues[column]);
+				}
+				else
+				{
+					playerInfoListValue.format(L"%u", currentValues[column]);
+				}
 				m_playerInfoList.values[column][row]->setText(playerInfoListValue);
 				lastValue = currentValues[column];
 			}
@@ -6342,6 +6411,9 @@ void InGameUI::drawPlayerInfoList()
 	Int labelX = baseX;
 	for (column = 0; column < PlayerInfoList::LabelType_Count; ++column)
 	{
+		if (column == PlayerInfoList::LabelType_MoneyPerMinute && !showMoneyPerMinute)
+			continue;
+
 		labelWidths[column] = m_playerInfoList.labels[column]->getWidth();
 		columnLabelX[column] = labelX;
 		labelX += labelWidths[column] + maxValueWidths[column] + columnGap;
@@ -6354,6 +6426,9 @@ void InGameUI::drawPlayerInfoList()
 
 		for (column = 0; column < PlayerInfoList::LabelType_Count; ++column)
 		{
+			if (column == PlayerInfoList::LabelType_MoneyPerMinute && !showMoneyPerMinute)
+				continue;
+
 			m_playerInfoList.labels[column]->draw(columnLabelX[column], drawY, m_playerInfoListLabelColor, m_playerInfoListDropColor);
 			m_playerInfoList.values[column][row]->draw(columnLabelX[column] + labelWidths[column], drawY, m_playerInfoListValueColor, m_playerInfoListDropColor);
 		}
