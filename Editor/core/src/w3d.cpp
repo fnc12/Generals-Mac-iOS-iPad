@@ -19,7 +19,9 @@ namespace end_editor {
             chunkTextures = 0x030,
             chunkTexture = 0x031,
             chunkTextureName = 0x032,
+            chunkShaders = 0x029,
             chunkMaterialPass = 0x038,
+            chunkShaderIds = 0x03A,
             chunkTextureStage = 0x048,
             chunkTextureIds = 0x049,
             chunkStageTexcoords = 0x04A,
@@ -143,6 +145,11 @@ namespace end_editor {
                             mesh.textures.push_back(name);
                         });
                         break;
+                    case chunkShaders:
+                        for(std::size_t offset = 0; offset + 16 <= chunk.data.size(); offset += 16) {
+                            mesh.shaders.push_back(blendOfShader(chunk.data.substr(offset, 16)));
+                        }
+                        break;
                     case chunkMaterialPass:
                         // The preview draws the first pass and its first texture stage only.
                         if(passSeen) {
@@ -150,6 +157,10 @@ namespace end_editor {
                         }
                         passSeen = true;
                         forEachChunk(chunk.data, warnings, [&](const Chunk &pass) {
+                            if(pass.type == chunkShaderIds) {
+                                mesh.triangleShaders = getArray<std::uint32_t>(pass.data, pass.data.size() / 4);
+                                return;
+                            }
                             if(pass.type != chunkTextureStage || !mesh.uvs.empty()) {
                                 return;
                             }
@@ -195,6 +206,13 @@ namespace end_editor {
             }
             if(mesh.triangleTextures.size() != triangles) {
                 mesh.triangleTextures.clear();
+            }
+            if(mesh.triangleShaders.size() == 1) {
+                const std::uint32_t only = mesh.triangleShaders[0];
+                mesh.triangleShaders.assign(triangles, only);
+            }
+            if(mesh.triangleShaders.size() != triangles) {
+                mesh.triangleShaders.clear();
             }
             return mesh;
         }
@@ -510,6 +528,25 @@ namespace end_editor {
             m[14] = t[2];
             return m;
         }
+    }
+
+    W3dBlend blendOfShader(std::string_view shader) {
+        // W3dShaderStruct: DestBlend at 3, SrcBlend at 7, AlphaTest at 12 (enums in w3d_file.h)
+        const auto destination = get<std::uint8_t>(shader, 3);
+        const auto source = get<std::uint8_t>(shader, 7);
+        const bool alphaTest = get<std::uint8_t>(shader, 12) != 0;
+        enum { destZero = 0, destOne = 1, destSrcColor = 2, destOneMinusSrcAlpha = 5 };
+        enum { srcZero = 0, srcOne = 1, srcSrcAlpha = 2 };
+        if(destination == destOne) {
+            return W3dBlend::additive;
+        }
+        if(destination == destOneMinusSrcAlpha && source == srcSrcAlpha) {
+            return W3dBlend::alphaBlend;
+        }
+        if(destination == destSrcColor || (source == srcZero && destination != destZero)) {
+            return W3dBlend::multiply;
+        }
+        return alphaTest ? W3dBlend::alphaTest : W3dBlend::opaque;
     }
 
     W3dFile parseW3d(std::string_view bytes) {

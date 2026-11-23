@@ -18,6 +18,11 @@ namespace end_editor {
         std::string editorSorting;
         std::string displayName;  // label for the string table, e.g. "OBJECT:Ranger"
         std::string model;  // W3D model of the first Draw module (default condition state first)
+        // What that Draw module keeps hidden when idle, space separated: the WeaponMuzzleFlash
+        // names (bones "<name>01", "<name>02"... show only while firing) and the default state's
+        // HideSubObject names.
+        std::string muzzleFlashes;
+        std::string hiddenSubObjects;
         std::string sourceFile;
         int line = 0;
     };

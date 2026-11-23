@@ -66,9 +66,23 @@ namespace end_editor_tests {
         return chunk(type, body, true);
     }
 
+    // A W3dShaderStruct with the given blend functions (w3d_file.h enums) and alpha test.
+    inline std::string shader(std::uint8_t sourceBlend, std::uint8_t destinationBlend, bool alphaTest) {
+        std::string bytes(16, '\0');
+        bytes[1] = 1;  // depth writes on
+        bytes[3] = char(destinationBlend);
+        bytes[7] = char(sourceBlend);
+        bytes[12] = alphaTest ? 1 : 0;
+        return bytes;
+    }
+    inline std::string opaqueShader() {
+        return shader(1, 0, false);
+    }
+
     // A textured square of two triangles in the XY plane.
     inline std::string squareMesh(const std::string &meshName, const std::string &containerName,
-                                  const std::string &texture, std::uint32_t attributes = 0) {
+                                  const std::string &texture, std::uint32_t attributes = 0,
+                                  const std::string &shaderBytes = opaqueShader()) {
         Bytes header;
         header.u32(0x00040002).u32(attributes).name(meshName, 16).name(containerName, 16);
         header.u32(2).u32(4);  // triangles, vertices
@@ -80,13 +94,16 @@ namespace end_editor_tests {
             triangles.u32(tri[0]).u32(tri[1]).u32(tri[2]).u32(0).floats({0, 0, 1, 0});
         }
         uvs.floats({0, 0, 1, 0, 1, 1, 0, 1});
-        Bytes textureId;
+        Bytes textureId, shaderId;
         textureId.u32(0);  // one id for every triangle
+        shaderId.u32(0);
         return container(
             0x000, {chunk(0x01F, header.data), chunk(0x002, vertices.data), chunk(0x003, normals.data),
                     chunk(0x020, triangles.data),
+                    chunk(0x029, shaderBytes),
                     container(0x030, {container(0x031, {chunk(0x032, texture + std::string(1, '\0'))})}),
-                    container(0x038, {container(0x048, {chunk(0x049, textureId.data), chunk(0x04A, uvs.data)})})});
+                    container(0x038, {chunk(0x03A, shaderId.data),
+                                      container(0x048, {chunk(0x049, textureId.data), chunk(0x04A, uvs.data)})})});
     }
 
     struct TestPivot {

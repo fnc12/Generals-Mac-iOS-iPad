@@ -29,6 +29,10 @@ namespace end_editor {
         bool skinned = false;
         bool twoSided = false;
         bool hidden = false;  // hidden by default (damage states, muzzle flashes...)
+        W3dBlend blend = W3dBlend::opaque;
+        // How the player's color shows (W3DAssetManager::Recolor_Mesh): 1 = "ZHC*" texture,
+        // where low alpha means player color; 2 = "HOUSECOLOR*" mesh, tinted as a whole.
+        int houseColor = 0;
         std::vector<ModelVertex> vertices;
         std::vector<std::uint32_t> indices;
     };
@@ -65,7 +69,14 @@ namespace end_editor {
       public:
         explicit ModelLoader(const GameFiles &files) : files(files) {}
 
-        LoadedModel load(const std::string &modelName);
+        // What the object's Draw module keeps hidden (ObjectInfo::muzzleFlashes and
+        // ::hiddenSubObjects, space separated).
+        struct Hiding {
+            std::string muzzleFlashes;
+            std::string subObjects;
+        };
+
+        LoadedModel load(const std::string &modelName, const Hiding &hiding = {});
 
         // Pose of `model` for an animation from model.animations; the bind pose (one frame)
         // when `animationName` is empty or unknown.

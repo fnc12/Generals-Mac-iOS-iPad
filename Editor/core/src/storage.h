@@ -30,6 +30,8 @@ namespace end_editor {
         std::string editorSorting;
         std::string displayName;
         std::string model;
+        std::string muzzleFlashes;
+        std::string hiddenSubObjects;
         std::string sourceFile;
         int line = 0;
     };
@@ -68,6 +70,8 @@ namespace end_editor {
         bool skinned = false;
         bool twoSided = false;
         bool hidden = false;
+        int blend = 0;  // 0 opaque, 1 alpha test, 2 alpha blend, 3 additive, 4 multiply
+        int houseColor = 0;  // 0 none, 1 texture alpha marks player color, 2 whole part tinted
         std::vector<char> vertices;
         std::vector<char> indices;
     };
@@ -118,6 +122,8 @@ namespace end_editor {
                        make_column("editor_sorting", &ObjectRow::editorSorting),
                        make_column("display_name", &ObjectRow::displayName),
                        make_column("model", &ObjectRow::model),
+                       make_column("muzzle_flashes", &ObjectRow::muzzleFlashes),
+                       make_column("hidden_sub_objects", &ObjectRow::hiddenSubObjects),
                        make_column("source_file", &ObjectRow::sourceFile),
                        make_column("line", &ObjectRow::line)),
             make_table("warnings",
@@ -149,6 +155,8 @@ namespace end_editor {
                        make_column("skinned", &ModelPartRow::skinned),
                        make_column("two_sided", &ModelPartRow::twoSided),
                        make_column("hidden", &ModelPartRow::hidden),
+                       make_column("blend", &ModelPartRow::blend),
+                       make_column("house_color", &ModelPartRow::houseColor),
                        make_column("vertices", &ModelPartRow::vertices),
                        make_column("indices", &ModelPartRow::indices)),
             make_table("model_bones",

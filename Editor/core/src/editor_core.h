@@ -43,7 +43,7 @@ namespace end_editor {
                        std::int64_t objectCount);
         void setModelState(const std::string &name, const std::string &state, const std::string &message);
         void runOpenGame(const Job &job);
-        void runOpenModel(const std::string &name);
+        void runOpenModel(const std::vector<std::string> &arguments);
         void runPlayAnimation(const std::string &name);
 
         std::string path;

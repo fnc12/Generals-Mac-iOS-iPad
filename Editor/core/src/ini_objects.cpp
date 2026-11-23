@@ -96,6 +96,16 @@ namespace end_editor {
             const auto end = s.find_first_of(" \t");
             return s.substr(0, end);
         }
+
+        void appendWord(std::string &list, std::string_view word) {
+            if(word.empty()) {
+                return;
+            }
+            if(!list.empty()) {
+                list += ' ';
+            }
+            list += word;
+        }
     }
 
     ObjectParseResult parseObjects(std::string_view text, std::string_view sourceFile) {
@@ -103,6 +113,7 @@ namespace end_editor {
         ObjectInfo current;
         std::vector<std::string_view> blocks;  // open blocks; blocks[0] is the object itself
         bool modelFromDefaultState = false;
+        bool drawDone = false;  // the Draw module that gave the model is finished
         int lineNumber = 0;
 
         auto warn = [&](const std::string &message) {
@@ -138,11 +149,15 @@ namespace end_editor {
                 current.sourceFile = std::string(sourceFile);
                 current.line = lineNumber;
                 modelFromDefaultState = false;
+                drawDone = false;
                 blocks.push_back(key);
                 continue;
             }
 
             if(equalsNoCase(key, "End")) {
+                if(blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") && !current.model.empty()) {
+                    drawDone = true;  // later Draw modules (e.g. the tread or upgrade draws) are not read
+                }
                 blocks.pop_back();
                 if(blocks.empty()) {
                     result.objects.push_back(std::move(current));
@@ -167,7 +182,18 @@ namespace end_editor {
                 } else if(equalsNoCase(key, "DisplayName")) {
                     current.displayName = value;
                 }
-            } else if(equalsNoCase(key, "Model") && equalsNoCase(blocks[1], "Draw")) {
+            } else if(equalsNoCase(key, "WeaponMuzzleFlash") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
+                // "WeaponMuzzleFlash = PRIMARY TurretFX": slot, then the bone name prefix
+                const auto afterSlot = trim(rest.substr(std::min(rest.size(), firstWord(rest).size())));
+                appendWord(current.muzzleFlashes, firstWord(afterSlot));
+            } else if(equalsNoCase(key, "HideSubObject") && equalsNoCase(blocks[1], "Draw") && !drawDone &&
+                      (blocks.size() == 2 || equalsNoCase(blocks.back(), "DefaultConditionState"))) {
+                for(auto names = rest; !names.empty();) {
+                    const auto name = firstWord(names);
+                    appendWord(current.hiddenSubObjects, name);
+                    names = trim(names.substr(name.size()));
+                }
+            } else if(equalsNoCase(key, "Model") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
                 const bool inDefaultState = equalsNoCase(blocks.back(), "DefaultConditionState");
                 if(current.model.empty() || (inDefaultState && !modelFromDefaultState)) {
                     current.model = std::string(firstWord(rest));
@@ -209,6 +235,8 @@ namespace end_editor {
                 inherit(object.editorSorting, parent->editorSorting);
                 inherit(object.displayName, parent->displayName);
                 inherit(object.model, parent->model);
+                inherit(object.muzzleFlashes, parent->muzzleFlashes);
+                inherit(object.hiddenSubObjects, parent->hiddenSubObjects);
             }
         }
     }

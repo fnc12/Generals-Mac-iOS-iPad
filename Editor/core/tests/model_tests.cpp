@@ -62,6 +62,71 @@ TEST_CASE("W3D mesh") {
     CHECK(mesh.triangleTextures == std::vector<std::uint32_t>{0, 0});
 }
 
+TEST_CASE("W3D shaders become blend modes") {
+    CHECK(blendOfShader(shader(1, 0, false)) == W3dBlend::opaque);
+    CHECK(blendOfShader(shader(1, 0, true)) == W3dBlend::alphaTest);
+    CHECK(blendOfShader(shader(2, 5, false)) == W3dBlend::alphaBlend);
+    CHECK(blendOfShader(shader(1, 1, false)) == W3dBlend::additive);
+    CHECK(blendOfShader(shader(2, 1, false)) == W3dBlend::additive);
+    CHECK(blendOfShader(shader(0, 2, false)) == W3dBlend::multiply);
+    const auto file = parseW3d(squareMesh("GLOW", "LAMP", "glow.tga", 0, shader(1, 1, false)));
+    REQUIRE(file.meshes.size() == 1);
+    CHECK(file.meshes[0].shaders == std::vector<W3dBlend>{W3dBlend::additive});
+    CHECK(file.meshes[0].triangleShaders == std::vector<std::uint32_t>{0, 0});
+}
+
+TEST_CASE("What the Draw module hides when idle") {
+    // bones: root, TURRET, MUZZLEFX01 (under the turret), GUN (under the turret)
+    const std::vector<TestPivot> bones = {
+        TestPivot{"ROOTTRANSFORM", 0xFFFFFFFFu, {0, 0, 0}, {0, 0, 0, 1}},
+        TestPivot{"TURRET", 0, {0, 0, 1}, {0, 0, 0, 1}},
+        TestPivot{"MUZZLEFX01", 1, {1, 0, 0}, {0, 0, 0, 1}},
+        TestPivot{"GUN", 1, {1, 0, 0}, {0, 0, 0, 1}}};
+    const std::string file = squareMesh("HULL", "HIDER", "ZHCHider.tga") + squareMesh("TURRET", "HIDER", "a.tga") +
+                             squareMesh("FLASH", "HIDER", "a.tga", 0, shader(1, 1, false)) +
+                             squareMesh("GUNFX01", "HIDER", "a.tga") + squareMesh("HOUSECOLOR01", "HIDER", "a.tga") +
+                             hierarchy("HIDER_SKL", bones) +
+                             hlod("HIDER", "HIDER_SKL",
+                                  {{0, "HIDER.HULL"}, {1, "HIDER.TURRET"}, {2, "HIDER.FLASH"}, {3, "HIDER.GUNFX01"},
+                                   {0, "HIDER.HOUSECOLOR01"}});
+    const auto folder = makeTempFolder("hiding");
+    writeBig(folder / "W3D.big", {{"Art\\W3D\\Hider.w3d", file}});
+    GameFiles files;
+    std::vector<std::string> warnings;
+    std::string error;
+    REQUIRE(files.mount({folder}, warnings, error));
+    ModelLoader loader(files);
+    const auto hiddenParts = [&](const ModelLoader::Hiding &hiding) {
+        std::vector<std::string> names;
+        for(const auto &part: loader.load("Hider", hiding).parts) {
+            if(part.hidden) {
+                names.push_back(part.mesh);
+            }
+        }
+        return names;
+    };
+
+    {
+        const auto plain = loader.load("Hider");
+        INFO(plain.error);
+        INFO((warnings.empty() ? std::string("no mount warnings") : warnings.front()));
+        REQUIRE(plain.parts.size() == 5);
+    }
+    CHECK(hiddenParts({}).empty());
+    // a bone named like the flash: what hangs on it hides
+    CHECK(hiddenParts({"MuzzleFX", ""}) == std::vector<std::string>{"HIDER.FLASH"});
+    // no such bone: the name is looked up among the sub-objects, then their bone hides
+    CHECK(hiddenParts({"GunFX", ""}) == std::vector<std::string>{"HIDER.GUNFX01"});
+    // a hidden sub-object takes the bones below its own with it
+    CHECK(hiddenParts({"", "Turret"}) == std::vector<std::string>{"HIDER.TURRET", "HIDER.FLASH", "HIDER.GUNFX01"});
+
+    const auto model = loader.load("Hider");
+    CHECK(model.parts[0].houseColor == 1);  // "ZHC" texture
+    CHECK(model.parts[1].houseColor == 0);
+    CHECK(model.parts[2].blend == W3dBlend::additive);
+    CHECK(model.parts[4].houseColor == 2);  // "HOUSECOLOR" mesh
+}
+
 TEST_CASE("Broken W3D gives warnings, not a crash") {
     std::string bytes = squareMesh("HULL", "BOAT", "Boat.tga");
     SECTION("cut short") {

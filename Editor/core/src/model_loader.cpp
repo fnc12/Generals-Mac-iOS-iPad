@@ -48,17 +48,28 @@ namespace end_editor {
             if(mesh.isSkin() && mesh.boneIds.empty()) {
                 warnings.push_back("skin " + mesh.fullName() + " has no bone links");
             }
-            std::map<std::uint32_t, std::vector<std::uint32_t>> trianglesByTexture;
+            // (texture index, shader index) -> triangles
+            std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<std::uint32_t>> trianglesByMaterial;
             const std::size_t triangleCount = mesh.indices.size() / 3;
             for(std::size_t t = 0; t < triangleCount; ++t) {
                 const std::uint32_t texture = mesh.triangleTextures.empty() ? 0 : mesh.triangleTextures[t];
-                trianglesByTexture[texture].push_back(std::uint32_t(t));
+                const std::uint32_t shader = mesh.triangleShaders.empty() ? 0 : mesh.triangleShaders[t];
+                trianglesByMaterial[{texture, shader}].push_back(std::uint32_t(t));
             }
-            for(const auto &[textureIndex, triangles]: trianglesByTexture) {
+            for(const auto &[material, triangles]: trianglesByMaterial) {
+                const auto [textureIndex, shaderIndex] = material;
                 ModelPart part;
                 part.mesh = mesh.fullName();
                 if(!mesh.uvs.empty() && textureIndex < mesh.textures.size()) {
                     part.texture = lower(mesh.textures[textureIndex]);
+                }
+                if(shaderIndex < mesh.shaders.size()) {
+                    part.blend = mesh.shaders[shaderIndex];
+                }
+                if(part.texture.rfind("zhc", 0) == 0) {
+                    part.houseColor = 1;
+                } else if(lower(mesh.name).rfind("housecolor", 0) == 0) {
+                    part.houseColor = 2;
                 }
                 part.bone = bone;
                 part.skinned = skinned;
@@ -141,7 +152,97 @@ namespace end_editor {
         return {};
     }
 
-    LoadedModel ModelLoader::load(const std::string &modelName) {
+    namespace {
+        std::vector<std::string> words(const std::string &text) {
+            std::vector<std::string> result;
+            std::size_t start = 0;
+            while(start < text.size()) {
+                const auto end = text.find(' ', start);
+                const auto word = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                if(!word.empty()) {
+                    result.push_back(lower(word));
+                }
+                if(end == std::string::npos) {
+                    break;
+                }
+                start = end + 1;
+            }
+            return result;
+        }
+
+        // "turretfx" matches "TURRETFX", "TURRETFX01", "TURRETFX02"... (the engine tries the
+        // name itself and "<name>01" to "<name>99").
+        bool isNumberedName(const std::string &candidate, const std::string &prefix) {
+            const auto name = lower(candidate);
+            if(name.size() < prefix.size() || name.compare(0, prefix.size(), prefix) != 0) {
+                return false;
+            }
+            const auto digits = name.size() - prefix.size();
+            return (digits == 0 || digits == 2) &&
+                   std::all_of(name.begin() + std::ptrdiff_t(prefix.size()), name.end(),
+                               [](char c) { return c >= '0' && c <= '9'; });
+        }
+
+        std::string shortMeshName(const std::string &mesh) {
+            const auto dot = mesh.find('.');
+            return lower(dot == std::string::npos ? mesh : mesh.substr(dot + 1));
+        }
+
+        bool isBoneOrChild(const W3dHierarchy &hierarchy, std::uint32_t bone, std::uint32_t ancestor) {
+            for(int current = int(bone), depth = 0; current >= 0 && depth < 256; ++depth) {
+                if(std::uint32_t(current) == ancestor) {
+                    return true;
+                }
+                if(std::size_t(current) >= hierarchy.pivots.size()) {
+                    return false;
+                }
+                current = hierarchy.pivots[std::size_t(current)].parent;
+            }
+            return false;
+        }
+
+        // Applies the Draw module's idle hiding, the way W3DModelDraw does it. A muzzle flash
+        // name is looked up as bones first, then as sub-objects (ModelConditionInfo's bone
+        // cache), and what hangs on the bone found is hidden. HideSubObject hides the named
+        // sub-object and everything on its bone and the bones below.
+        void applyHiding(LoadedModel &model, const ModelLoader::Hiding &hiding) {
+            const auto &pivots = model.hierarchy.pivots;
+            for(const auto &prefix: words(hiding.muzzleFlashes)) {
+                std::set<std::uint32_t> bones;
+                for(std::size_t b = 0; b < pivots.size(); ++b) {
+                    if(isNumberedName(pivots[b].name, prefix)) {
+                        bones.insert(std::uint32_t(b));
+                    }
+                }
+                if(bones.empty()) {
+                    for(const auto &part: model.parts) {
+                        if(!part.skinned && isNumberedName(shortMeshName(part.mesh), prefix)) {
+                            bones.insert(part.bone);
+                        }
+                    }
+                }
+                for(auto &part: model.parts) {
+                    if(!part.skinned && bones.count(part.bone) != 0) {
+                        part.hidden = true;
+                    }
+                }
+            }
+            for(const auto &name: words(hiding.subObjects)) {
+                for(const auto &named: model.parts) {
+                    if(shortMeshName(named.mesh) != name && lower(named.mesh) != name) {
+                        continue;
+                    }
+                    for(auto &part: model.parts) {
+                        if(&part == &named || (!part.skinned && isBoneOrChild(model.hierarchy, part.bone, named.bone))) {
+                            part.hidden = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LoadedModel ModelLoader::load(const std::string &modelName, const Hiding &hiding) {
         this->cache.clear();
         LoadedModel model;
         model.name = modelName;
@@ -223,6 +324,7 @@ namespace end_editor {
             model.error = "the model has no meshes to show";
             return model;
         }
+        applyHiding(model, hiding);
 
         // Bounds of the bind pose, for the camera.
         const auto bind = poseHierarchy(model.hierarchy, nullptr, 0);

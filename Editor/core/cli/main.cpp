@@ -1,7 +1,8 @@
 // Headless harness: drives the core through the C ABI, the way a client does, and prints what
 // the store holds.
 //   end-editor-cli <game folder> [--base <base Generals folder>] [--db <path>]
-//                  [--model <name> [--anim <animation>]] [--all-models]
+//                  [--model <name> | --object <object name>] [--anim <animation>] [--all-models]
+// --object opens the object's model with what its Draw module hides when idle, like the app.
 // --all-models opens the model of every object and prints a summary of what failed.
 #include "end_editor/editor_core_c.h"
 
@@ -54,7 +55,7 @@ namespace {
 }
 
 int main(int argc, char **argv) {
-    std::string gameDir, baseDir, dbArg, modelName, animation;
+    std::string gameDir, baseDir, dbArg, modelName, objectName, animation;
     bool allModels = false;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -65,6 +66,8 @@ int main(int argc, char **argv) {
             dbArg = next();
         } else if(arg == "--model") {
             modelName = next();
+        } else if(arg == "--object") {
+            objectName = next();
         } else if(arg == "--anim") {
             animation = next();
         } else if(arg == "--all-models") {
@@ -99,8 +102,19 @@ int main(int argc, char **argv) {
     std::printf("-- warnings (first 20)\n");
     print("SELECT text FROM warnings LIMIT 20");
 
-    if(!modelName.empty()) {
-        send("model.open\t" + modelName);
+    std::string openCommand = modelName.empty() ? "" : "model.open\t" + modelName;
+    if(!objectName.empty()) {
+        const auto row = column(("SELECT model || char(9) || muzzle_flashes || char(9) || hidden_sub_objects FROM objects "
+                                 "WHERE name = '" + objectName + "'").c_str());
+        if(row.empty()) {
+            std::fprintf(stderr, "no object %s\n", objectName.c_str());
+            return 1;
+        }
+        openCommand = "model.open\t" + row.front();
+        std::printf("-- object %s: %s\n", objectName.c_str(), row.front().c_str());
+    }
+    if(!openCommand.empty()) {
+        send(openCommand);
         if(!animation.empty()) {
             send("model.animation\t" + animation);
         }
@@ -108,7 +122,8 @@ int main(int argc, char **argv) {
         print("SELECT name, state, message, bone_count, animation, frame_count, frame_rate, length(pose), "
               "min_x, min_y, min_z, max_x, max_y, max_z FROM model");
         std::printf("-- parts\n");
-        print("SELECT mesh, texture, bone, skinned, hidden, length(vertices) / 36, length(indices) / 12 FROM model_parts");
+        print("SELECT mesh, texture, bone, skinned, hidden, blend, house_color, length(vertices) / 36, length(indices) / 12 "
+              "FROM model_parts");
         std::printf("-- textures\n");
         print("SELECT name, width, height FROM model_textures");
         std::printf("-- animations\n");

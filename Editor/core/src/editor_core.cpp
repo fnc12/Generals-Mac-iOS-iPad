@@ -104,7 +104,7 @@ namespace end_editor {
                 break;
             case Job::openModel:
                 if(!supersededBy([](auto kind) { return kind != Job::playAnimation; })) {
-                    this->runOpenModel(job.arguments.front());
+                    this->runOpenModel(job.arguments);
                 }
                 break;
             case Job::playAnimation:
@@ -167,6 +167,8 @@ namespace end_editor {
                 row.editorSorting = object.editorSorting;
                 row.displayName = object.displayName;
                 row.model = object.model;
+                row.muzzleFlashes = object.muzzleFlashes;
+                row.hiddenSubObjects = object.hiddenSubObjects;
                 row.sourceFile = object.sourceFile;
                 row.line = object.line;
                 this->storage->insert(row);
@@ -185,8 +187,16 @@ namespace end_editor {
         }
     }
 
-    void EditorCore::runOpenModel(const std::string &name) {
-        this->model = this->loader->load(name);
+    void EditorCore::runOpenModel(const std::vector<std::string> &arguments) {
+        const std::string &name = arguments.front();
+        ModelLoader::Hiding hiding;
+        if(arguments.size() > 1) {
+            hiding.muzzleFlashes = arguments[1];
+        }
+        if(arguments.size() > 2) {
+            hiding.subObjects = arguments[2];
+        }
+        this->model = this->loader->load(name, hiding);
         std::string poseError;
         const auto pose = this->model.error.empty() ? this->loader->pose(this->model, "", poseError) : ModelPose{};
         this->storage->transaction([&] {
@@ -206,6 +216,8 @@ namespace end_editor {
                 row.skinned = part.skinned;
                 row.twoSided = part.twoSided;
                 row.hidden = part.hidden;
+                row.blend = int(part.blend);
+                row.houseColor = part.houseColor;
                 row.vertices = toBlob(part.vertices);
                 row.indices = toBlob(part.indices);
                 this->storage->insert(row);

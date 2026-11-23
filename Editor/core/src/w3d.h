@@ -19,6 +19,12 @@ namespace end_editor {
         constexpr std::uint32_t meshGeometrySkin = 0x00020000;
     }
 
+    // How a mesh is drawn, reduced from W3dShaderStruct's blend functions and alpha test.
+    enum class W3dBlend : std::uint8_t { opaque = 0, alphaTest = 1, alphaBlend = 2, additive = 3, multiply = 4 };
+
+    // `shader` is one 16-byte W3dShaderStruct.
+    W3dBlend blendOfShader(std::string_view shader);
+
     struct W3dMesh {
         std::string name;       // "TURRET"
         std::string container;  // "AVTANK" (the model it belongs to)
@@ -30,6 +36,8 @@ namespace end_editor {
         std::vector<std::uint32_t> indices;  // 3 per triangle
         std::vector<std::string> textures;   // texture file names ("avtank.tga")
         std::vector<std::uint32_t> triangleTextures;  // per triangle index into `textures`; empty = all 0
+        std::vector<W3dBlend> shaders;                // of the first pass
+        std::vector<std::uint32_t> triangleShaders;   // per triangle index into `shaders`; empty = all 0
 
         std::string fullName() const {
             return this->container.empty() ? this->name : this->container + "." + this->name;

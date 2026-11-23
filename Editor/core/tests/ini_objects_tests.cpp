@@ -18,6 +18,18 @@ Object TestBoat
       Model = TBoat   ; the healthy model
       Turret = TurretBone
       Animation = TBoat.TBoat
+      WeaponMuzzleFlash = PRIMARY GunFX
+      WeaponMuzzleFlash = SECONDARY RocketFX
+      HideSubObject = Sail Flag01
+    End
+    ConditionState = REALLYDAMAGED
+      HideSubObject = Mast   ; only when damaged
+    End
+  End
+  Draw = W3DModelDraw ModuleTag_Wake
+    DefaultConditionState
+      Model = TBoatWake
+      HideSubObject = NotThisOne
     End
   End
   DisplayName      = OBJECT:TestBoat
@@ -72,6 +84,8 @@ TEST_CASE("Object blocks and their fields") {
     CHECK(boat.editorSorting == "VEHICLE");
     CHECK(boat.displayName == "OBJECT:TestBoat");
     CHECK(boat.model == "TBoat");  // default state wins over the damaged one listed first
+    CHECK(boat.muzzleFlashes == "GunFX RocketFX");
+    CHECK(boat.hiddenSubObjects == "Sail Flag01");  // the second Draw module is not read
     CHECK(boat.sourceFile == "data/ini/object/test.ini");
     CHECK(boat.line == 3);
 
@@ -90,6 +104,7 @@ TEST_CASE("Reskins and child objects inherit missing fields") {
     const auto &child = objects[2];
     CHECK(child.side == "America");  // its own side is kept
     CHECK(child.model == "TBoatRed");  // from the parent
+    CHECK(child.muzzleFlashes == "GunFX RocketFX");  // from the grandparent
     CHECK(child.kindOf == "PRELOAD SELECTABLE VEHICLE");  // from the grandparent
 }
 

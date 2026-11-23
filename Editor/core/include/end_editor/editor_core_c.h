@@ -13,7 +13,8 @@
  *           bone_count, animation, frame_count, frame_rate, pose (frame_count * bone_count
  *           column-major 4x4 float matrices), visible (one byte per frame and bone), bounds
  *   model_parts: pieces of the model with one texture each: vertices (36-byte records: position,
- *           normal, uv, uint32 bone), indices (uint32 triangle list), hidden, two_sided
+ *           normal, uv, uint32 bone), indices (uint32 triangle list), hidden, two_sided, blend,
+ *           house_color
  *   model_bones, model_textures (RGBA8, rows top to bottom), model_animations
  * Column details: src/storage.h.
  *
