@@ -3307,10 +3307,11 @@ void ParticleSystemManager::update()
 			}
 		}
 	}
-	else
+	else if (TheSmudgeManager)
 	{
 		// GeneralsX @bugfix Bender 01/04/2026 Clear stale smudges when heat effects are disabled.
 		// Without this, previously flagged smudges may persist in later render passes.
+		// fnc12 @bugfix 25/11/2026 There is no smudge manager in headless mode.
 		TheSmudgeManager->reset();
 	}
 }

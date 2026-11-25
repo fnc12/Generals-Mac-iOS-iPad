@@ -935,24 +935,16 @@ private:
 };
 
 // TheSuperHackers @feature bobtista 31/01/2026
-// ParticleSystemManager that does nothing. Used for Headless Mode.
-// GeneralsX @bugfix fbraz 04/05/2026 Prevent headless replay from entering full particle update path.
-// Does not load particle system templates and does not create particle systems.
+// ParticleSystemManager that does not draw. Used for Headless Mode.
+// fnc12 @bugfix 25/11/2026 Headless mode must make the same game logic random calls as a windowed game.
+// Game logic draws GameLogicRandomValue only when a particle system was actually created
+// (TransitionDamageFX, EMPUpdate) and looks particle systems up by ID (BoneFXUpdate, LaserUpdate,
+// ActiveBody, ...). So templates are loaded and systems are created, updated and reaped exactly as in
+// a windowed game; only drawing is skipped. Returning nullptr from createParticleSystem (#3006) or not
+// loading templates desynced headless replays from the real game (a damaged supply truck's smoke bone).
 class ParticleSystemManagerDummy : public ParticleSystemManager
 {
 public:
-#if RETAIL_COMPATIBLE_CRC
-	// The creation of particle systems needs to be handled explicitly,
-	// because they're not destroyed in the update function anymore.
-	virtual ParticleSystem* createParticleSystem(const ParticleSystemTemplate* sysTemplate, Bool createSlaves = TRUE) override { return nullptr; }
-
-	// Must not overload init to keep loading the particle system templates,
-	// which are unfortunately needed to preserve the correct logic crc.
-#else
-	virtual void init() override {}
-	virtual void reset() override {}
-#endif
-	virtual void update() override {}
 	virtual void draw() override {}
 
 	virtual Bool isDummy() const override { return true; }
