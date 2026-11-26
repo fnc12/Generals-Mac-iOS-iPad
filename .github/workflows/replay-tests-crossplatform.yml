@@ -203,6 +203,8 @@ jobs:
           fi
           ref="${platforms[0]}"
           fail=0
+          # Windows (PowerShell) writes CRLF; compare the values, not the line endings.
+          for f in replay-results-*/*; do sed -i.bak 's/\r$//' "${f}" && rm -f "${f}.bak"; done
           {
             echo "### Cross-platform replay comparison"
             echo ""
