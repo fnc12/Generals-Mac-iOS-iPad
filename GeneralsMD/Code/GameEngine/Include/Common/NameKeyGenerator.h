@@ -105,6 +105,11 @@ public:
 	// Get a string out of the INI. Store it into a NameKeyType
 	static void parseStringAsNameKeyType( INI *ini, void *instance, void *store, const void* userData );
 
+	// GeneralsX @feature fnc12 26/11/2026 With GENERALSX_NAMEKEY_DUMP set, print one line with the number of keys,
+	// a hash of the whole key table and the key of player0, so the key assignment of two builds or platforms can
+	// be compared. If the variable names a directory, the table is also written there as namekeys-<stage>.txt.
+	void reportNameKeys(const char* stage) const;
+
 #if RETAIL_COMPATIBLE_CRC
 #if RTS_ZEROHOUR
 	void syncNameKeyID();

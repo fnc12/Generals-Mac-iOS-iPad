@@ -1211,6 +1211,7 @@ void GameLogic::startNewGame( Bool loadingSaveGame )
 	try
 	{
 		tryStartNewGame(loadingSaveGame);
+		TheNameKeyGenerator->reportNameKeys("game");
 	}
 	catch (QuitGameException&)
 	{

@@ -184,6 +184,9 @@ class IMEManager : public IMEManagerInterface
 		void					openStatusWindow();
 		void					closeStatusWindow();
 		void					updateStatusWindow();
+		void					createWindows();
+
+		Bool									m_windowsCreated;								///< candidate and status windows were created
 
 		GameWindow						*m_candidateWindow;							///< IME candidate window interface
 		GameWindow						*m_statusWindow;								///< IME status window interface
@@ -521,7 +524,8 @@ IMEManager::IMEManager()
 	m_pageSize(0),
 	m_pageStart(0),
 	m_selectedIndex(0),
-	m_unicodeIME(FALSE)
+	m_unicodeIME(FALSE),
+	m_windowsCreated(FALSE)
 {
 }
 
@@ -570,6 +574,25 @@ void IMEManager::init()
 	m_context = ImmCreateContext();
 	m_oldContext = ImmGetContext( ApplicationHWnd );
 	m_disabled = 0;
+
+	// GeneralsX @bugfix fnc12 26/11/2026 The candidate and status windows are created on the first attach, not here.
+	// Only Windows has an IME manager, and loading its windows during engine init allocated name keys
+	// (IMECandidateWindow.wnd:TextArea, ...) that no other platform has, so every later key, player0 included,
+	// was 3 higher on Windows than on macOS and Linux.
+	detach();
+	enable();
+}
+
+//============================================================================
+// IMEManager::createWindows
+//============================================================================
+
+void IMEManager::createWindows()
+{
+	if ( m_windowsCreated )
+		return;
+	m_windowsCreated = TRUE;
+
 	m_candidateWindow = TheWindowManager->winCreateFromScript( "IMECandidateWindow.wnd");
 	m_candidateWindow->winSetStatus(WIN_STATUS_ABOVE);
 
@@ -607,12 +630,9 @@ void IMEManager::init()
 	// attach IMEManager to each window
 	if ( m_candidateWindow != nullptr )
 	{
-		m_candidateWindow->winSetUserData( TheIMEManager );
-		m_candidateTextArea->winSetUserData( TheIMEManager );
+		m_candidateWindow->winSetUserData( static_cast<IMEManagerInterface*>(this) );
+		m_candidateTextArea->winSetUserData( static_cast<IMEManagerInterface*>(this) );
 	}
-
-	detach();
-	enable();
 }
 
 //============================================================================
@@ -641,6 +661,7 @@ void IMEManager::attach( GameWindow *window )
 {
 	if ( m_window != window )
 	{
+		createWindows();
 		detach();
 		if ( m_disabled == 0 )
 		{

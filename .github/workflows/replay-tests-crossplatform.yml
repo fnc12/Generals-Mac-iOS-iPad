@@ -1,0 +1,247 @@
+name: Cross-platform Replay Tests
+
+# GeneralsX @build fnc12 26/11/2026 Plays the test replays (Tests/replays/macos) headless on the
+# owner's self-hosted machines, then checks that every platform computed the same logic CRCs and
+# the same name key table (cross-play needs both).
+#
+# Security: this repository is public, and these jobs run on private machines that hold the game
+# data. So there is NO pull_request / pull_request_target trigger: only pushes to master (owner
+# only) and manual dispatch (write access). Never add a PR trigger here.
+#
+# Game data: the paths come from the runner's own .env on each machine (CNC_GENERALS_ZH_PATH,
+# CNC_GENERALS_PATH), never from this repository. The EA assets are never uploaded: the artifacts
+# hold only the compared CRCs (frame + CRC), the name key table summaries (count + hash) and the
+# test result lines.
+#
+# Machine config (.env of the runner), besides the game data paths:
+#   Windows: GENERALSX_VCPKG_ROOT, GENERALSX_VCPKG_BINARY_CACHE, GENERALSX_VCPKG_DOWNLOADS, GENERALSX_BUILD_DIR
+#   macOS:   GENERALSX_VCPKG_ROOT, GENERALSX_VULKAN_SDK
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: replay-tests-crossplatform
+  cancel-in-progress: false
+
+env:
+  # fbraz3/GeneralsXReplays: the custom maps the test replays need (MIT).
+  REPLAYS_REPO: fbraz3/GeneralsXReplays
+  REPLAYS_REF: 113cabc289426459a5fa5da810131cac498c8e5a
+
+jobs:
+  windows-x86:
+    name: Replays (Windows x86)
+    if: github.repository == 'fnc12/Generals-Mac-iOS-iPad'
+    runs-on: [self-hosted, windows, gaming-pc]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Keep build\ between runs (incremental build); ignored files survive.
+          clean: false
+
+      - name: Fetch replay maps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPLAYS_REPO }}
+          ref: ${{ env.REPLAYS_REF }}
+          path: GeneralsReplays
+
+      - name: Build GeneralsXZH (win32-vcpkg, MSVC x86)
+        shell: cmd
+        env:
+          # vcpkg runs git in its root, which belongs to another account on this machine.
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: "*"
+        run: |
+          rem The build tree lives in a short path (GENERALSX_BUILD_DIR): the runner work folder is deep.
+          if not defined GENERALSX_BUILD_DIR set "GENERALSX_BUILD_DIR=%CD%\build\win32-vcpkg"
+          set "PATH=C:\Python312;C:\Python312\Scripts;%PATH%"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul || exit /b 1
+          set "VCPKG_ROOT=%GENERALSX_VCPKG_ROOT%"
+          set "VCPKG_DOWNLOADS=%GENERALSX_VCPKG_DOWNLOADS%"
+          set "VCPKG_BINARY_SOURCES=clear;files,%GENERALSX_VCPKG_BINARY_CACHE%,readwrite"
+          rem The ninja of depot_tools on this machine is broken: use the Visual Studio one.
+          set "NINJA=C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+          cmake --preset win32-vcpkg -B "%GENERALSX_BUILD_DIR%" -DCMAKE_MAKE_PROGRAM="%NINJA%" -DRTS_BUILD_GENERALS=OFF -DRTS_BUILD_ZEROHOUR=ON -DRTS_BUILD_CORE_TOOLS=OFF -DRTS_BUILD_ZEROHOUR_TOOLS=OFF -DRTS_BUILD_GENERALS_TOOLS=OFF -DRTS_BUILD_OPTION_SAGE_PATCH=OFF -DSAGE_USE_DX8=ON > "%RUNNER_TEMP%\configure.log" 2>&1 || (powershell -NoProfile -Command "Get-Content $env:RUNNER_TEMP\configure.log -Tail 50" & exit /b 2)
+          cmake --build "%GENERALSX_BUILD_DIR%" --config Release --target z_generals --parallel 6 || exit /b 3
+          echo GAME_EXE=%GENERALSX_BUILD_DIR%\GeneralsMD\Release\GeneralsXZH.exe>> "%GITHUB_ENV%"
+
+      - name: Play replays
+        shell: powershell
+        env:
+          GENERALSX_NAMEKEY_DUMP: "1"
+        run: |
+          Remove-Item logs\replay-tests -Recurse -Force -ErrorAction SilentlyContinue
+          $env:PATH = "C:\Python312;$env:PATH"
+          & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa\replays\run-replay-tests-windows.ps1 `
+            -Game $env:GAME_EXE -ReplayDir Tests\replays\macos -WorkDir $env:RUNNER_TEMP |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\results.txt"
+          exit $LASTEXITCODE
+
+      - name: Collect CRCs and name key summaries
+        if: always()
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'replay-results'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item logs\replay-tests\*.crc $out -ErrorAction SilentlyContinue
+          foreach ($log in Get-ChildItem logs\replay-tests -Filter *.log -ErrorAction SilentlyContinue) {
+            # Only the name key summary line, never the game log itself.
+            Select-String -LiteralPath $log.FullName -Pattern 'NAMEKEY_TABLE' | ForEach-Object { $_.Line.Trim() } |
+              Set-Content (Join-Path $out ($log.BaseName + '.namekeys'))
+          }
+          if (Test-Path "$env:RUNNER_TEMP\results.txt") {
+            # Result lines only; strip local paths.
+            Get-Content "$env:RUNNER_TEMP\results.txt" | ForEach-Object { $_ -replace '\s+log: .*$', '' } |
+              Set-Content (Join-Path $out 'results.txt')
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-results-windows-x86
+          path: ${{ runner.temp }}/replay-results/
+          if-no-files-found: error
+          retention-days: 30
+
+  macos-arm64:
+    name: Replays (macOS arm64)
+    if: github.repository == 'fnc12/Generals-Mac-iOS-iPad'
+    runs-on: [self-hosted, macOS, ARM64, mac-laptop]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Fetch replay maps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPLAYS_REPO }}
+          ref: ${{ env.REPLAYS_REF }}
+          path: GeneralsReplays
+
+      - name: Build GeneralsXZH (macos-vulkan)
+        run: |
+          export VCPKG_ROOT="${GENERALSX_VCPKG_ROOT}" VULKAN_SDK="${GENERALSX_VULKAN_SDK}"
+          cmake --preset macos-vulkan -DRTS_BUILD_GENERALS=OFF -DRTS_BUILD_CORE_TOOLS=OFF \
+            -DRTS_BUILD_ZEROHOUR_TOOLS=OFF -DRTS_BUILD_GENERALS_TOOLS=OFF > "${RUNNER_TEMP}/configure.log" 2>&1 \
+            || { tail -50 "${RUNNER_TEMP}/configure.log"; exit 2; }
+          cmake --build build/macos-vulkan --target z_generals
+
+      - name: Bundle the app
+        run: |
+          export VULKAN_SDK="${GENERALSX_VULKAN_SDK}"
+          ./scripts/build/macos/bundle-macos-zh.sh > "${RUNNER_TEMP}/bundle.log" 2>&1 || { tail -30 "${RUNNER_TEMP}/bundle.log"; exit 1; }
+          rm -rf "${RUNNER_TEMP}/app" && mkdir -p "${RUNNER_TEMP}/app"
+          unzip -q macos-arm64-GeneralsXZH.zip -d "${RUNNER_TEMP}/app"
+
+      - name: Play replays
+        env:
+          GENERALSX_NAMEKEY_DUMP: "1"
+        run: |
+          rm -rf logs/replay-tests
+          ./scripts/qa/replays/run-replay-tests-macos.sh "${RUNNER_TEMP}/app/GeneralsXZH.app" Tests/replays/macos \
+            | tee "${RUNNER_TEMP}/results.txt"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Collect CRCs and name key summaries
+        if: always()
+        run: |
+          out="${RUNNER_TEMP}/replay-results"
+          rm -rf "${out}" && mkdir -p "${out}"
+          cp logs/replay-tests/*.crc "${out}/" 2>/dev/null || true
+          for log in logs/replay-tests/*.log; do
+            [[ -f "${log}" ]] || continue
+            # Only the name key summary line, never the game log itself.
+            grep -a -o "NAMEKEY_TABLE.*" "${log}" > "${out}/$(basename "${log%.log}").namekeys" || true
+          done
+          [[ -f "${RUNNER_TEMP}/results.txt" ]] && sed -E 's/[[:space:]]+log: .*$//' "${RUNNER_TEMP}/results.txt" > "${out}/results.txt"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-results-macos-arm64
+          path: ${{ runner.temp }}/replay-results/
+          if-no-files-found: error
+          retention-days: 30
+
+  # TODO(linux): add the Linux x86_64 job on casablanca (runs-on: [self-hosted, linux, X64, casablanca])
+  # once scripts/qa/replays/run-replay-tests-linux.sh lands (branch linux-replays). It must upload
+  # an artifact named replay-results-linux-x64 with the same layout (*.crc, *.namekeys, results.txt),
+  # and be added to `needs` of compare below; compare picks up every replay-results-* artifact.
+
+  compare:
+    name: Compare CRCs across platforms
+    needs: [windows-x86, macos-arm64]
+    if: always() && github.repository == 'fnc12/Generals-Mac-iOS-iPad'
+    runs-on: [self-hosted, macOS, ARM64, mac-laptop]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: replay-results-*
+          path: ${{ runner.temp }}/compare
+
+      - name: Diff CRC sequences and name key tables
+        run: |
+          cd "${RUNNER_TEMP}/compare"
+          ls
+          platforms=(replay-results-*)
+          if (( ${#platforms[@]} < 2 )); then
+            echo "::error::need results from at least two platforms, got: ${platforms[*]}"
+            exit 1
+          fi
+          ref="${platforms[0]}"
+          fail=0
+          {
+            echo "### Cross-platform replay comparison"
+            echo ""
+            echo "Reference: \`${ref#replay-results-}\`"
+            echo ""
+            echo "| Replay | Platform | CRCs | Name keys |"
+            echo "|--------|----------|------|-----------|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          shopt -s nullglob
+          for p in "${platforms[@]}"; do sed "s/^/[${p#replay-results-}] /" "${p}/results.txt" 2>/dev/null || true; done
+          for crc in "${ref}"/*.crc; do
+            name="$(basename "${crc}" .crc)"
+            if [[ ! -s "${crc}" ]]; then
+              echo "::error::${name}: no CRC was compared on ${ref#replay-results-}"
+              fail=1
+            fi
+            for p in "${platforms[@]:1}"; do
+              crc_state="equal ($(wc -l < "${crc}" | tr -d ' ') compares)"
+              if [[ ! -f "${p}/${name}.crc" ]]; then
+                crc_state="missing"; fail=1
+              elif ! diff -q "${crc}" "${p}/${name}.crc" > /dev/null; then
+                first="$(diff "${crc}" "${p}/${name}.crc" | grep -m1 '^[<>]' || true)"
+                crc_state="DIFFERENT (first: ${first})"; fail=1
+              fi
+              # The summary of the table when the game started: count, hash and the key of player0.
+              key_ref="$(grep 'stage=game' "${ref}/${name}.namekeys" 2>/dev/null | tail -1 | sed -E 's/.*(count=[^ ]+).*(hash=[^ ]+ player0=[^ ]+).*/\1 \2/' || true)"
+              key_p="$(grep 'stage=game' "${p}/${name}.namekeys" 2>/dev/null | tail -1 | sed -E 's/.*(count=[^ ]+).*(hash=[^ ]+ player0=[^ ]+).*/\1 \2/' || true)"
+              if [[ -z "${key_ref}" || "${key_ref}" != "${key_p}" ]]; then
+                key_state="DIFFERENT (${key_ref:-none} vs ${key_p:-none})"; fail=1
+              else
+                key_state="equal (${key_ref})"
+              fi
+              echo "${name} ${p#replay-results-}: CRCs ${crc_state}; name keys ${key_state}"
+              echo "| \`${name}\` | ${p#replay-results-} | ${crc_state} | ${key_state} |" >> "${GITHUB_STEP_SUMMARY}"
+            done
+          done
+          for p in "${platforms[@]:1}"; do
+            for crc in "${p}"/*.crc; do
+              [[ -f "${ref}/$(basename "${crc}")" ]] || { echo "::error::$(basename "${crc}") only on ${p#replay-results-}"; fail=1; }
+            done
+          done
+          exit "${fail}"
