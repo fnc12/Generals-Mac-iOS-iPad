@@ -438,13 +438,15 @@ final class EditorModel: ObservableObject {
             mapModelTextures = [:]
             lastMapTexture = 0
             mapModelRevision = -1
+            mapModelCount = header.modelCount
+            mapModelsLoaded = 0
             selectedMapObject = nil
             mapScene = header.state == "ready" ? reader.mapScene() : MapScene()
             mapWarnings = header.state == "ready" ? reader.mapWarnings() : []
         }
-        mapModelCount = header.modelCount
         if header.state == "ready" && header.modelRevision != mapModelRevision {
             mapModelRevision = header.modelRevision
+            mapModelCount = header.modelCount
             mapModelsLoaded = header.modelsLoaded
             let (last, textures) = reader.mapModelTextures(after: lastMapTexture)
             lastMapTexture = last
