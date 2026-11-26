@@ -2,6 +2,7 @@
 // Commands go to the core through end_editor_send(); everything the UI shows is read from the
 // core's SQLite store with the client's own read-only connection.
 import AppKit
+import Observation
 import SQLite3
 import SwiftUI
 
@@ -282,36 +283,39 @@ final class StoreReader {
     }
 }
 
+/// The client's view of the store. @Observable: a view is updated only when a property it read
+/// changes, so new map models do not re-render the object table and the reverse.
 @MainActor
-final class EditorModel: ObservableObject {
-    @Published var status = CoreStatus()
-    @Published var objects: [ObjectItem] = []
-    @Published var warnings: [String] = []
-    @Published var coreError: String?
-    @Published var preview = PreviewModel()
-    @Published var animations: [String] = []
-    @Published var modelState = "idle"
-    @Published var modelMessage = ""
-    private var modelRevision: Int64 = -1
-    private var modelName = ""
-    private var geometryRequested = false
+@Observable
+final class EditorModel {
+    var status = CoreStatus()
+    var objects: [ObjectItem] = []
+    var warnings: [String] = []
+    var coreError: String?
+    var preview = PreviewModel()
+    var animations: [String] = []
+    var modelState = "idle"
+    var modelMessage = ""
+    @ObservationIgnored private var modelRevision: Int64 = -1
+    @ObservationIgnored private var modelName = ""
+    @ObservationIgnored private var geometryRequested = false
 
-    @Published var maps: [MapListItem] = []
-    @Published var mapScene = MapScene()
-    @Published var mapModels: [MapModelData] = []
-    @Published var mapModelTextures: [String: PreviewTexture] = [:]
-    @Published var mapState = "idle"
-    @Published var mapMessage = ""
-    @Published var mapWarnings: [String] = []
-    @Published var mapModelsLoaded = 0
-    @Published var mapModelCount = 0
-    @Published var selectedMapObject: Int64?
-    private var mapRevision: Int64 = -1
-    private var mapModelRevision: Int64 = -1
-    private var lastMapTexture: Int64 = 0
+    var maps: [MapListItem] = []
+    var mapScene = MapScene()
+    var mapModels: [MapModelData] = []
+    var mapModelTextures: [String: PreviewTexture] = [:]
+    var mapState = "idle"
+    var mapMessage = ""
+    var mapWarnings: [String] = []
+    var mapModelsLoaded = 0
+    var mapModelCount = 0
+    var selectedMapObject: Int64?
+    @ObservationIgnored private var mapRevision: Int64 = -1
+    @ObservationIgnored private var mapModelRevision: Int64 = -1
+    @ObservationIgnored private var lastMapTexture: Int64 = 0
 
-    private var reader: StoreReader?
-    private var timer: Timer?
+    @ObservationIgnored private var reader: StoreReader?
+    @ObservationIgnored private var timer: Timer?
     private static let lastGameDirKey = "lastGameDir"
     private static let baseGameDirKey = "baseGameDir"
 
@@ -497,7 +501,7 @@ enum EditorMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     @AppStorage("editorMode") private var mode = EditorMode.objects
 
     var body: some View {
@@ -534,7 +538,7 @@ struct ContentView: View {
 }
 
 struct ObjectBrowser: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     @State private var side: String? = Self.allSides
     @State private var search = ""
     @State private var selection: ObjectItem.ID?
@@ -590,7 +594,7 @@ struct ObjectBrowser: View {
 }
 
 struct StatusText: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     var body: some View {
         switch model.status.state {
         case "loading": HStack { ProgressView().controlSize(.small); Text("Reading game data…") }
@@ -783,15 +787,17 @@ enum Snapshot {
 
 @main
 struct EndEditorApp: App {
-    @StateObject private var model = EditorModel()
+    @State private var model: EditorModel
 
     init() {
+        // Before the model exists: the snapshot tools exit without a window, --perf sets defaults.
         Snapshot.runIfRequested()
         PerfHarness.parseArguments()
+        _model = State(initialValue: EditorModel())
     }
     var body: some Scene {
         WindowGroup("END Editor") {
-            ContentView().environmentObject(model).frame(minWidth: 1000, minHeight: 600)
+            ContentView().environment(model).frame(minWidth: 1000, minHeight: 600)
         }
     }
 }

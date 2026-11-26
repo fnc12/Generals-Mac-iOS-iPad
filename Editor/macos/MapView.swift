@@ -971,7 +971,7 @@ struct MapMetalView: NSViewRepresentable {
 
 /// The map with its controls and the selected object's inspector.
 struct MapScreen: View {
-    @EnvironmentObject var editor: EditorModel
+    @Environment(EditorModel.self) private var editor
     @StateObject private var state = MapViewState()
 
     var body: some View {
@@ -1015,7 +1015,7 @@ struct MapScreen: View {
 }
 
 struct MapObjectInspector: View {
-    @EnvironmentObject var editor: EditorModel
+    @Environment(EditorModel.self) private var editor
 
     var body: some View {
         if let id = editor.selectedMapObject, let object = editor.mapScene.objects.first(where: { $0.id == id }) {
@@ -1050,7 +1050,7 @@ struct MapObjectInspector: View {
 
 /// Map list on the left, the map on the right.
 struct MapBrowser: View {
-    @EnvironmentObject var editor: EditorModel
+    @Environment(EditorModel.self) private var editor
     @State private var search = ""
     @State private var selection: MapListItem.ID?
 

@@ -7,8 +7,9 @@
 // Scenarios: idle (nothing happens), pan (a left-button drag over the map), map list and object
 // table (scrolling them down and up). For a machine nobody is watching (the gui-sandbox VM).
 import AppKit
-import Combine
+import Observation
 import QuartzCore
+import simd
 
 /// Collects frame and main-thread timings while a scenario runs. `shared` is nil unless --perf.
 final class PerfRecorder: NSObject {
@@ -22,7 +23,7 @@ final class PerfRecorder: NSObject {
     private var busyStart: CFTimeInterval?
     private var observer: CFRunLoopObserver?
     private var displayLink: CADisplayLink?
-    /// EditorModel.objectWillChange events (each one re-evaluates every view that observes it).
+    /// Changes of EditorModel's observed properties (each one updates the views that read it).
     var modelChanges = 0
     /// CPU time of the main thread (does not count time the machine gave to other processes).
     private var cpuStart: UInt64 = 0
@@ -121,9 +122,8 @@ enum PerfHarness {
 
     static func run(_ editor: EditorModel) {
         guard let request, let recorder = PerfRecorder.shared else { return }
-        let changes = editor.objectWillChange.sink { _ in recorder.modelChanges += 1 }
+        countChanges(of: editor, into: recorder)
         Task { @MainActor in
-            _ = changes
             var report: [String] = []
             func log(_ line: String) {
                 report.append(line)
@@ -154,6 +154,9 @@ enum PerfHarness {
                 log("no map view or list in the window")
                 finish(1)
             }
+            // A click on an inactive window only activates it; make it the key window first.
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
             recorder.attach(to: content)
             let refresh = Double(window.screen?.maximumFramesPerSecond ?? 60)
             log("map: \(editor.mapScene.name), \(editor.mapScene.objects.count) objects, \(editor.mapModelCount) models; "
@@ -185,6 +188,7 @@ enum PerfHarness {
 
             // Pan: press in the middle of the map, drag in a slow circle, release.
             let center = mapView.convert(NSPoint(x: mapView.bounds.midX, y: mapView.bounds.midY), to: nil)
+            let targetBefore = mapView.state?.target ?? .zero
             post(mouse: .leftMouseDown, at: center, window: window)
             var last = center
             await measure("pan", seconds: 4) { tick in
@@ -193,6 +197,7 @@ enum PerfHarness {
                 post(mouse: .leftMouseDragged, at: last, window: window)
             }
             post(mouse: .leftMouseUp, at: last, window: window)
+            log(String(format: "  camera moved %.0f units", simd_distance(targetBefore, mapView.state?.target ?? targetBefore)))
             try? await Task.sleep(nanoseconds: 500_000_000)
 
             // Lists: scrolled down for 2 s and back up for 2 s, 12 pt per input step (1440 pt/s).
@@ -222,7 +227,24 @@ enum PerfHarness {
                 finish(1)
             }
             await scroll("object table", table)
+
             finish(0)
+        }
+    }
+
+    /// Counts every change of the model's observable properties.
+    private static func countChanges(of editor: EditorModel, into recorder: PerfRecorder) {
+        withObservationTracking {
+            _ = (editor.status, editor.objects, editor.warnings, editor.coreError, editor.preview, editor.animations,
+                 editor.modelState, editor.modelMessage)
+            _ = (editor.maps, editor.mapScene, editor.mapModels, editor.mapModelTextures, editor.mapState,
+                 editor.mapMessage, editor.mapWarnings, editor.mapModelsLoaded, editor.mapModelCount,
+                 editor.selectedMapObject)
+        } onChange: {
+            Task { @MainActor in
+                recorder.modelChanges += 1
+                countChanges(of: editor, into: recorder)
+            }
         }
     }
 
