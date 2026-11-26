@@ -4,11 +4,20 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace end_editor {
 
     // Data/INI/Terrain.ini: texture class name (lower case) -> TGA file under Art/Terrain/.
     std::map<std::string, std::string> parseTerrainTypes(std::string_view text);
+
+    // Data/INI/Roads.ini: the road and bridge types a road or bridge segment is made of (the
+    // template name of its two map objects), in file order.
+    struct RoadType {
+        std::string name;
+        bool bridge = false;
+    };
+    std::vector<RoadType> parseRoadTypes(std::string_view text);
 
     // What Data/INI/Water.ini says about standing water for one time of day.
     struct WaterLook {

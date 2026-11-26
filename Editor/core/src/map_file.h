@@ -65,6 +65,9 @@ namespace end_editor {
     constexpr std::int32_t mapObjectRoadFlags = 0x02 | 0x04;
     constexpr std::int32_t mapObjectBridgeFlags = 0x10 | 0x20;
     constexpr std::int32_t mapObjectDontRender = 0x100;
+    constexpr std::int32_t mapObjectRoadPoint1 = 0x02, mapObjectRoadPoint2 = 0x04;
+    constexpr std::int32_t mapObjectRoadCornerAngled = 0x08, mapObjectRoadCornerTight = 0x40;
+    constexpr std::int32_t mapObjectBridgePoint1 = 0x10, mapObjectBridgePoint2 = 0x20;
 
     struct MapPolygon {
         std::string name;
@@ -114,6 +117,8 @@ namespace end_editor {
         std::vector<Dict> teams;
         std::vector<MapObject> objects;
         std::vector<MapPolygon> polygons;
+        // WaypointsList: links between waypoints, by their waypointID (from, to).
+        std::vector<std::array<std::int32_t, 2>> waypointLinks;
         bool hasLighting = false;
         MapLighting lighting;
 

@@ -330,12 +330,23 @@ namespace end_editor {
                         parsePolygons(file, chunk, map);
                     } else if(chunk.name == "GlobalLighting") {
                         parseLighting(file, chunk, map);
+                    } else if(chunk.name == "WaypointsList") {
+                        const auto count = file.readInt();
+                        if(count < 0 || std::size_t(count) * 8 > file.left()) {
+                            throw ChunkError("implausible waypoint link count");
+                        }
+                        for(std::int32_t i = 0; i < count; ++i) {
+                            const auto from = file.readInt();
+                            const auto to = file.readInt();
+                            map.waypointLinks.push_back({from, to});
+                        }
                     }
                     // Like the engine's "Unexpected data left over" asserts: a reader that stops
                     // early has misread the chunk. SidesList ends with script chunks it skips.
                     const bool known = chunk.name == "HeightMapData" || chunk.name == "BlendTileData" ||
                                        chunk.name == "WorldInfo" || chunk.name == "ObjectsList" ||
-                                       chunk.name == "PolygonTriggers" || chunk.name == "GlobalLighting";
+                                       chunk.name == "PolygonTriggers" || chunk.name == "GlobalLighting" ||
+                                       chunk.name == "WaypointsList";
                     if(known && file.depth() == depth && !file.atEndOfChunk()) {
                         map.warnings.push_back(chunk.name + ": " + std::to_string(file.left()) + " bytes not read");
                     }

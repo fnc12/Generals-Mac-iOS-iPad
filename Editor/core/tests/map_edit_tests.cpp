@@ -93,7 +93,7 @@ TEST_CASE("MapDocument edits: move, turn, remove, place, undo, redo") {
     CHECK_FALSE(document.remove(99));
     const auto placed = document.place("TestRock", 20, 10, 7.0f, "teamPlyrRed");  // 7 rad -> 7 - 2 pi
     CHECK(placed == 3);
-    CHECK(document.lastChanged() == 3);
+    CHECK(document.lastChangedId() == 3);
     CHECK(document.undoCount() == 4);
     CHECK(document.edited());
 
@@ -309,4 +309,74 @@ TEST_CASE("EditorCore edits and saves the open map") {
     run();
     CHECK(reader.get<MapRow>(1).editMessage.rfind("error: not saved", 0) == 0);
     CHECK_FALSE(std::filesystem::exists(folder / "Maps" / "x" / "x.map"));
+}
+
+TEST_CASE("MapDocument groups, heights of old objects, properties and existing waypoint links") {
+    // A version 2 object (the engine ignores its stored height) and a WaypointsList with one link.
+    ChunkWriter w;
+    w.open("HeightMapData", 4);
+    w.body.u32(3).u32(3).u32(0).u32(1).u32(2).u32(2).u32(9);
+    w.body.data.append(9, char(0));
+    w.close();
+    w.open("ObjectsList", 3);
+    w.open("Object", 2);
+    w.body.floats({5, 5, 9, 0}).u32(0);
+    w.ascii("OldRock");
+    w.dict({{"originalOwner", 3, 0, 0, "team"}});
+    w.close();
+    for(int i = 1; i <= 2; ++i) {
+        w.open("Object", 3);
+        w.body.floats({float(i * 5), 10, 0, 0}).u32(0);
+        w.ascii("*Waypoints/Waypoint");
+        w.dict({{"waypointID", 1, i * 10}, {"waypointName", 3, 0, 0, "W" + std::to_string(i)}});
+        w.close();
+    }
+    w.close();
+    w.open("WaypointsList", 1);
+    w.body.u32(1).u32(10).u32(20);
+    w.close();
+    w.open("Trailer", 7);
+    w.body.u32(99);
+    w.close();
+    const auto bytes = w.file();
+    MapDocument document(parsed(bytes));
+    CHECK(document.save() == bytes);
+    REQUIRE(document.links().size() == 1);
+    CHECK(document.waypointObject(20) == 3);
+
+    // One group, one undo step.
+    document.begin();
+    CHECK(document.move(1, 1, 1));
+    CHECK(document.setHeight(1, 12));
+    DictValue name;
+    name.type = DictValue::ascii;
+    name.key = "objectName";
+    name.text = "Boulder";
+    CHECK(document.setProperty(1, name));
+    document.commit();
+    CHECK(document.undoCount() == 1);
+    CHECK(document.lastChanged() == std::vector<std::int64_t>{1});
+    auto saved = parsed(document.save());
+    REQUIRE(saved.objects.size() == 3);
+    CHECK(saved.objectChunks[0].version == 3);  // written again: version 2 has no height the engine reads
+    CHECK(saved.objects[0].z == 12);
+    CHECK(saved.objects[0].x == 1);
+    CHECK(findDictValue(saved.objects[0].properties, "objectName")->text == "Boulder");
+    CHECK(findDictValue(saved.objects[0].properties, "originalOwner")->text == "team");
+    CHECK(document.undo());
+    CHECK(document.save() == bytes);
+
+    // Links: rewritten in place (same chunk version), the chunk after it stays.
+    CHECK(document.toggleLink(3, 2));
+    saved = parsed(document.save());
+    CHECK(saved.waypointLinks == std::vector<std::array<std::int32_t, 2>>{{10, 20}, {20, 10}});
+    CHECK(saved.chunkNames == parsed(bytes).chunkNames);
+    CHECK(saved.chunks.back().version == 7);
+    CHECK(document.remove(2));  // its links go with it
+    CHECK(document.links().empty());
+    CHECK(document.undo());
+    CHECK(document.links().size() == 2);
+    CHECK(document.undo());
+    CHECK(document.save() == bytes);
+    CHECK_FALSE(document.toggleLink(1, 2));  // not a waypoint
 }

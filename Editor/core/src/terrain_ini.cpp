@@ -101,6 +101,16 @@ namespace end_editor {
         return result;
     }
 
+    std::vector<RoadType> parseRoadTypes(std::string_view text) {
+        std::vector<RoadType> result;
+        for(const auto &block: readBlocks(text)) {
+            if((block.keyword == "road" || block.keyword == "bridge") && !block.name.empty()) {
+                result.push_back(RoadType{block.name, block.keyword == "bridge"});
+            }
+        }
+        return result;
+    }
+
     WaterLook parseWaterLook(std::string_view text, int timeOfDay) {
         static const char *const times[] = {"morning", "afternoon", "evening", "night"};
         const std::string wanted = timeOfDay >= 1 && timeOfDay <= 4 ? times[timeOfDay - 1] : "afternoon";
