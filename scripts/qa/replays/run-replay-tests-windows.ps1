@@ -14,8 +14,7 @@
 #
 # The run uses a throwaway user data folder (GENERALSX_USER_DATA_DIR under -WorkDir, default
 # %TEMP%), so the real Documents profile, maps and replays are not touched. The game runs
-# with -headless: no window. The exe is staged into the throwaway folder with the three loose
-# stock files (see below). Logs: logs\replay-tests\ (<name>.log, and <name>.crc with the
+# with -headless: no window. Logs: logs\replay-tests\ (<name>.log, and <name>.crc with the
 # compared CRCs as "frame crc" lines, for diffing against another platform). -KeepDebug <dir>
 # keeps the game's Debug folder (deep CRC dumps written on a mismatch).
 #
@@ -72,20 +71,11 @@ New-Item -ItemType Directory -Force (Join-Path $userData 'Maps'), (Join-Path $us
 $mapsDir = Join-Path $projectRoot 'GeneralsReplays\GeneralsXZH\Maps'
 if (Test-Path $mapsDir) { Copy-Item (Join-Path $mapsDir '*') (Join-Path $userData 'Maps') -Recurse -Force }
 
-# On Windows the game makes the folder of the exe its working directory (unless -useCwd), and
-# loose files are only looked up there; the .big archives are found through CNC_GENERALS_ZH_PATH.
-# Retail Zero Hour ships three loose files, among them Data\Scripts\SkirmishScripts.scb: without
-# it the skirmish AI gets no teams and no scripts, and the replay desyncs at once. So the exe and
-# its DLLs are staged into a test folder together with those loose files. (-useCwd with the Zero
-# Hour folder crashes in audio init, presumably on the retail mss32.dll found there.)
-$gameDir = Join-Path $userData 'game'
-New-Item -ItemType Directory -Force (Join-Path $gameDir 'Data\Scripts') | Out-Null
-Get-ChildItem (Split-Path $Game) | Where-Object { $_.Extension -in '.exe', '.dll' } | Copy-Item -Destination $gameDir
-foreach ($loose in 'SkirmishScripts.scb', 'MultiplayerScripts.scb', 'Scripts.ini') {
-    $f = Join-Path $ZeroHourData "Data\Scripts\$loose"
-    if (Test-Path $f) { Copy-Item $f (Join-Path $gameDir 'Data\Scripts') }
-}
-$Game = Join-Path $gameDir (Split-Path $Game -Leaf)
+# The game makes the folder of the exe its working directory (unless -useCwd) and reads the .big
+# archives and the loose files (e.g. Data\Scripts\SkirmishScripts.scb) from CNC_GENERALS_ZH_PATH,
+# so the exe runs from where it was built. (-useCwd with the Zero Hour folder as the working
+# directory crashes in audio init, presumably on the retail mss32.dll found there: not used.)
+$gameDir = Split-Path $Game
 
 $env:GENERALSX_USER_DATA_DIR = $userData
 $env:CNC_GENERALS_ZH_PATH = $ZeroHourData
