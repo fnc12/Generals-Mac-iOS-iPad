@@ -10,7 +10,9 @@
 # 4-byte wide char format are converted on the fly. With a replay dir given,
 # only that dir is used. Maps come from GeneralsReplays/GeneralsXZH/Maps.
 # Logs: logs/replay-tests/. A replay passes only if the game exits 0 AND actually
-# compared a CRC (the REPLAY_CRC_CHECKPOINT line at frame 100).
+# compared CRCs (at least one REPLAY_CRC_COMPARE line) AND none of them mismatched.
+# The compared CRCs are also written to logs/replay-tests/<name>.crc (frame, CRC), so
+# runs on two platforms can be diffed.
 #
 # Options (environment): EXTRA_ARGS=... extra game arguments (e.g.
 # -ignoreReplaySyncErrors), NO_CONVERT=1 copy replays as they are, KEEP_DEBUG=<dir>
@@ -77,22 +79,26 @@ for rep in "${replays[@]}"; do
       perl -e "alarm ${TIMEOUT_SECONDS}; exec @ARGV" ./run.sh -headless ${EXTRA_ARGS:-} -replay "${USER_DATA}/Replays/${name}" ) > "${log}" 2>&1
     code=$?
     secs=$(( $(date +%s) - start ))
-    if (( code == 0 )) && ! grep -a -q "REPLAY_CRC_CHECKPOINT" "${log}"; then
+    grep -a -o "REPLAY_CRC_COMPARE frame=[0-9]* inGame=0x[0-9A-F]*" "${log}" \
+        | sed -E 's/.*frame=([0-9]+) inGame=0x([0-9A-F]+)/\1 \2/' > "${log%.log}.crc"
+    compares=$(grep -a -c "REPLAY_CRC_COMPARE" "${log}")
+    mismatches=$(grep -a -c "REPLAY_CRC_COMPARE.* MISMATCH" "${log}")
+    if (( code == 0 && compares == 0 )); then
         # The game only compares the CRC of the replay's local player. If that never happened
         # (map did not load, CRC sent by another slot, replay shorter than 100 frames), exit 0
         # means nothing, so it does not count as a pass.
         fail=$((fail + 1))
         echo "FAIL  ${name}  (${secs}s)  CRC was never compared  log: ${log}"
-    elif (( code == 0 )); then
+    elif (( code == 0 && mismatches == 0 )); then
         pass=$((pass + 1))
-        echo "PASS  ${name}  (${secs}s)"
+        echo "PASS  ${name}  (${secs}s)  ${compares} CRC compares, all equal"
     else
         fail=$((fail + 1))
         detail="$(grep -a -E "CRC Mismatch|Cannot open replay|Game Time" "${log}" | sort -u | tail -2 | tr '\n' ' ')"
         if [[ -z "${detail}" ]] && ! grep -a -q "Game Time" "${log}"; then
             detail="did not start simulating (bad header?)"
         fi
-        echo "FAIL  ${name}  exit ${code} (${secs}s)  ${detail}  log: ${log}"
+        echo "FAIL  ${name}  exit ${code} (${secs}s)  ${compares} compares, ${mismatches} mismatched  ${detail}  log: ${log}"
     fi
 done
 echo "Results: ${pass} passed, ${fail} failed"
