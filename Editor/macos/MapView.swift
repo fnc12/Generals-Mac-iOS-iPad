@@ -857,30 +857,36 @@ private func mapPerspective(fovY: Float, aspect: Float, near: Float, far: Float)
 final class MapMTKView: MTKView {
     var state: MapViewState?
     private var downPoint: NSPoint?
+    private var lastPoint: NSPoint?
     private var dragged = false
 
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
         downPoint = convert(event.locationInWindow, from: nil)
+        lastPoint = downPoint
         dragged = false
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let state else { return }
+        // Deltas from the locations, not event.deltaX/Y (not every event source fills those).
+        let point = convert(event.locationInWindow, from: nil)
+        let dx = Float(point.x - (lastPoint ?? point).x)
+        let dy = Float((lastPoint ?? point).y - point.y)  // down is positive, like NSEvent.deltaY
+        lastPoint = point
         if let downPoint, !dragged {
-            let point = convert(event.locationInWindow, from: nil)
             dragged = hypot(point.x - downPoint.x, point.y - downPoint.y) > 3
         }
         if event.modifierFlags.contains(.option) || event.modifierFlags.contains(.command) {
-            state.rotate(dx: Float(event.deltaX), dy: Float(event.deltaY))
+            state.rotate(dx: dx, dy: dy)
         } else {
-            state.pan(dx: Float(event.deltaX), dy: Float(event.deltaY), viewHeight: Float(bounds.height))
+            state.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height))
         }
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { downPoint = nil }
+        defer { downPoint = nil; lastPoint = nil }
         guard !dragged, let state else { return }
         let point = convert(event.locationInWindow, from: nil)
         state.onClick?(CGPoint(x: point.x, y: bounds.height - point.y), bounds.size)
