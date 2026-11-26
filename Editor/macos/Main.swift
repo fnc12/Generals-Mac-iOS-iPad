@@ -400,23 +400,57 @@ struct ObjectDetail: View {
 }
 
 /// `END Editor --snapshot <Zero Hour folder> <base folder> <model> <animation or -> <frame> <out.png>`
-/// renders one frame of a model to a PNG without opening a window, then exits. Used to check the
-/// preview without driving a screen.
+/// renders one frame of a model to a PNG without opening a window, then exits.
+/// `END Editor --gif <Zero Hour folder> <base folder> <model> <animation> <square|wide> <out.gif>`
+/// writes the same GIF as the preview's "Export GIF" (default camera). Both check the preview
+/// without driving a screen.
 enum Snapshot {
     static func runIfRequested() {
         let arguments = CommandLine.arguments
-        guard let at = arguments.firstIndex(of: "--snapshot") else { return }
-        let values = Array(arguments[(at + 1)...])
-        guard values.count == 6, let frame = Int(values[4]) else {
-            FileHandle.standardError.write("usage: --snapshot <zh> <base> <model> <anim|-> <frame> <out.png>\n".data(using: .utf8)!)
-            exit(2)
+        if let at = arguments.firstIndex(of: "--snapshot") {
+            let values = Array(arguments[(at + 1)...])
+            guard values.count == 6, let frame = Int(values[4]) else {
+                usage("--snapshot <zh> <base> <model> <anim|-> <frame> <out.png>")
+            }
+            let preview = load(zh: values[0], base: values[1], model: values[2], animation: values[3])
+            guard let renderer = PreviewRenderer(playback: PreviewPlayback()) else { print("no Metal"); exit(1) }
+            renderer.show(preview)
+            guard let image = renderer.renderImage(width: 640, height: 480, frame: frame),
+                  let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: values[5]) as CFURL,
+                                                                    "public.png" as CFString, 1, nil) else { exit(1) }
+            CGImageDestinationAddImage(destination, image, nil)
+            exit(CGImageDestinationFinalize(destination) ? 0 : 1)
         }
+        if let at = arguments.firstIndex(of: "--gif") {
+            let values = Array(arguments[(at + 1)...])
+            guard values.count == 6, let format = GifFormat(rawValue: values[4]) else {
+                usage("--gif <zh> <base> <model> <anim> <square|wide> <out.gif>")
+            }
+            let preview = load(zh: values[0], base: values[1], model: values[2], animation: values[3])
+            do {
+                try GifExport.write(preview, camera: PreviewPlayback().exportCamera(), format: format,
+                                    to: URL(fileURLWithPath: values[5]))
+            } catch {
+                print("gif: \(error)")
+                exit(1)
+            }
+            print("gif: \(preview.frameCount) frames at \(preview.frameRate) fps")
+            exit(0)
+        }
+    }
+
+    private static func usage(_ text: String) -> Never {
+        FileHandle.standardError.write("usage: \(text)\n".data(using: .utf8)!)
+        exit(2)
+    }
+
+    private static func load(zh: String, base: String, model: String, animation: String) -> PreviewModel {
         let db = NSTemporaryDirectory() + "end-editor-snapshot.sqlite"
         guard end_editor_initialize(db), let reader = StoreReader(path: String(cString: end_editor_db_path())) else { exit(1) }
         var commands: [String] = []
-        commands.append("game.open\t" + values[0] + "\t" + values[1])
-        commands.append("model.open\t" + values[2])
-        if values[3] != "-" { commands.append("model.animation\t" + values[3]) }
+        commands.append("game.open\t" + zh + "\t" + base)
+        commands.append("model.open\t" + model)
+        if animation != "-" { commands.append("model.animation\t" + animation) }
         for command in commands {
             let result = String(cString: end_editor_send(command))
             guard result.isEmpty else { print("\(command): \(result)"); exit(1) }
@@ -424,14 +458,7 @@ enum Snapshot {
         }
         let header = reader.modelHeader()
         print("model: \(header?.state ?? "?") \(header?.message ?? "")")
-        let preview = reader.previewModel(withGeometry: true, keepingGeometryOf: PreviewModel())
-        guard let renderer = PreviewRenderer(playback: PreviewPlayback()) else { print("no Metal"); exit(1) }
-        renderer.show(preview)
-        guard let image = renderer.renderImage(width: 640, height: 480, frame: frame),
-              let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: values[5]) as CFURL,
-                                                                "public.png" as CFString, 1, nil) else { exit(1) }
-        CGImageDestinationAddImage(destination, image, nil)
-        exit(CGImageDestinationFinalize(destination) ? 0 : 1)
+        return reader.previewModel(withGeometry: true, keepingGeometryOf: PreviewModel())
     }
 }
 
