@@ -214,6 +214,14 @@ if(NOT IS_VS6_BUILD)
     )
 endif()
 
+# GeneralsX @feature fnc12 26/11/2026 iOS app shell shared by Generals and Zero Hour.
+if(SAGE_USE_SDL3 AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    list(APPEND GAMEENGINEDEVICE_SRC
+        Include/SDL3Device/Common/IOSApp.h
+        Source/SDL3Device/Common/IOSApp.cpp
+    )
+endif()
+
 add_library(corei_gameenginedevice_private INTERFACE)
 add_library(corei_gameenginedevice_public INTERFACE)
 
