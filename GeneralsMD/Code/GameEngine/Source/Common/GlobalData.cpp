@@ -63,6 +63,8 @@
 
 #include "GameNetwork/FirewallHelper.h"
 
+#include <cstdlib>      // getenv()
+
 // TheSuperHackers @build fighter19 11/02/2026 Linux POSIX compatibility headers
 #ifndef _WIN32
 #include <unistd.h>     // readlink()
@@ -1493,6 +1495,22 @@ UnsignedInt GlobalData::generateExeCRC()
 AsciiString GlobalData::BuildUserDataPathFromRegistry()
 {
 	AsciiString userDataDir;
+
+	// GeneralsX @feature fnc12 26/11/2026 GENERALSX_USER_DATA_DIR replaces the user data folder (Maps,
+	// Replays, Options.ini), so replay tests run with a throwaway profile on every platform.
+	const char* userDataOverride = getenv("GENERALSX_USER_DATA_DIR");
+	if (userDataOverride && *userDataOverride)
+	{
+		userDataDir = userDataOverride;
+#ifdef _WIN32
+		if (!userDataDir.endsWith("\\") && !userDataDir.endsWith("/"))
+			userDataDir.concat('\\');
+#else
+		if (!userDataDir.endsWith("/"))
+			userDataDir.concat('/');
+#endif
+		return userDataDir;
+	}
 
 #ifdef _WIN32
 	// GeneralsX @refactor Bender 01/04/2026 Windows-specific path handling (Registry-based)
