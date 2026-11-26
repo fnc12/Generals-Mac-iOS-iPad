@@ -379,4 +379,9 @@ TEST_CASE("MapDocument groups, heights of old objects, properties and existing w
     CHECK(document.undo());
     CHECK(document.save() == bytes);
     CHECK_FALSE(document.toggleLink(1, 2));  // not a waypoint
+
+    // A link to a waypoint the map no longer has stays dead: new waypoints get higher ids.
+    CHECK(document.remove(3));
+    const auto fresh = document.placeWaypoint(1, 1);
+    CHECK(document.waypointId(fresh) == 21);
 }

@@ -194,6 +194,10 @@ namespace end_editor {
             this->entries.push_back(std::move(entry));
         }
         this->waypointLinks = this->file.waypointLinks;
+        // Links can name waypoints the map no longer has; a new waypoint must not revive them.
+        for(const auto &link: this->waypointLinks) {
+            this->nextWaypointId = std::max({this->nextWaypointId, link[0] + 1, link[1] + 1});
+        }
     }
 
     const MapDocument::Object *MapDocument::find(std::int64_t id) const {

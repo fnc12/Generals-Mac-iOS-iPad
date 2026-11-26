@@ -322,17 +322,20 @@ int main(int argc, char **argv) {
                 return int(number("SELECT COUNT(*) FROM " + where));
             };
 
-            // Object 1 moves by (10, 20), object 2 turns to 1 radian, object 3 goes; one object
-            // is placed in the middle of the map, a second one is placed, undone and redone, a
-            // third is placed and undone.
+            // Object 1 moves by (10, 20), object 2 turns to 1 radian, the next object that is no
+            // road point goes; one object is placed in the middle of the map, a second one is
+            // placed, undone and redone, a third is placed and undone.
             const double x1 = number("SELECT x FROM map_objects WHERE id = 1") + 10;
             const double y1 = number("SELECT y FROM map_objects WHERE id = 1") + 20;
             const double cx = number("SELECT (playable_x0 + playable_x1) / 2 FROM map");
             const double cy = number("SELECT (playable_y0 + playable_y1) / 2 FROM map");
             const auto at = [](double v) { return std::to_string(v); };
+            // Not a road point: one of those takes the other end of its segment along.
+            const auto removed = column("SELECT MIN(id) FROM map_objects WHERE id >= 3 AND kind NOT IN ('road', 'bridge')")
+                                     .front();
             const std::string owner = team.empty() ? "" : team.front();
             for(const auto &command: std::vector<std::string>{
-                    "map.move\t1\t" + at(x1) + "\t" + at(y1), "map.rotate\t2\t1", "map.delete\t3",
+                    "map.move\t1\t" + at(x1) + "\t" + at(y1), "map.rotate\t2\t1", "map.delete\t" + removed,
                     "map.place\t" + placed.front() + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
                     "map.place\t" + placed.front() + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
                     "map.undo", "map.redo",
@@ -402,8 +405,10 @@ int main(int argc, char **argv) {
             good += ok;
             if(!ok) {
                 std::printf("   %s: %d objects before, %d after, step 5: %d raised, %d health, %d pasted, %+d links, "
-                            "%+d roads (%s)\n", path.c_str(), before, after, checks[0], checks[1], checks[2], checks[3],
-                            checks[4], saveMessage.c_str());
+                            "%+d roads; %d after the first edits, expected %d; middle %d, cx+50 %d, cx+100 %d (%s)\n", path.c_str(),
+                            before, after, checks[0], checks[1], checks[2], checks[3], checks[4], edited, edited + added,
+                            int(number(near(cx, cy))), int(number(near(cx + 50, cy))), int(number(near(cx + 100, cy))),
+                            saveMessage.c_str());
             }
         }
         std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n", good, paths.size(),
