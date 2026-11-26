@@ -582,7 +582,20 @@ final class EditorModel {
         panel.directoryURL = maps
         panel.allowedContentTypes = [.init(filenameExtension: "map") ?? .data]
         panel.nameFieldStringValue = mapScene.name.isEmpty ? "New Map" : mapScene.name
-        guard panel.runModal() == .OK, var url = panel.url else { return }
+        // A sheet on the window rather than runModal: the app keeps running while it is open.
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.save(chosen: url, maps: maps)
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
+    }
+
+    private func save(chosen: URL, maps: URL) {
+        var url = chosen
         let name = url.deletingPathExtension().lastPathComponent
         if url.deletingLastPathComponent().standardizedFileURL == maps.standardizedFileURL {
             url = maps.appendingPathComponent(name, isDirectory: true).appendingPathComponent(name + ".map")
