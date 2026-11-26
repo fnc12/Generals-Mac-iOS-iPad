@@ -248,7 +248,7 @@ enum PerfHarness {
         }
     }
 
-    private static func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+    static func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
         if let match = view as? T { return match }
         for child in view.subviews {
             if let match = find(type, in: child) { return match }
@@ -256,8 +256,9 @@ enum PerfHarness {
         return nil
     }
 
-    private static func post(mouse type: NSEvent.EventType, at point: NSPoint, window: NSWindow) {
-        guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+    static func post(mouse type: NSEvent.EventType, at point: NSPoint, window: NSWindow,
+                     modifiers: NSEvent.ModifierFlags = []) {
+        guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers,
                                              timestamp: ProcessInfo.processInfo.systemUptime,
                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                              clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1) else { return }
