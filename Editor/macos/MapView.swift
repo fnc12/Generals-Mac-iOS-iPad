@@ -368,9 +368,24 @@ final class MapRenderer: NSObject, MTKViewDelegate {
     private var markerInstances: MTLBuffer?
     private var markerCount = 0
     private var marker: GPUMesh?
-    private var batchesDirty = true
+    private var batchesDirty = true {
+        didSet { if batchesDirty { contentGeneration += 1 } }
+    }
     private var batchOptions = (models: true, markers: true)
     var selected: Int64?
+    /// Grows whenever what is drawn changes other than the camera (scene, models, batches).
+    private var contentGeneration = 0
+    /// What the last presented frame showed; a frame that would look the same is not drawn.
+    private var presented: FrameKey?
+
+    private struct FrameKey: Equatable {
+        var generation: Int
+        var selected: Int64?
+        var showModels: Bool, showMarkers: Bool, showWater: Bool
+        var target: SIMD3<Float>
+        var yaw: Float, pitch: Float, distance: Float
+        var size: CGSize
+    }
 
     init?(state: MapViewState) {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
@@ -678,6 +693,13 @@ final class MapRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
+        // The view's display link calls this every vsync. Drawing an unchanged frame is not only
+        // wasted: asking for a drawable blocks the main thread until the GPU frees one, which
+        // starves everything else on it (scrolling the map list, SwiftUI updates).
+        let key = FrameKey(generation: contentGeneration, selected: selected, showModels: state.showModels,
+                           showMarkers: state.showMarkers, showWater: state.showWater, target: state.target,
+                           yaw: state.yaw, pitch: state.pitch, distance: state.distance, size: view.drawableSize)
+        guard key != presented else { return }
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
               let commands = queue.makeCommandBuffer(),
               let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else { return }
@@ -687,6 +709,7 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         encoder.endEncoding()
         commands.present(drawable)
         commands.commit()
+        presented = key
         PerfRecorder.shared?.mapFrame(encode: CACurrentMediaTime() - started)
     }
 
