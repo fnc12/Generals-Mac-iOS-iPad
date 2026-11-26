@@ -1,50 +1,76 @@
 #!/bin/bash
-# Package the iOS build of Zero Hour into a signed .app and install it on a device.
+# Package an iOS build of Zero Hour or Generals into a signed .app and install it on a device.
 #
 # Flow:
 #   1. xcodegen + xcodebuild produce a provisioning-shell app with automatic signing
 #      (bundle id me.ammaar.generalszh, team 7S264298H8, Info.plist with file sharing).
-#   2. The stub executable is replaced with the real z_generals engine binary.
+#   2. The stub executable is replaced with the real engine binary (z_generals or g_generals).
 #   3. Runtime dylibs (DXVK d3d8/d3d9, SDL3, SDL3_image) are embedded in Frameworks/
 #      and their install names rewritten to @rpath.
 #   4. Everything is re-signed inside-out with the Apple Development identity and the
 #      provisioning profile from step 1, preserving entitlements.
 #   5. Optional: install to the first connected device via devicectl.
 #
-# Usage: ./scripts/build/ios/package-ios-zh.sh [--dev] [--install]
+# Usage: ./scripts/build/ios/package-ios-zh.sh [--scheme GeneralsXZH|GeneralsX] [--dev] [--install]
+#   --scheme   the ios/project.yml target to package: GeneralsXZH (Zero Hour, default)
+#              or GeneralsX (Generals, engine from g_generals)
 #   --dev      skip bundling the 2.7 GB of game assets (code-only iteration)
 #   --install  install the packaged app to the first connected device
 set -euo pipefail
 
 DEV_MODE=0
 DO_INSTALL=0
-for arg in "$@"; do
-    case "$arg" in
-        --dev)     DEV_MODE=1 ;;
-        --install) DO_INSTALL=1 ;;
-        *) echo "ERROR: unknown argument '$arg' (usage: $0 [--dev] [--install])"; exit 1 ;;
+APP_NAME="GeneralsXZH"
+USAGE="usage: $0 [--scheme GeneralsXZH|GeneralsX] [--dev] [--install]"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dev)      DEV_MODE=1 ;;
+        --install)  DO_INSTALL=1 ;;
+        --scheme)   shift; APP_NAME="${1:-}" ;;
+        --scheme=*) APP_NAME="${1#--scheme=}" ;;
+        *) echo "ERROR: unknown argument '$1' (${USAGE})"; exit 1 ;;
     esac
+    shift
 done
+
+# Per-game differences; everything else is shared by both schemes.
+case "${APP_NAME}" in
+    GeneralsXZH)
+        GAME_SUBDIR="GeneralsMD"
+        GAME_TARGET="z_generals"
+        BUILD_PRESET="ios-vulkan"
+        DEFAULT_BUNDLE_ID="me.ammaar.generalszh"
+        DEFAULT_GAME_DATA="${HOME}/GeneralsX/GeneralsZH"
+        PACKAGE_DIR="ios-package" ;;
+    GeneralsX)
+        GAME_SUBDIR="Generals"
+        GAME_TARGET="g_generals"
+        BUILD_PRESET="ios-vulkan-generals"
+        DEFAULT_BUNDLE_ID="me.ammaar.generals"
+        DEFAULT_GAME_DATA="${HOME}/GeneralsX/Generals"
+        PACKAGE_DIR="ios-package-generals" ;;
+    *) echo "ERROR: unknown scheme '${APP_NAME}' (${USAGE})"; exit 1 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${PROJECT_ROOT}/build/ios-vulkan"
+BUILD_DIR="${PROJECT_ROOT}/build/${BUILD_PRESET}"
 IOS_DIR="${PROJECT_ROOT}/ios"
 DERIVED="${IOS_DIR}/build"
-OUT_DIR="${PROJECT_ROOT}/build/ios-package"
-APP_NAME="GeneralsXZH"
+OUT_DIR="${PROJECT_ROOT}/build/${PACKAGE_DIR}"
+XCODE_PROJECT="${IOS_DIR}/GeneralsX-iOS.xcodeproj"
 IDENTITY="${GX_SIGN_IDENTITY:-Apple Development}"
 
 # Signing/bundle identity — override for your own Apple Developer account:
 #   GX_TEAM_ID=ABCDE12345 GX_BUNDLE_ID=com.you.generalszh ./package-ios-zh.sh --install
 TEAM_ID="${GX_TEAM_ID:-7S264298H8}"
-BUNDLE_ID="${GX_BUNDLE_ID:-me.ammaar.generalszh}"
+BUNDLE_ID="${GX_BUNDLE_ID:-${DEFAULT_BUNDLE_ID}}"
 
-GAME_BIN="${BUILD_DIR}/GeneralsMD/GeneralsXZH.app/GeneralsXZH"
+GAME_BIN="${BUILD_DIR}/${GAME_SUBDIR}/${APP_NAME}.app/${APP_NAME}"
 DXVK_BUILD="${BUILD_DIR}/_deps/dxvk-build-macos"
 
 if [[ ! -f "${GAME_BIN}" ]]; then
-    echo "ERROR: engine binary not found at ${GAME_BIN} — build the ios-vulkan preset first."
+    echo "ERROR: engine binary not found at ${GAME_BIN} — build the ${BUILD_PRESET} preset first."
     exit 1
 fi
 
@@ -52,7 +78,7 @@ echo "==> Generating Xcode project (xcodegen)"
 (cd "${IOS_DIR}" && xcodegen generate --quiet)
 
 echo "==> Building provisioning shell app"
-xcodebuild -project "${IOS_DIR}/${APP_NAME}.xcodeproj" \
+xcodebuild -project "${XCODE_PROJECT}" \
     -scheme "${APP_NAME}" -configuration Release \
     -destination 'generic/platform=iOS' \
     -derivedDataPath "${DERIVED}" \
@@ -93,7 +119,7 @@ for lib in \
                 echo "    (skip, optional: $(basename "${lib}"))" ;;
             *)
                 echo "ERROR: required dylib not built: ${lib}"
-                echo "  Build first: cmake --preset ios-vulkan && cmake --build build/ios-vulkan --target z_generals"
+                echo "  Build first: cmake --preset ${BUILD_PRESET} && cmake --build build/${BUILD_PRESET} --target ${GAME_TARGET}"
                 exit 1 ;;
         esac
     fi
@@ -121,15 +147,15 @@ fi
 # Game assets inside the bundle (iOS-sanctioned home for read-only resources):
 # the app is fully self-contained, nothing lives in Documents. Skip with --dev
 # for fast code-only iterations (the engine falls back to Documents assets).
-GAME_DATA_SRC="${GX_GAME_DATA:-${HOME}/GeneralsX/GeneralsZH}"
+GAME_DATA_SRC="${GX_GAME_DATA:-${DEFAULT_GAME_DATA}}"
 FONTS_SRC="${GX_FONTS:-${HOME}/GeneralsX/ios-staging/fonts}"
 CONFIG_SRC="${GX_CONFIG:-${IOS_DIR}/config}"
 if [[ "${DEV_MODE}" != "1" ]]; then
     echo "==> Bundling game assets into the app"
     mkdir -p "${APP}/GameData"
     rsync -a --exclude=".*" \
-        --exclude="*.dylib" --exclude="run.sh" --exclude="GeneralsXZH" \
-        --exclude="GeneralsXZH.dxvk-cache" --exclude="*_d3d9.log" \
+        --exclude="*.dylib" --exclude="run.sh" --exclude="${APP_NAME}" \
+        --exclude="${APP_NAME}.dxvk-cache" --exclude="*_d3d9.log" \
         --exclude="MoltenVK_icd.json" --exclude="dxvk.conf" --exclude="fontconfig" \
         --exclude="*.DLL" --exclude="*.dll" --exclude="*.dat" --exclude="*.ico" \
         --exclude="*.bmp" --exclude="*.doc" --exclude="*.lcf" --exclude="Launcher.txt" \

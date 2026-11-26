@@ -376,6 +376,19 @@
             "environment": {
                 "PKG_CONFIG_PATH": ""
             }
+        },
+        {
+            "name": "ios-vulkan-generals",
+            "inherits": "ios-vulkan",
+            "displayName": "iOS Generals (MoltenVK + SDL3 + OpenAL) arm64 Device",
+            "description": "The base game for iOS, built on its own: Zero Hour's iOS preset turns online services off (its NGMP needs OpenSSL), while Generals has no NGMP and only builds with GameSpy on.",
+            "cacheVariables": {
+                "RTS_BUILD_ZEROHOUR": "OFF",
+                "RTS_BUILD_GENERALS": "ON",
+                "RTS_BUILD_GENERALS_TOOLS": "OFF",
+                "RTS_BUILD_GENERALS_EXTRAS": "OFF",
+                "SAGE_USE_GAMESPY": "ON"
+            }
         }
     ],
     "buildPresets": [

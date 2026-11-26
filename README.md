@@ -104,6 +104,11 @@ GX_TEAM_ID=<your-team-id> GX_BUNDLE_ID=com.you.generalszh \
     ./scripts/build/ios/package-ios-zh.sh --install  # assembles, signs, installs
 ```
 
+Generals (the base game) is its own scheme and app, installed next to Zero Hour:
+`cmake --preset ios-vulkan-generals`, build `--target g_generals` there and package
+with `--scheme GeneralsX`
+(`GX_BUNDLE_ID=com.you.generals`; assets from `~/GeneralsX/Generals`).
+
 Find your team id in Xcode → Settings → Accounts. Assets ship inside the app
 bundle (self-contained install); `--dev` skips the ~2.7 GB copy for fast code
 iteration.
