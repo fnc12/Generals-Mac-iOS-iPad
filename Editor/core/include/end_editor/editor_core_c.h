@@ -16,6 +16,13 @@
  *           normal, uv, uint32 bone), indices (uint32 triangle list), hidden, two_sided, blend,
  *           house_color
  *   model_bones, model_textures (RGBA8, rows top to bottom), model_animations
+ *   maps    : the maps of the opened game (archives and loose Maps folders): path, name, source
+ *   map     (one row, id = 1): the open map: path, name, state, message, revision, size, border,
+ *           playable area, lighting, heights, object/model counts, model_revision (grows while
+ *           the map's models load after it is "ready"), water color
+ *   map_textures ("terrain" atlas, "water"), map_terrain (mesh chunks), map_water, map_objects,
+ *           map_object_properties, map_models, map_model_parts (bind pose), map_model_textures,
+ *           map_warnings
  * Column details: src/storage.h.
  *
  * INBOUND (client -> core): tab separated commands through end_editor_send():
@@ -23,7 +30,8 @@
  *       the base game's archives hold most of the models; the first folder wins on clashes
  *   "model.open\t<model name>"        e.g. the Model of an object ("AVLeopard")
  *   "model.animation\t<name>"         one of model_animations, or "" for the bind pose
- * Errors: error:missing_argument, error:unknown_command, error:no_game (model before game).
+ *   "map.open\t<path>"                a path from maps ("maps/x/x.map") or a .map file on disk
+ * Errors: error:missing_argument, error:unknown_command, error:no_game (model or map before game).
  * Work runs in end_editor_update(), which the client calls once per tick. */
 
 #ifdef __cplusplus
@@ -51,6 +59,9 @@ const char *end_editor_send(const char *command);
 
 /* Runs queued work. Call once per client tick. */
 void end_editor_update(void);
+
+/* Number of queued jobs (0 when idle). Headless tools call end_editor_update() until it is 0. */
+int end_editor_pending_work(void);
 
 #ifdef __cplusplus
 }

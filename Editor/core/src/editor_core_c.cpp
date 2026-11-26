@@ -68,4 +68,8 @@ void end_editor_update(void) {
         // The store could not be written; the status row keeps the last state the client saw.
     }
 }
+
+int end_editor_pending_work(void) {
+    return core ? int(core->pendingJobCount()) : 0;
+}
 }

@@ -99,11 +99,138 @@ namespace end_editor {
         int frameRate = 30;
     };
 
+    // Maps the game folders hold (archives and loose Maps folders). `path` is what map.open takes.
+    struct MapListRow {
+        std::int64_t id = 0;
+        std::string path;    // normalized ("maps/alpine assault/alpine assault.map")
+        std::string name;    // folder name as written ("Alpine Assault")
+        std::string source;  // archive file name or loose file path
+        std::int64_t size = 0;
+    };
+
+    // The open map. One row (id 1). `heights`: width * height bytes, rows south to north (world
+    // height = byte * 0.625, a cell is 10 units, vertex (i, j) is at ((i - border) * 10,
+    // (j - border) * 10)). `lighting`: 18 floats: terrain ambient, diffuse, direction, then the
+    // same for objects. Models load after the map is "ready"; model_revision grows as they come.
+    struct MapRow {
+        int id = 1;
+        std::string path;
+        std::string name;
+        std::string state;  // "idle" | "loading" | "ready" | "error"
+        std::string message;
+        std::int64_t revision = 0;
+        int width = 0;
+        int height = 0;
+        int border = 0;
+        double playableX0 = 0, playableY0 = 0, playableX1 = 0, playableY1 = 0;
+        int timeOfDay = 2;
+        std::vector<char> lighting;
+        std::vector<char> heights;
+        int objectCount = 0;
+        int modelCount = 0;
+        int modelsLoaded = 0;
+        std::int64_t modelRevision = 0;
+        double waterR = 1, waterG = 1, waterB = 1, waterA = 0.5;
+        double waterRepeat = 32;
+    };
+
+    // Textures of the map view: "terrain" (the atlas of all texture classes) and "water". RGBA8,
+    // rows top to bottom.
+    struct MapTextureRow {
+        std::int64_t id = 0;
+        std::string name;
+        int width = 0;
+        int height = 0;
+        std::vector<char> rgba;
+    };
+
+    // A square of terrain cells (x, y: first cell). `vertices`: 56-byte records (position xyz,
+    // normal xyz, base uv, blend uv, extra uv, blend and extra weights); `indices`: uint32.
+    struct MapTerrainRow {
+        std::int64_t id = 0;
+        int x = 0;
+        int y = 0;
+        std::vector<char> vertices;
+        std::vector<char> indices;
+    };
+
+    // A water area or river: `vertices` float x y z (world units), `indices` uint32 triangles.
+    struct MapWaterRow {
+        std::int64_t id = 0;
+        std::string name;
+        bool river = false;
+        double height = 0;
+        std::vector<char> vertices;
+        std::vector<char> indices;
+    };
+
+    // A placed object. kind: "model", "marker", "waypoint", "road", "bridge". z is the world
+    // height (ground + offset). model_id: map_models row, 0 when drawn as a marker. color: owner's
+    // player color 0xRRGGBB.
+    struct MapObjectRow {
+        std::int64_t id = 0;
+        std::string templateName;
+        std::string kind;
+        double x = 0, y = 0, z = 0;
+        double angle = 0;
+        int flags = 0;
+        std::int64_t modelId = 0;
+        std::string owner;
+        int color = 0xFFFFFF;
+    };
+
+    // The object's properties dictionary as the map stores it.
+    struct MapPropertyRow {
+        std::int64_t id = 0;
+        std::int64_t objectId = 0;
+        std::string key;
+        std::string type;  // "bool" | "int" | "real" | "string" | "unicode"
+        std::string value;
+    };
+
+    // A model used by the map's objects; state "pending" until it is loaded.
+    struct MapModelRow {
+        std::int64_t id = 0;
+        std::string name;
+        std::string state;  // "pending" | "ready" | "error"
+        std::string message;
+        double minX = 0, minY = 0, minZ = 0, maxX = 0, maxY = 0, maxZ = 0;
+    };
+
+    // A part of a map model in its bind pose (vertices already moved by their bones: 36-byte
+    // records like model_parts, bone always 0).
+    struct MapModelPartRow {
+        std::int64_t id = 0;
+        std::int64_t modelId = 0;
+        std::string texture;
+        int blend = 0;
+        int houseColor = 0;
+        bool twoSided = false;
+        std::vector<char> vertices;
+        std::vector<char> indices;
+    };
+
+    // Textures of the map models, by name (shared between models), at most 512 px a side.
+    struct MapModelTextureRow {
+        std::int64_t id = 0;
+        std::string name;
+        int width = 0;
+        int height = 0;
+        std::vector<char> rgba;
+    };
+
+    struct MapWarningRow {
+        std::int64_t id = 0;
+        std::string text;
+    };
+
     inline auto makeStorage(const std::string &path) {
         using namespace sqlite_orm;
         return make_storage(
             path,
             make_index("objects_name", &ObjectRow::name),
+            make_index("map_object_properties_object", &MapPropertyRow::objectId),
+            make_index("map_model_parts_model", &MapModelPartRow::modelId),
             make_table("status",
                        make_column("id", &StatusRow::id, primary_key()),
                        make_column("state", &StatusRow::state),
@@ -174,7 +301,105 @@ namespace end_editor {
                        make_column("id", &ModelAnimationRow::id, primary_key().autoincrement()),
                        make_column("name", &ModelAnimationRow::name),
                        make_column("frame_count", &ModelAnimationRow::frameCount),
-                       make_column("frame_rate", &ModelAnimationRow::frameRate)));
+                       make_column("frame_rate", &ModelAnimationRow::frameRate)),
+            make_table("maps",
+                       make_column("id", &MapListRow::id, primary_key().autoincrement()),
+                       make_column("path", &MapListRow::path),
+                       make_column("name", &MapListRow::name),
+                       make_column("source", &MapListRow::source),
+                       make_column("size", &MapListRow::size)),
+            make_table("map",
+                       make_column("id", &MapRow::id, primary_key()),
+                       make_column("path", &MapRow::path),
+                       make_column("name", &MapRow::name),
+                       make_column("state", &MapRow::state),
+                       make_column("message", &MapRow::message),
+                       make_column("revision", &MapRow::revision),
+                       make_column("width", &MapRow::width),
+                       make_column("height", &MapRow::height),
+                       make_column("border", &MapRow::border),
+                       make_column("playable_x0", &MapRow::playableX0),
+                       make_column("playable_y0", &MapRow::playableY0),
+                       make_column("playable_x1", &MapRow::playableX1),
+                       make_column("playable_y1", &MapRow::playableY1),
+                       make_column("time_of_day", &MapRow::timeOfDay),
+                       make_column("lighting", &MapRow::lighting),
+                       make_column("heights", &MapRow::heights),
+                       make_column("object_count", &MapRow::objectCount),
+                       make_column("model_count", &MapRow::modelCount),
+                       make_column("models_loaded", &MapRow::modelsLoaded),
+                       make_column("model_revision", &MapRow::modelRevision),
+                       make_column("water_r", &MapRow::waterR),
+                       make_column("water_g", &MapRow::waterG),
+                       make_column("water_b", &MapRow::waterB),
+                       make_column("water_a", &MapRow::waterA),
+                       make_column("water_repeat", &MapRow::waterRepeat)),
+            make_table("map_textures",
+                       make_column("id", &MapTextureRow::id, primary_key().autoincrement()),
+                       make_column("name", &MapTextureRow::name),
+                       make_column("width", &MapTextureRow::width),
+                       make_column("height", &MapTextureRow::height),
+                       make_column("rgba", &MapTextureRow::rgba)),
+            make_table("map_terrain",
+                       make_column("id", &MapTerrainRow::id, primary_key().autoincrement()),
+                       make_column("x", &MapTerrainRow::x),
+                       make_column("y", &MapTerrainRow::y),
+                       make_column("vertices", &MapTerrainRow::vertices),
+                       make_column("indices", &MapTerrainRow::indices)),
+            make_table("map_water",
+                       make_column("id", &MapWaterRow::id, primary_key().autoincrement()),
+                       make_column("name", &MapWaterRow::name),
+                       make_column("river", &MapWaterRow::river),
+                       make_column("height", &MapWaterRow::height),
+                       make_column("vertices", &MapWaterRow::vertices),
+                       make_column("indices", &MapWaterRow::indices)),
+            make_table("map_objects",
+                       make_column("id", &MapObjectRow::id, primary_key()),
+                       make_column("template_name", &MapObjectRow::templateName),
+                       make_column("kind", &MapObjectRow::kind),
+                       make_column("x", &MapObjectRow::x),
+                       make_column("y", &MapObjectRow::y),
+                       make_column("z", &MapObjectRow::z),
+                       make_column("angle", &MapObjectRow::angle),
+                       make_column("flags", &MapObjectRow::flags),
+                       make_column("model_id", &MapObjectRow::modelId),
+                       make_column("owner", &MapObjectRow::owner),
+                       make_column("color", &MapObjectRow::color)),
+            make_table("map_object_properties",
+                       make_column("id", &MapPropertyRow::id, primary_key().autoincrement()),
+                       make_column("object_id", &MapPropertyRow::objectId),
+                       make_column("key", &MapPropertyRow::key),
+                       make_column("type", &MapPropertyRow::type),
+                       make_column("value", &MapPropertyRow::value)),
+            make_table("map_models",
+                       make_column("id", &MapModelRow::id, primary_key()),
+                       make_column("name", &MapModelRow::name),
+                       make_column("state", &MapModelRow::state),
+                       make_column("message", &MapModelRow::message),
+                       make_column("min_x", &MapModelRow::minX),
+                       make_column("min_y", &MapModelRow::minY),
+                       make_column("min_z", &MapModelRow::minZ),
+                       make_column("max_x", &MapModelRow::maxX),
+                       make_column("max_y", &MapModelRow::maxY),
+                       make_column("max_z", &MapModelRow::maxZ)),
+            make_table("map_model_parts",
+                       make_column("id", &MapModelPartRow::id, primary_key().autoincrement()),
+                       make_column("model_id", &MapModelPartRow::modelId),
+                       make_column("texture", &MapModelPartRow::texture),
+                       make_column("blend", &MapModelPartRow::blend),
+                       make_column("house_color", &MapModelPartRow::houseColor),
+                       make_column("two_sided", &MapModelPartRow::twoSided),
+                       make_column("vertices", &MapModelPartRow::vertices),
+                       make_column("indices", &MapModelPartRow::indices)),
+            make_table("map_model_textures",
+                       make_column("id", &MapModelTextureRow::id, primary_key().autoincrement()),
+                       make_column("name", &MapModelTextureRow::name),
+                       make_column("width", &MapModelTextureRow::width),
+                       make_column("height", &MapModelTextureRow::height),
+                       make_column("rgba", &MapModelTextureRow::rgba)),
+            make_table("map_warnings",
+                       make_column("id", &MapWarningRow::id, primary_key().autoincrement()),
+                       make_column("text", &MapWarningRow::text)));
     }
 
     using Storage = decltype(makeStorage(""));

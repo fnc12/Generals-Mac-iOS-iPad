@@ -2,8 +2,11 @@
 // the store holds.
 //   end-editor-cli <game folder> [--base <base Generals folder>] [--db <path>]
 //                  [--model <name> | --object <object name>] [--anim <animation>] [--all-models]
+//                  [--map <path>] [--all-maps]
 // --object opens the object's model with what its Draw module hides when idle, like the app.
 // --all-models opens the model of every object and prints a summary of what failed.
+// --map opens one map (a path from the maps table or a .map file) and waits for its models.
+// --all-maps opens every listed map (without models) and counts errors and warnings.
 #include "end_editor/editor_core_c.h"
 
 #include <sqlite3.h>
@@ -56,7 +59,8 @@ namespace {
 
 int main(int argc, char **argv) {
     std::string gameDir, baseDir, dbArg, modelName, objectName, animation;
-    bool allModels = false;
+    bool allModels = false, allMaps = false;
+    std::string mapPath;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -72,6 +76,10 @@ int main(int argc, char **argv) {
             animation = next();
         } else if(arg == "--all-models") {
             allModels = true;
+        } else if(arg == "--map") {
+            mapPath = next();
+        } else if(arg == "--all-maps") {
+            allMaps = true;
         } else {
             gameDir = arg;
         }
@@ -155,6 +163,59 @@ int main(int argc, char **argv) {
         }
         for(std::size_t i = 0; i < failed.size() && i < 20; ++i) {
             std::printf("   failed: %s\n", failed[i].c_str());
+        }
+    }
+    if(!mapPath.empty()) {
+        if(!send("map.open\t" + mapPath)) {
+            return 1;
+        }
+        while(end_editor_pending_work() > 0) {
+            end_editor_update();
+        }
+        std::printf("-- map\n");
+        print("SELECT name, state, message, width, height, border, playable_x1, playable_y1, time_of_day, "
+              "models_loaded || '/' || model_count FROM map");
+        std::printf("-- map warnings\n");
+        print("SELECT text FROM map_warnings");
+        std::printf("-- objects by kind\n");
+        print("SELECT kind, COUNT(*) FROM map_objects GROUP BY kind");
+        std::printf("-- models: state, count\n");
+        print("SELECT state, COUNT(*) FROM map_models GROUP BY state");
+        print("SELECT 'failed: ' || name || ': ' || message FROM map_models WHERE state <> 'ready' LIMIT 20");
+        std::printf("-- terrain chunks, vertices, textures\n");
+        print("SELECT COUNT(*), SUM(length(vertices)) / 56 FROM map_terrain");
+        print("SELECT name, width, height FROM map_textures");
+        print("SELECT COUNT(*), SUM(width * height * 4) FROM map_model_textures");
+        std::printf("-- water\n");
+        print("SELECT name, river, height, length(indices) / 12 FROM map_water");
+    }
+
+    if(allMaps) {
+        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        int ready = 0, clean = 0;
+        std::map<std::string, int> warningKinds;
+        std::vector<std::string> failed;
+        for(const auto &path: paths) {
+            send("map.open\t" + path);
+            const auto state = column("SELECT state || '|' || message FROM map").front();
+            if(state.rfind("ready", 0) == 0) {
+                ++ready;
+                const auto warnings = column("SELECT text FROM map_warnings");
+                clean += warnings.empty();
+                for(const auto &warning: warnings) {
+                    ++warningKinds[warning.substr(0, warning.find(':'))];
+                    std::printf("   %s: %s\n", path.c_str(), warning.c_str());
+                }
+            } else {
+                failed.push_back(path + ": " + state);
+            }
+        }
+        std::printf("-- all maps: %zu, ready %d, without warnings %d\n", paths.size(), ready, clean);
+        for(const auto &[kind, count]: warningKinds) {
+            std::printf("   %d x %s\n", count, kind.c_str());
+        }
+        for(const auto &item: failed) {
+            std::printf("   failed: %s\n", item.c_str());
         }
     }
     sqlite3_close(db);
