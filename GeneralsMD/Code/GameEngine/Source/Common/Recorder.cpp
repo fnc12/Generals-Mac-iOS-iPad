@@ -1055,6 +1055,15 @@ void RecorderClass::handleCRCMessage(UnsignedInt newCRC, Int playerIndex, Bool f
 			fflush(stderr);
 		}
 
+		// GeneralsX @tweak fnc12 26/11/2026 Log every compared CRC in headless mode, so replay tests can
+		// count the compares and the CRC sequences of two platforms can be diffed.
+		if (TheGlobalData && TheGlobalData->m_headless && mismatchFrame > 0)
+		{
+			fprintf(stderr, "[GeneralsX] REPLAY_CRC_COMPARE frame=%u inGame=0x%08X replay=0x%08X %s\n",
+				mismatchFrame, playbackCRC, newCRC, newCRC == playbackCRC ? "match" : "MISMATCH");
+			fflush(stderr);
+		}
+
 		// GeneralsX @bugfix fbraz3 22/09/2026 Require mismatchFrame > 0 to report desync (#315).
 		// Frame 0 CRC compares uninitialized pre-simulation state where subtle mode differences
 		// (e.g. GAME_SKIRMISH vs GAME_REPLAY AIGroup allocation order) cause false positive mismatches.
