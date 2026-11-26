@@ -30,6 +30,9 @@
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
+#include <algorithm>
+#include <vector>
+
 // Public Data ////////////////////////////////////////////////////////////////////////////////////
 NameKeyGenerator *TheNameKeyGenerator = nullptr;  ///< name key gen. singleton
 
@@ -253,6 +256,51 @@ NameKeyType NameKeyGenerator::createNameKey(UnsignedInt hash, const AsciiString&
 #endif
 
 	return result;
+}
+
+//-------------------------------------------------------------------------------------------------
+void NameKeyGenerator::reportNameKeys(const char* stage) const
+{
+	const char* dumpDir = getenv("GENERALSX_NAMEKEY_DUMP");
+	if (dumpDir == nullptr || dumpDir[0] == '\0')
+		return;
+
+	std::vector<const Bucket*> buckets;
+	for (Int i = 0; i < SOCKET_COUNT; ++i)
+	{
+		for (const Bucket *b = m_sockets[i]; b; b = b->m_nextInSocket)
+			buckets.push_back(b);
+	}
+	std::sort(buckets.begin(), buckets.end(), [](const Bucket* a, const Bucket* b) { return a->m_key < b->m_key; });
+
+	AsciiString fileName;
+	FILE* file = nullptr;
+	if (strcmp(dumpDir, "1") != 0)
+	{
+		fileName.format("%s/namekeys-%s.txt", dumpDir, stage);
+		file = fopen(fileName.str(), "w");
+	}
+
+	// FNV-1a over "key name\n" lines in key order.
+	UnsignedInt hash = 2166136261u;
+	Int player0 = NAMEKEY_INVALID;
+	char line[1024];
+	for (const Bucket* b : buckets)
+	{
+		const Int len = snprintf(line, sizeof(line), "%d %s\n", (Int)b->m_key, b->m_nameString.str());
+		for (Int i = 0; i < len && i < (Int)sizeof(line) - 1; ++i)
+			hash = (hash ^ (UnsignedByte)line[i]) * 16777619u;
+		if (file)
+			fputs(line, file);
+		if (b->m_nameString.compare("player0") == 0)
+			player0 = b->m_key;
+	}
+	if (file)
+		fclose(file);
+
+	fprintf(stderr, "[GeneralsX] NAMEKEY_TABLE stage=%s count=%d next=%u hash=0x%08X player0=%d\n",
+		stage, (Int)buckets.size(), m_nextID, hash, player0);
+	fflush(stderr);
 }
 
 //-------------------------------------------------------------------------------------------------

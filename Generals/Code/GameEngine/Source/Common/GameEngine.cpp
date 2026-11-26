@@ -622,6 +622,7 @@ void GameEngine::init()
 		DEBUG_LOG(("INI CRC is 0x%8.8X", TheGlobalData->m_iniCRC));
 
 		TheSubsystemList->postProcessLoadAll();
+		TheNameKeyGenerator->reportNameKeys("init");
 
 		// GeneralsX @bugfix Copilot 11/05/2026 Prevent uncapped render when FPS limiter is enabled but no valid limit value was loaded.
 		if (TheGlobalData->m_useFpsLimit && TheGlobalData->m_framesPerSecondLimit <= 0)
