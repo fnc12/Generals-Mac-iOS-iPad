@@ -586,6 +586,12 @@ int main(int argc, char* argv[])
 				static char yresFlag[] = "-yres";
 				const int yres = winH;
 				int xres = winW;
+				// Cap the internal aspect at 16:9 (the widest the 4:3-designed HUD is
+				// meant for, same cap as the Options resolution filter). On 19.5:9
+				// phones the rest is pillarboxed by DX8Wrapper instead of stretching
+				// the control bar across the whole panel.
+				const int maxXres = yres * 16 / 9;
+				if (xres > maxXres) xres = maxXres;
 				xres &= ~1;  // keep it even
 				snprintf(xresVal, sizeof(xresVal), "%d", xres);
 				snprintf(yresVal, sizeof(yresVal), "%d", yres);
