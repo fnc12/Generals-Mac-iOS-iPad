@@ -17,6 +17,7 @@ namespace end_editor {
         std::string gameDir;
         std::int64_t objectCount = 0;
         std::int64_t revision = 0;  // grows on every change
+        std::int64_t mapListRevision = 0;  // grows when the maps table is listed again
     };
 
     struct ObjectRow {
@@ -132,6 +133,26 @@ namespace end_editor {
         std::int64_t modelRevision = 0;
         double waterR = 1, waterG = 1, waterB = 1, waterA = 0.5;
         double waterRepeat = 32;
+        // Editing: object_revision grows whenever map_objects changes after the map opened;
+        // last_object is the object the last edit, undo or redo changed; edited: changes since
+        // opening or saving. edit_message: the last edit or save problem or result.
+        std::int64_t objectRevision = 0;
+        int undoCount = 0;
+        int redoCount = 0;
+        bool edited = false;
+        std::int64_t lastObject = 0;
+        std::string editMessage;
+        std::string savedPath;
+    };
+
+    // Players of the open map's SidesList: what a placed object can be owned by (its team).
+    struct MapPlayerRow {
+        std::int64_t id = 0;
+        std::string name;  // "" for the neutral player
+        std::string displayName;
+        std::string team;  // the player's default team, what originalOwner names
+        int color = 0xFFFFFF;
+        bool neutral = false;
     };
 
     // Textures of the map view: "terrain" (the atlas of all texture classes) and "water". RGBA8,
@@ -237,7 +258,8 @@ namespace end_editor {
                        make_column("message", &StatusRow::message),
                        make_column("game_dir", &StatusRow::gameDir),
                        make_column("object_count", &StatusRow::objectCount),
-                       make_column("revision", &StatusRow::revision)),
+                       make_column("revision", &StatusRow::revision),
+                       make_column("map_list_revision", &StatusRow::mapListRevision)),
             make_table("objects",
                        make_column("id", &ObjectRow::id, primary_key().autoincrement()),
                        make_column("name", &ObjectRow::name),
@@ -333,7 +355,21 @@ namespace end_editor {
                        make_column("water_g", &MapRow::waterG),
                        make_column("water_b", &MapRow::waterB),
                        make_column("water_a", &MapRow::waterA),
-                       make_column("water_repeat", &MapRow::waterRepeat)),
+                       make_column("water_repeat", &MapRow::waterRepeat),
+                       make_column("object_revision", &MapRow::objectRevision),
+                       make_column("undo_count", &MapRow::undoCount),
+                       make_column("redo_count", &MapRow::redoCount),
+                       make_column("edited", &MapRow::edited),
+                       make_column("last_object", &MapRow::lastObject),
+                       make_column("edit_message", &MapRow::editMessage),
+                       make_column("saved_path", &MapRow::savedPath)),
+            make_table("map_players",
+                       make_column("id", &MapPlayerRow::id, primary_key().autoincrement()),
+                       make_column("name", &MapPlayerRow::name),
+                       make_column("display_name", &MapPlayerRow::displayName),
+                       make_column("team", &MapPlayerRow::team),
+                       make_column("color", &MapPlayerRow::color),
+                       make_column("neutral", &MapPlayerRow::neutral)),
             make_table("map_textures",
                        make_column("id", &MapTextureRow::id, primary_key().autoincrement()),
                        make_column("name", &MapTextureRow::name),

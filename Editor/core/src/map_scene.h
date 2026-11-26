@@ -79,6 +79,9 @@ namespace end_editor {
     // Terrain.ini and Water.ini are read from `files`.
     MapScene buildMapScene(const MapFile &map, const GameFiles &files, const ObjectLookup &findObject);
 
+    // One object as the scene shows it: kind, model, world height, owner color.
+    PlacedObject resolveObject(const MapFile &map, const MapObject &object, const ObjectLookup &findObject);
+
     // Ear clipping of a simple polygon (either winding). Falls back to a fan for what it cannot
     // clip (self-intersecting outlines).
     std::vector<std::uint32_t> triangulatePolygon(const std::vector<std::array<float, 2>> &points);

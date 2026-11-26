@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -50,6 +51,15 @@ namespace end_editor {
         std::int32_t flags = 0;
         std::string templateName;
         Dict properties;
+        std::size_t chunk = 0;  // its chunk in MapFile::objectChunks
+    };
+
+    // Where a chunk is in MapFile::data: its 10-byte header starts at `header`, its data ends at
+    // `end`.
+    struct MapChunkSpan {
+        std::string name;
+        std::uint16_t version = 0;
+        std::size_t header = 0, end = 0;
     };
     // MapObject.h flags.
     constexpr std::int32_t mapObjectRoadFlags = 0x02 | 0x04;
@@ -109,7 +119,21 @@ namespace end_editor {
 
         std::vector<std::string> chunkNames;  // top-level chunks, in file order
         std::vector<std::string> warnings;
+
+        // What writing the file back needs (map_document.h): the unpacked bytes, where the table
+        // of contents ends, its names, the top-level chunks and the children of ObjectsList (every
+        // one, also those the engine drops). Chunks are copied from `data` as they are.
+        std::string data;
+        std::size_t tableEnd = 0;
+        std::map<std::uint32_t, std::string> names;
+        std::vector<MapChunkSpan> chunks;
+        std::vector<MapChunkSpan> objectChunks;
+        std::uint16_t objectsVersion = 0;  // of the ObjectsList chunk, 0 when the map has none
     };
+
+    // Whether the engine keeps an object at this height above the ground (it drops the others
+    // while reading the map).
+    bool isPlausibleObjectHeight(float z);
 
     // Parses a .map file (compressed or not). Returns false and sets `error` when the file cannot
     // be read at all; damaged or unexpected parts that can be skipped become warnings.

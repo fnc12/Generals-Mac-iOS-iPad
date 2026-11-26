@@ -6,7 +6,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cmath>
 #include <fstream>
+#include <locale>
+#include <sstream>
+#include <system_error>
 
 namespace end_editor {
 
@@ -22,6 +26,22 @@ namespace end_editor {
                 }
                 start = tab + 1;
             }
+        }
+
+        // A number of a command argument ("12.5"), independent of the C locale.
+        bool parseNumber(const std::string &text, double &value) {
+            std::istringstream stream(text);
+            stream.imbue(std::locale::classic());
+            stream >> value;
+            return !text.empty() && stream && stream.peek() == std::char_traits<char>::eof() && std::isfinite(value);
+        }
+
+        bool isInside(const std::filesystem::path &path, const std::filesystem::path &folder) {
+            std::error_code error;
+            const auto full = std::filesystem::weakly_canonical(path, error);
+            const auto base = std::filesystem::weakly_canonical(folder, error);
+            const auto relative = full.lexically_relative(base);
+            return !base.empty() && !relative.empty() && *relative.begin() != "..";
         }
 
         template<class T>
@@ -103,6 +123,54 @@ namespace end_editor {
             this->jobs.push_back(Job{Job::openMap, arguments});
             return "";
         }
+        if(name == "maps.user") {
+            this->userMapsFolder = hasArgument ? arguments.front() : "";
+            if(this->loader) {
+                this->jobs.push_back(Job{Job::listMaps, {}});
+            }
+            return "";
+        }
+        const bool mapQueued = std::any_of(this->jobs.begin(), this->jobs.end(),
+                                           [](const Job &job) { return job.kind == Job::openMap; });
+        if(name == "map.place" || name == "map.move" || name == "map.rotate" || name == "map.delete" ||
+           name == "map.undo" || name == "map.redo") {
+            if(!this->document && !mapQueued) {
+                return "error:no_map";
+            }
+            // Arguments: place <template> <x> <y> <angle> <team>, move <id> <x> <y>,
+            // rotate <id> <angle>, delete <id>.
+            const std::size_t needed = name == "map.place" ? 5 : name == "map.move" ? 3 : name == "map.rotate" ? 2
+                                                                : name == "map.delete"  ? 1
+                                                                                        : 0;
+            if(arguments.size() < needed || (needed > 0 && !hasArgument)) {
+                return "error:missing_argument";
+            }
+            const std::size_t firstNumber = name == "map.place" ? 1 : 0;
+            const std::size_t numbers = name == "map.place" ? 3 : needed;
+            for(std::size_t i = firstNumber; i < firstNumber + numbers; ++i) {
+                double value = 0;
+                if(!parseNumber(arguments[i], value)) {
+                    return "error:bad_argument";
+                }
+            }
+            if(name == "map.place" && !this->findObject(arguments.front())) {
+                return "error:unknown_template";
+            }
+            std::vector<std::string> edit{std::string(name)};
+            edit.insert(edit.end(), arguments.begin(), arguments.begin() + std::ptrdiff_t(std::min(needed, arguments.size())));
+            this->jobs.push_back(Job{Job::editMap, edit});
+            return "";
+        }
+        if(name == "map.save") {
+            if(!hasArgument) {
+                return "error:missing_argument";
+            }
+            if(!this->document && !mapQueued) {
+                return "error:no_map";
+            }
+            this->jobs.push_back(Job{Job::saveMap, arguments});
+            return "";
+        }
         return "error:unknown_command";
     }
 
@@ -131,7 +199,9 @@ namespace end_editor {
                     this->runOpenModel(job.arguments);
                     return;
                 case Job::playAnimation:
-                    if(supersededBy([](auto kind) { return kind != Job::openMap && kind != Job::loadMapModels; })) {
+                    if(supersededBy([](auto kind) {
+                           return kind == Job::playAnimation || kind == Job::openModel || kind == Job::openGame;
+                       })) {
                         continue;
                     }
                     this->runPlayAnimation(job.arguments.front());
@@ -148,6 +218,24 @@ namespace end_editor {
                     }
                     this->runLoadMapModels();
                     return;
+                case Job::editMap:
+                    // Edits are quick: every one queued runs now, in order, in one transaction.
+                    this->storage->transaction([&] {
+                        this->runEditMap(job.arguments);
+                        while(!this->jobs.empty() && this->jobs.front().kind == Job::editMap) {
+                            const auto next = std::move(this->jobs.front());
+                            this->jobs.pop_front();
+                            this->runEditMap(next.arguments);
+                        }
+                        return true;
+                    });
+                    return;
+                case Job::saveMap:
+                    this->runSaveMap(job.arguments.front());
+                    return;
+                case Job::listMaps:
+                    this->relistMaps();
+                    return;
             }
         }
     }
@@ -160,6 +248,7 @@ namespace end_editor {
         row.gameDir = gameDir;
         row.objectCount = objectCount;
         row.revision = ++this->revision;
+        row.mapListRevision = this->mapListRevision;
         this->storage->replace(row);
     }
 
@@ -174,6 +263,7 @@ namespace end_editor {
 
     void EditorCore::runOpenGame(const Job &job) {
         std::vector<std::filesystem::path> folders(job.arguments.begin(), job.arguments.end());
+        this->gameFolders = folders;
         this->loader.reset();
         this->model = LoadedModel{};
         const auto scan = scanGameData(folders, this->files);
@@ -342,9 +432,13 @@ namespace end_editor {
         this->storage->remove_all<MapModelPartRow>();
         this->storage->remove_all<MapModelTextureRow>();
         this->storage->remove_all<MapWarningRow>();
+        this->storage->remove_all<MapPlayerRow>();
         this->mapModels.clear();
         this->nextMapModel = 0;
         this->mapTextures.clear();
+        this->mapModelIds.clear();
+        this->mapModelJobQueued = false;
+        this->document.reset();
     }
 
     void EditorCore::listMaps() {
@@ -364,6 +458,48 @@ namespace end_editor {
             row.source = this->files.sourceOf(path);
             this->storage->insert(row);
         }
+        // The game's user maps: Maps/<name>/<name>.map (MapCache::loadMapsFromDisk), opened by
+        // their path on disk.
+        std::error_code error;
+        if(this->userMapsFolder.empty() || !std::filesystem::is_directory(this->userMapsFolder, error)) {
+            return;
+        }
+        std::vector<std::filesystem::path> userMaps;
+        for(const auto &folder: std::filesystem::directory_iterator(this->userMapsFolder, error)) {
+            if(!folder.is_directory(error)) {
+                continue;
+            }
+            for(const auto &file: std::filesystem::directory_iterator(folder.path(), error)) {
+                auto extension = file.path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                               [](unsigned char c) { return char(std::tolower(c)); });
+                if(file.is_regular_file(error) && extension == ".map") {
+                    userMaps.push_back(file.path());
+                }
+            }
+        }
+        std::sort(userMaps.begin(), userMaps.end());
+        for(const auto &file: userMaps) {
+            MapListRow row;
+            row.path = file.string();
+            row.name = file.parent_path().filename().string();
+            row.source = "User maps";
+            row.size = std::int64_t(std::filesystem::file_size(file, error));
+            this->storage->insert(row);
+        }
+    }
+
+    void EditorCore::relistMaps() {
+        this->storage->transaction([&] {
+            this->storage->remove_all<MapListRow>();
+            this->listMaps();
+            // Only the list changed: the status revision stays (a client re-reads everything on it).
+            if(auto status = this->storage->get_pointer<StatusRow>(1)) {
+                status->mapListRevision = ++this->mapListRevision;
+                this->storage->replace(*status);
+            }
+            return true;
+        });
     }
 
     const ObjectInfo *EditorCore::findObject(const std::string &templateName) const {
@@ -428,73 +564,54 @@ namespace end_editor {
                                                   toBlob(water.indices)});
             }
 
-            // One map_models row per distinct model request, in first-use order.
-            std::map<std::string, std::int64_t> modelIds;
-            std::int64_t objectId = 0;
-            for(const auto &object: scene.objects) {
-                MapObjectRow row;
-                row.id = ++objectId;
-                row.templateName = object.templateName;
-                row.kind = object.kind;
-                row.x = object.x;
-                row.y = object.y;
-                row.z = object.z;
-                row.angle = object.angle;
-                row.flags = object.flags;
-                row.owner = object.owner;
-                row.color = int(object.color);
-                if(!object.modelKey.empty()) {
-                    auto [it, added] = modelIds.emplace(object.modelKey, std::int64_t(modelIds.size() + 1));
-                    if(added) {
-                        MapModelRow model;
-                        model.id = it->second;
-                        model.name = object.model;
-                        model.state = "pending";
-                        this->storage->replace(model);
-                        this->mapModels.push_back(PendingMapModel{it->second, object.modelKey});
-                    }
-                    row.modelId = it->second;
-                }
-                this->storage->replace(row);
-                for(const auto &value: object.properties) {
-                    this->storage->insert(
-                        MapPropertyRow{0, row.id, value.key, dictTypeName(value.type), value.toString()});
+            for(const auto &player: mapPlayers(map)) {
+                this->storage->insert(MapPlayerRow{0, player.name, player.displayName, player.team,
+                                                   int(player.color), player.neutral});
+            }
+            const auto objectCount = scene.objects.size();
+            this->document = std::make_unique<MapDocument>(std::move(map));
+            // The document numbers the objects the engine keeps 1.. in file order, like the scene.
+            for(const auto &entry: this->document->objects()) {
+                if(entry.id != 0) {
+                    this->writeMapObject(entry.id);
                 }
             }
+            const auto &opened = this->document->map();
 
             MapRow row;
             row.path = path;
             row.name = name;
             row.state = "ready";
-            row.message = std::to_string(map.width) + "×" + std::to_string(map.height) + ", " +
-                          std::to_string(scene.objects.size()) + " objects, " + std::to_string(modelIds.size()) +
+            row.message = std::to_string(opened.width) + "×" + std::to_string(opened.height) + ", " +
+                          std::to_string(objectCount) + " objects, " + std::to_string(this->mapModelIds.size()) +
                           " models, " + std::to_string(scene.water.size()) + " water areas, " +
-                          std::to_string(map.warnings.size() + scene.warnings.size()) + " warnings";
+                          std::to_string(opened.warnings.size() + scene.warnings.size()) + " warnings";
             row.revision = ++this->revision;
-            row.width = map.width;
-            row.height = map.height;
-            row.border = map.border;
+            row.width = opened.width;
+            row.height = opened.height;
+            row.border = opened.border;
             row.playableX0 = scene.playable[0];
             row.playableY0 = scene.playable[1];
             row.playableX1 = scene.playable[2];
             row.playableY1 = scene.playable[3];
-            row.timeOfDay = map.lighting.timeOfDay;
-            const auto time = std::size_t(std::clamp(map.lighting.timeOfDay, 1, 4) - 1);
+            row.timeOfDay = opened.lighting.timeOfDay;
+            const auto time = std::size_t(std::clamp(opened.lighting.timeOfDay, 1, 4) - 1);
             std::vector<float> lighting;
-            for(const auto *light: {&map.lighting.terrain[time], &map.lighting.objects[time]}) {
+            for(const auto *light: {&opened.lighting.terrain[time], &opened.lighting.objects[time]}) {
                 lighting.insert(lighting.end(), light->ambient.begin(), light->ambient.end());
                 lighting.insert(lighting.end(), light->diffuse.begin(), light->diffuse.end());
                 lighting.insert(lighting.end(), light->direction.begin(), light->direction.end());
             }
-            if(!map.hasLighting) {  // no GlobalLighting chunk: a plain afternoon sun
+            if(!opened.hasLighting) {  // no GlobalLighting chunk: a plain afternoon sun
                 lighting = {0.4f, 0.4f, 0.4f, 0.8f, 0.8f, 0.8f, -0.8f, 0.4f, -0.45f,
                             0.4f, 0.4f, 0.4f, 0.8f, 0.8f, 0.8f, -0.8f, 0.4f, -0.45f};
             }
             row.lighting = toBlob(lighting);
-            row.heights = toBlob(map.heights);
-            row.objectCount = int(scene.objects.size());
-            row.modelCount = int(modelIds.size());
+            row.heights = toBlob(opened.heights);
+            row.objectCount = int(objectCount);
+            row.modelCount = int(this->mapModelIds.size());
             row.modelRevision = row.revision;
+            row.objectRevision = row.revision;
             const auto &look = scene.waterLook;
             row.waterR = look.standingColor[0] * look.diffuse[0];
             row.waterG = look.standingColor[1] * look.diffuse[1];
@@ -504,9 +621,7 @@ namespace end_editor {
             this->storage->replace(row);
             return true;
         });
-        if(!this->mapModels.empty()) {
-            this->jobs.push_back(Job{Job::loadMapModels, {}});
-        }
+        // writeMapObject() queued the model loading when the map uses any model.
     }
 
     void EditorCore::runLoadMapModels() {
@@ -603,8 +718,158 @@ namespace end_editor {
             }
             return true;
         });
-        if(this->nextMapModel < this->mapModels.size()) {
+        this->mapModelJobQueued = this->nextMapModel < this->mapModels.size();
+        if(this->mapModelJobQueued) {
             this->jobs.push_back(Job{Job::loadMapModels, {}});
+        }
+    }
+
+    void EditorCore::writeMapObject(std::int64_t id) {
+        using namespace sqlite_orm;
+        this->storage->remove_all<MapPropertyRow>(where(c(&MapPropertyRow::objectId) == id));
+        const auto *entry = this->document ? this->document->find(id) : nullptr;
+        if(!entry) {
+            this->storage->remove<MapObjectRow>(id);
+            return;
+        }
+        const auto placed = resolveObject(this->document->map(), entry->object,
+                                          [&](const std::string &name) { return this->findObject(name); });
+        MapObjectRow row;
+        row.id = id;
+        row.templateName = placed.templateName;
+        row.kind = placed.kind;
+        row.x = placed.x;
+        row.y = placed.y;
+        row.z = placed.z;
+        row.angle = placed.angle;
+        row.flags = placed.flags;
+        row.owner = placed.owner;
+        row.color = int(placed.color);
+        if(!placed.modelKey.empty()) {
+            // One map_models row per distinct model request, in first-use order.
+            auto [it, added] = this->mapModelIds.emplace(placed.modelKey, std::int64_t(this->mapModelIds.size() + 1));
+            if(added) {
+                MapModelRow model;
+                model.id = it->second;
+                model.name = placed.model;
+                model.state = "pending";
+                this->storage->replace(model);
+                this->mapModels.push_back(PendingMapModel{it->second, placed.modelKey});
+                if(!this->mapModelJobQueued && this->loader) {
+                    this->jobs.push_back(Job{Job::loadMapModels, {}});
+                    this->mapModelJobQueued = true;
+                }
+            }
+            row.modelId = it->second;
+        }
+        this->storage->replace(row);
+        for(const auto &value: placed.properties) {
+            this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value.type), value.toString()});
+        }
+    }
+
+    void EditorCore::updateMapEditState(const std::string &message) {
+        auto row = this->storage->get_pointer<MapRow>(1);
+        if(!row || !this->document) {
+            return;
+        }
+        row->objectRevision = ++this->revision;
+        row->undoCount = int(this->document->undoCount());
+        row->redoCount = int(this->document->redoCount());
+        row->edited = this->document->edited();
+        row->lastObject = this->document->lastChanged();
+        row->editMessage = message;
+        row->modelCount = int(this->mapModelIds.size());
+        row->objectCount = int(std::count_if(this->document->objects().begin(), this->document->objects().end(),
+                                             [](const auto &entry) { return entry.id != 0 && !entry.removed; }));
+        this->storage->replace(*row);
+    }
+
+    void EditorCore::runEditMap(const std::vector<std::string> &arguments) {
+        if(!this->document || arguments.empty()) {
+            return;
+        }
+        const auto &name = arguments.front();
+        const auto number = [&](std::size_t i) {
+            double value = 0;
+            parseNumber(i < arguments.size() ? arguments[i] : "", value);
+            return value;
+        };
+        bool done = false;
+        if(name == "map.place") {
+            const auto &team = arguments.size() > 5 ? arguments[5] : std::string();
+            this->document->place(arguments[1], float(number(2)), float(number(3)), float(number(4)), team);
+            done = true;
+        } else if(name == "map.move") {
+            done = this->document->move(std::int64_t(number(1)), float(number(2)), float(number(3)));
+        } else if(name == "map.rotate") {
+            done = this->document->rotate(std::int64_t(number(1)), float(number(2)));
+        } else if(name == "map.delete") {
+            done = this->document->remove(std::int64_t(number(1)));
+        } else if(name == "map.undo") {
+            done = this->document->undo();
+        } else if(name == "map.redo") {
+            done = this->document->redo();
+        }
+        if(done) {
+            this->writeMapObject(this->document->lastChanged());
+        }
+        this->updateMapEditState(done ? "" : name == "map.undo" ? "Nothing to undo"
+                                             : name == "map.redo" ? "Nothing to redo"
+                                                                  : "No such object");
+    }
+
+    void EditorCore::runSaveMap(const std::string &path) {
+        if(!this->document) {
+            return;
+        }
+        const std::filesystem::path target(path);
+        std::string message;
+        for(const auto &folder: this->gameFolders) {
+            if(isInside(target, folder)) {
+                message = "error: not saved, " + path + " is inside the game folder";
+            }
+        }
+        if(message.empty()) {
+            const auto bytes = this->document->save();
+            std::error_code error;
+            if(target.has_parent_path()) {
+                std::filesystem::create_directories(target.parent_path(), error);
+            }
+            // Written next to the target, then renamed over it: a failed write leaves no half file.
+            auto temporary = target;
+            temporary += ".saving";
+            {
+                std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+                file.write(bytes.data(), std::streamsize(bytes.size()));
+                if(!file) {
+                    message = "error: cannot write " + temporary.string();
+                }
+            }
+            if(message.empty()) {
+                std::filesystem::rename(temporary, target, error);
+                if(error) {
+                    message = "error: cannot write " + path + ": " + error.message();
+                }
+            }
+            if(!message.empty()) {
+                std::filesystem::remove(temporary, error);
+            }
+        }
+        this->storage->transaction([&] {
+            if(message.empty()) {
+                this->document->markSaved();
+                if(auto row = this->storage->get_pointer<MapRow>(1)) {
+                    row->savedPath = path;
+                    this->storage->replace(*row);
+                }
+                message = "Saved " + path;
+            }
+            this->updateMapEditState(message);
+            return true;
+        });
+        if(!this->userMapsFolder.empty() && isInside(target, this->userMapsFolder)) {
+            this->relistMaps();
         }
     }
 }

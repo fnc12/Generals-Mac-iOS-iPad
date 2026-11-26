@@ -84,6 +84,7 @@ namespace end_editor {
             const auto id = std::uint32_t(this->readInt());
             this->names[id] = std::move(name);
         }
+        this->tocEnd = this->position;
     }
 
     const std::string &DataChunkReader::nameOf(std::uint32_t id) const {
@@ -107,7 +108,6 @@ namespace end_editor {
     }
 
     bool DataChunkReader::openChunk(Chunk &chunk) {
-        constexpr std::size_t headerBytes = 10;
         if(this->left() < headerBytes) {
             return false;
         }

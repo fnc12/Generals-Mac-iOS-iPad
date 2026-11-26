@@ -2,11 +2,13 @@
 
 #include "game_files.h"
 #include "ini_objects.h"
+#include "map_document.h"
 #include "map_file.h"
 #include "model_loader.h"
 #include "storage.h"
 
 #include <deque>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <set>
@@ -42,7 +44,7 @@ namespace end_editor {
 
       private:
         struct Job {
-            enum Kind { openGame, openModel, playAnimation, openMap, loadMapModels } kind = openGame;
+            enum Kind { openGame, openModel, playAnimation, openMap, loadMapModels, editMap, saveMap, listMaps } kind = openGame;
             std::vector<std::string> arguments;
         };
 
@@ -57,6 +59,13 @@ namespace end_editor {
         void listMaps();
         void runOpenMap(const std::string &path);
         void runLoadMapModels();
+        void runEditMap(const std::vector<std::string> &arguments);
+        void runSaveMap(const std::string &path);
+        void relistMaps();
+        // Writes one object of the open document to map_objects / map_object_properties (and
+        // queues its model when the map has not used it yet); removes the rows when it is gone.
+        void writeMapObject(std::int64_t id);
+        void updateMapEditState(const std::string &message);
         const ObjectInfo *findObject(const std::string &templateName) const;
 
         std::string path;
@@ -77,5 +86,11 @@ namespace end_editor {
         std::vector<PendingMapModel> mapModels;
         std::size_t nextMapModel = 0;
         std::set<std::string> mapTextures;  // names already in map_model_textures
+        std::map<std::string, std::int64_t> mapModelIds;  // model request -> map_models id
+        bool mapModelJobQueued = false;
+        std::unique_ptr<MapDocument> document;  // the open map, for editing and saving
+        std::string userMapsFolder;  // the game's user Maps folder, listed with the game's maps
+        std::int64_t mapListRevision = 0;
+        std::vector<std::filesystem::path> gameFolders;  // map.save never writes inside them
     };
 }
