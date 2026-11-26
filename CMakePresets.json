@@ -360,6 +360,7 @@
                 "SAGE_DXVK_USE_LOCAL_FORK": "ON",
                 "SAGE_UPDATE_CHECK": "OFF",
                 "SAGE_USE_NGMP": "OFF",
+                "SAGE_USE_GAMESPY": "OFF",
                 "RTS_CRASHDUMP_ENABLE": "OFF",
                 "RTS_BUILD_OPTION_FFMPEG": "ON",
                 "RTS_BUILD_OPTION_SAGE_PATCH": "OFF",

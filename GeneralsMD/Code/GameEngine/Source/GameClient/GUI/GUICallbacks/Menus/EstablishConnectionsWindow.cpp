@@ -137,6 +137,9 @@ void ShowEstablishConnectionsWindow() {
 	}
 	establishConnectionsLayout->hide(FALSE);
 	TheWindowManager->winSetFocus(establishConnectionsLayout->getFirstWindow());
+	// GeneralsX @build fnc12 26/11/2026 TheGameSpyGame exists only with an online
+	// service (the same condition that keeps Core's GameSpy sources in the build).
+#if defined(SAGE_USE_GAMESPY) || defined(SAGE_USE_NGMP)
 	if (!TheGameSpyGame->isQMGame())
 	{
 		showGameSpyGameOptionsUnderlyingGUIElements(FALSE);
@@ -145,6 +148,7 @@ void ShowEstablishConnectionsWindow() {
 	{
 		showGameSpyQMUnderlyingGUIElements(FALSE);
 	}
+#endif
 }
 
 void HideEstablishConnectionsWindow() {
@@ -159,6 +163,9 @@ void HideEstablishConnectionsWindow() {
 	establishConnectionsLayout->destroyWindows();
 	deleteInstance(establishConnectionsLayout);
 	establishConnectionsLayout = nullptr;
+	// GeneralsX @build fnc12 26/11/2026 TheGameSpyGame exists only with an online
+	// service (the same condition that keeps Core's GameSpy sources in the build).
+#if defined(SAGE_USE_GAMESPY) || defined(SAGE_USE_NGMP)
 	if (!TheGameSpyGame->isQMGame())
 	{
 		showGameSpyGameOptionsUnderlyingGUIElements(TRUE);
@@ -167,6 +174,7 @@ void HideEstablishConnectionsWindow() {
 	{
 		showGameSpyQMUnderlyingGUIElements(TRUE);
 	}
+#endif
 }
 
 WindowMsgHandledType EstablishConnectionsControlInput(GameWindow *window, UnsignedInt msg,
