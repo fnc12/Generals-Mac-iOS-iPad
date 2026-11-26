@@ -194,12 +194,19 @@ int main(int argc, char **argv) {
         const auto paths = column("SELECT path FROM maps ORDER BY path");
         int ready = 0, clean = 0;
         std::map<std::string, int> warningKinds;
+        std::map<std::string, long> kinds;
+        long unknownTemplates = 0;
         std::vector<std::string> failed;
         for(const auto &path: paths) {
             send("map.open\t" + path);
             const auto state = column("SELECT state || '|' || message FROM map").front();
             if(state.rfind("ready", 0) == 0) {
                 ++ready;
+                for(const auto &row: column("SELECT kind || '|' || COUNT(*) FROM map_objects GROUP BY kind")) {
+                    kinds[row.substr(0, row.find('|'))] += std::stol(row.substr(row.find('|') + 1));
+                }
+                unknownTemplates += std::stol(column("SELECT COUNT(*) FROM map_objects WHERE kind = 'marker' AND "
+                                                     "template_name NOT IN (SELECT name FROM objects)").front());
                 const auto warnings = column("SELECT text FROM map_warnings");
                 clean += warnings.empty();
                 for(const auto &warning: warnings) {
@@ -213,6 +220,10 @@ int main(int argc, char **argv) {
         std::printf("-- all maps: %zu, ready %d, without warnings %d\n", paths.size(), ready, clean);
         for(const auto &[kind, count]: warningKinds) {
             std::printf("   %d x %s\n", count, kind.c_str());
+        }
+        std::printf("-- objects of all maps by kind (%ld of the markers have no known template)\n", unknownTemplates);
+        for(const auto &[kind, count]: kinds) {
+            std::printf("   %s: %ld\n", kind.c_str(), count);
         }
         for(const auto &item: failed) {
             std::printf("   failed: %s\n", item.c_str());

@@ -324,6 +324,14 @@ namespace end_editor {
                     } else if(chunk.name == "GlobalLighting") {
                         parseLighting(file, chunk, map);
                     }
+                    // Like the engine's "Unexpected data left over" asserts: a reader that stops
+                    // early has misread the chunk. SidesList ends with script chunks it skips.
+                    const bool known = chunk.name == "HeightMapData" || chunk.name == "BlendTileData" ||
+                                       chunk.name == "WorldInfo" || chunk.name == "ObjectsList" ||
+                                       chunk.name == "PolygonTriggers" || chunk.name == "GlobalLighting";
+                    if(known && file.depth() == depth && !file.atEndOfChunk()) {
+                        map.warnings.push_back(chunk.name + ": " + std::to_string(file.left()) + " bytes not read");
+                    }
                 } catch(const ChunkError &chunkError) {
                     map.warnings.push_back(chunk.name + ": " + chunkError.what());
                     if(chunk.name == "HeightMapData") {
