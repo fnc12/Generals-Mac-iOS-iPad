@@ -61,7 +61,10 @@ if [[ -n "${REPLAY_DOCKER_IMAGE:-}" && -z "${REPLAY_IN_DOCKER:-}" ]]; then
     for d in "${KEEP_DEBUG:-}" "${PROJECT_ROOT}" "${ZH_DATA}" "${GEN_DATA}" "$(dirname "${GAME}")" "${work_root}" ${2:+"$(cd "$2" && pwd)"} "${MAPS_DIR}"; do
         [[ -d "${d}" ]] && mounts+=(-v "${d}:${d}")
     done
-    exec docker run --rm --user "$(id -u):$(id -g)" --network none "${mounts[@]}" \
+    # GENERALSX_* settings (e.g. GENERALSX_NAMEKEY_DUMP) reach the game in the container too.
+    passenv=()
+    while IFS= read -r v; do passenv+=(-e "${v}"); done < <(compgen -e | grep '^GENERALSX_' | grep -v '^GENERALSX_USER_DATA_DIR$')
+    exec docker run --rm --user "$(id -u):$(id -g)" --network none "${mounts[@]}" ${passenv[@]+"${passenv[@]}"} \
         -e REPLAY_IN_DOCKER=1 -e HOME=/tmp -e WORK_DIR="${work_root}" \
         -e CNC_GENERALS_ZH_PATH="${ZH_DATA}" -e CNC_GENERALS_PATH="${GEN_DATA}" -e MAPS_DIR="${MAPS_DIR}" \
         -e EXTRA_ARGS="${EXTRA_ARGS:-}" -e NO_CONVERT="${NO_CONVERT:-}" -e KEEP_DEBUG="${KEEP_DEBUG:-}" \

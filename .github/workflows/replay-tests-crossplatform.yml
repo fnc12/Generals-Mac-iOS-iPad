@@ -16,6 +16,8 @@ name: Cross-platform Replay Tests
 # Machine config (.env of the runner), besides the game data paths:
 #   Windows: GENERALSX_VCPKG_ROOT, GENERALSX_VCPKG_BINARY_CACHE, GENERALSX_VCPKG_DOWNLOADS, GENERALSX_BUILD_DIR
 #   macOS:   GENERALSX_VCPKG_ROOT, GENERALSX_VULKAN_SDK
+#   Linux:   GENERALSX_VCPKG_ROOT, GENERALSX_VCPKG_BINARY_CACHE, GENERALSX_VCPKG_DOWNLOADS,
+#            GENERALSX_DOCKER_IMAGE (optional; the builder image of resources/dockerbuild/Dockerfile.linux)
 
 on:
   push:
@@ -175,14 +177,80 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # TODO(linux): add the Linux x86_64 job on casablanca (runs-on: [self-hosted, linux, X64, casablanca])
-  # once scripts/qa/replays/run-replay-tests-linux.sh lands (branch linux-replays). It must upload
-  # an artifact named replay-results-linux-x64 with the same layout (*.crc, *.namekeys, results.txt),
-  # and be added to `needs` of compare below; compare picks up every replay-results-* artifact.
+  linux-x64:
+    name: Replays (Linux x86_64)
+    if: github.repository == 'fnc12/Generals-Mac-iOS-iPad'
+    runs-on: [self-hosted, linux, X64, casablanca]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Fetch replay maps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPLAYS_REPO }}
+          ref: ${{ env.REPLAYS_REF }}
+          path: GeneralsReplays
+
+      # The host (Ubuntu 22.04, GCC 11) cannot build linux64-deploy, so the build runs in the
+      # Dockerfile.linux image (Ubuntu 26.04). vcpkg, its binary cache and downloads are folders of
+      # the machine (runner .env), mounted so they persist between runs.
+      - name: Build GeneralsXZH (linux64-deploy, in Docker)
+        run: |
+          image="${GENERALSX_DOCKER_IMAGE:-generalsx/linux-builder:latest}"
+          docker image inspect "${image}" > /dev/null 2>&1 || ./scripts/env/docker/docker-build-images.sh linux
+          mkdir -p "${GENERALSX_VCPKG_BINARY_CACHE}" "${GENERALSX_VCPKG_DOWNLOADS}"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/home -e XDG_CACHE_HOME=/tmp/cache \
+            -e VCPKG_ROOT=/opt/vcpkg -e VCPKG_DOWNLOADS=/opt/vcpkg-downloads \
+            -e VCPKG_BINARY_SOURCES="clear;files,/opt/vcpkg-cache,readwrite" \
+            -v "${GITHUB_WORKSPACE}:/work" -v "${GENERALSX_VCPKG_ROOT}:/opt/vcpkg" \
+            -v "${GENERALSX_VCPKG_BINARY_CACHE}:/opt/vcpkg-cache" -v "${GENERALSX_VCPKG_DOWNLOADS}:/opt/vcpkg-downloads" \
+            -w /work "${image}" bash -c '
+              set -e
+              mkdir -p "$HOME" "$XDG_CACHE_HOME"
+              cmake --preset linux64-deploy -DRTS_BUILD_GENERALS=OFF -DRTS_BUILD_CORE_TOOLS=OFF \
+                -DRTS_BUILD_ZEROHOUR_TOOLS=OFF -DRTS_BUILD_GENERALS_TOOLS=OFF > /tmp/configure.log 2>&1 \
+                || { tail -50 /tmp/configure.log; exit 2; }
+              cmake --build build/linux64-deploy --target z_generals -j 12'
+
+      - name: Play replays
+        env:
+          GENERALSX_NAMEKEY_DUMP: "1"
+        run: |
+          rm -rf logs/replay-tests
+          REPLAY_DOCKER_IMAGE="${GENERALSX_DOCKER_IMAGE:-generalsx/linux-builder:latest}" WORK_DIR="${RUNNER_TEMP}" \
+            ./scripts/qa/replays/run-replay-tests-linux.sh build/linux64-deploy/GeneralsMD/GeneralsXZH Tests/replays/macos \
+            | tee "${RUNNER_TEMP}/results.txt"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Collect CRCs and name key summaries
+        if: always()
+        run: |
+          out="${RUNNER_TEMP}/replay-results"
+          rm -rf "${out}" && mkdir -p "${out}"
+          cp logs/replay-tests/*.crc "${out}/" 2>/dev/null || true
+          for log in logs/replay-tests/*.log; do
+            [[ -f "${log}" ]] || continue
+            # Only the name key summary line, never the game log itself.
+            grep -a -o "NAMEKEY_TABLE.*" "${log}" > "${out}/$(basename "${log%.log}").namekeys" || true
+          done
+          [[ -f "${RUNNER_TEMP}/results.txt" ]] && sed -E 's/[[:space:]]+log: .*$//' "${RUNNER_TEMP}/results.txt" > "${out}/results.txt"
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-results-linux-x64
+          path: ${{ runner.temp }}/replay-results/
+          if-no-files-found: error
+          retention-days: 30
 
   compare:
     name: Compare CRCs across platforms
-    needs: [windows-x86, macos-arm64]
+    needs: [windows-x86, macos-arm64, linux-x64]
     if: always() && github.repository == 'fnc12/Generals-Mac-iOS-iPad'
     runs-on: [self-hosted, macOS, ARM64, mac-laptop]
     timeout-minutes: 15
