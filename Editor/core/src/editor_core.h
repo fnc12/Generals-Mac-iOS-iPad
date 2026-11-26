@@ -3,9 +3,11 @@
 #include "game_files.h"
 #include "ini_objects.h"
 #include "map_document.h"
+#include "map_editor.h"
 #include "map_file.h"
 #include "model_loader.h"
 #include "storage.h"
+#include "terrain_ini.h"
 
 #include <deque>
 #include <filesystem>
@@ -67,6 +69,14 @@ namespace end_editor {
         // queues its model when the map has not used it yet); removes the rows when it is gone.
         void writeMapObject(std::int64_t id);
         void updateMapEditState(const std::string &message);
+        // map_links from the document's waypoint links and road segments.
+        void writeMapLinks();
+        // The map_editor row and map_selection, when they changed.
+        void publishEditor();
+        // A refused command: the note right away (send() returns the error code too).
+        std::string refuse(const std::string &error, const std::string &note);
+        std::string checkEditCommand(std::string_view name, const std::vector<std::string> &arguments);
+        int roadKind(const std::string &name) const;
         const ObjectInfo *findObject(const std::string &templateName) const;
 
         std::string path;
@@ -90,6 +100,11 @@ namespace end_editor {
         std::map<std::string, std::int64_t> mapModelIds;  // model request -> map_models id
         bool mapModelJobQueued = false;
         std::unique_ptr<MapDocument> document;  // the open map, for editing and saving
+        std::vector<std::array<float, 3>> tileColors;  // of the open map, for its preview
+        std::vector<RoadType> roadTypes;  // of the opened game
+        MapEditor editor;  // the user's tool, selection, clipboard and note; outlives the maps
+        MapEditor::State published;
+        std::int64_t publishedSelection = -1;
         std::string userMapsFolder;  // the game's user Maps folder, listed with the game's maps
         std::int64_t mapListRevision = 0;
         std::vector<std::filesystem::path> gameFolders;  // map.save never writes inside them

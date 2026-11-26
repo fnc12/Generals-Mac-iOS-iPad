@@ -123,15 +123,36 @@ namespace end_editor {
                     }
                 }
 
-                // Tile number -> texture class.
+                // Tile number -> texture class, and each tile's average color (its 64 px square
+                // of the class image, rows from the image's bottom).
                 for(std::size_t c = 0; c < this->map.textureClasses.size(); ++c) {
                     const auto &textureClass = this->map.textureClasses[c];
+                    const auto &image = images[c];
+                    const int width = std::clamp(textureClass.width, 1, 16);
                     for(int t = 0; t < textureClass.numTiles && textureClass.firstTile >= 0; ++t) {
                         const auto tile = std::size_t(textureClass.firstTile + t);
                         if(tile >= this->tileClass.size()) {
                             this->tileClass.resize(tile + 1, -1);
+                            this->scene.tileColors.resize(tile + 1, {0, 0, 0});
                         }
                         this->tileClass[tile] = int(c);
+                        const int column = t % width, row = (t / width) % width;
+                        const int x0 = column * tilePixels, y0 = int(image.height) - (row + 1) * tilePixels;
+                        double sum[3] = {0, 0, 0};
+                        int count = 0;
+                        for(int y = std::max(y0, 0); y < std::min(y0 + tilePixels, int(image.height)); ++y) {
+                            for(int x = x0; x < std::min(x0 + tilePixels, int(image.width)); ++x) {
+                                const auto *pixel = &image.rgba[(std::size_t(y) * image.width + std::size_t(x)) * 4];
+                                sum[0] += pixel[0];
+                                sum[1] += pixel[1];
+                                sum[2] += pixel[2];
+                                ++count;
+                            }
+                        }
+                        if(count > 0) {
+                            this->scene.tileColors[tile] = {float(sum[0] / count / 255), float(sum[1] / count / 255),
+                                                            float(sum[2] / count / 255)};
+                        }
                     }
                 }
             }

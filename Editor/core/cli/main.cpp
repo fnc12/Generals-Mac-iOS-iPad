@@ -10,7 +10,9 @@
 // --roundtrip-maps <folder> opens every listed map, saves it unchanged into the folder (map.save)
 //                  and compares the file with the unpacked original, byte for byte.
 // --edit-maps <folder> opens every listed map, moves, turns, deletes and places objects (with an
-//                  undo and a redo), saves, opens the saved file and checks what it holds.
+//                  undo and a redo), raises one and edits its properties, copies and pastes it,
+//                  places a linked pair of waypoints and a road, saves, opens the saved file and
+//                  checks what it holds (and that the preview .tga is next to it).
 #include "end_editor/editor_core_c.h"
 
 #include "compression.h"
@@ -70,7 +72,7 @@ namespace {
 int main(int argc, char **argv) {
     std::string gameDir, baseDir, dbArg, modelName, objectName, animation;
     bool allModels = false, allMaps = false;
-    std::string mapPath, roundTripDir, editDir;
+    std::string mapPath, roundTripDir, editDir, onlyMaps;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -94,6 +96,8 @@ int main(int argc, char **argv) {
             roundTripDir = next();
         } else if(arg == "--edit-maps") {
             editDir = next();
+        } else if(arg == "--only") {
+            onlyMaps = next();  // --edit-maps: only maps whose path has this text
         } else {
             gameDir = arg;
         }
@@ -290,7 +294,10 @@ int main(int argc, char **argv) {
         const auto out = (std::filesystem::path(editDir) / "edited.map").string();
         const auto placed = column("SELECT name FROM objects WHERE model <> '' AND kind_of LIKE '%VEHICLE%' "
                                    "ORDER BY name LIMIT 1");
-        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        auto paths = column("SELECT path FROM maps ORDER BY path");
+        if(!onlyMaps.empty()) {
+            std::erase_if(paths, [&](const std::string &path) { return path.find(onlyMaps) == std::string::npos; });
+        }
         int good = 0;
         const auto number = [&](const std::string &sql) {
             const auto values = column(sql.c_str());
@@ -310,6 +317,11 @@ int main(int argc, char **argv) {
                 continue;
             }
             const auto team = column("SELECT team FROM map_players ORDER BY neutral DESC, id LIMIT 1");
+            const auto road = column("SELECT name FROM road_types WHERE bridge = 0 ORDER BY id LIMIT 1");
+            const auto count = [&](const std::string &where) {
+                return int(number("SELECT COUNT(*) FROM " + where));
+            };
+
             // Object 1 moves by (10, 20), object 2 turns to 1 radian, object 3 goes; one object
             // is placed in the middle of the map, a second one is placed, undone and redone, a
             // third is placed and undone.
@@ -325,7 +337,33 @@ int main(int argc, char **argv) {
                     "map.place\t" + placed.front() + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
                     "map.undo", "map.redo",
                     "map.place\t" + placed.front() + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
-                    "map.undo", "map.save\t" + out}) {
+                    "map.undo"}) {
+                end_editor_send(command.c_str());
+            }
+            // Step 5, the way the client sends it: the object in the middle raised and given
+            // properties, copied and pasted; two linked waypoints; a road segment.
+            end_editor_update();
+            // After the edits above: deleting a waypoint or a road point takes its links along.
+            const int waypointLinks = count("map_links WHERE kind = 'waypoint'");
+            const int roads = count("map_links WHERE kind = 'road'");
+            const int edited = count("map_objects");
+            const int health = count("map_object_properties WHERE key = 'objectInitialHealth' AND value = '50'");  // a removed road point takes its partner along
+            const auto middle = column(("SELECT id FROM map_objects WHERE abs(x - " + at(cx) + ") < 0.01 AND abs(y - " +
+                                        at(cy) + ") < 0.01 LIMIT 1").c_str());
+            std::vector<std::string> commands{
+                "selection.set\t" + (middle.empty() ? std::string("0") : middle.front()), "selection.height\t15",
+                "selection.property\tobjectInitialHealth\tint\t50",
+                "selection.property\tobjectName\tstring\tEditCheck", "edit.copy",
+                "edit.paste\t" + at(cx) + "\t" + at(cy + 60), "placement.waypoint", "selection.set\t",
+                "map.click_right\t" + at(cx) + "\t" + at(cy - 60) + "\t",
+                "map.click_right\t" + at(cx + 30) + "\t" + at(cy - 60) + "\t"};
+            if(!road.empty()) {
+                commands.insert(commands.end(), {"placement.road\t" + road.front(),
+                                                 "map.click_right\t" + at(cx - 60) + "\t" + at(cy) + "\t",
+                                                 "map.click_right\t" + at(cx - 60) + "\t" + at(cy + 40) + "\t"});
+            }
+            commands.push_back("map.save\t" + out);
+            for(const auto &command: commands) {
                 end_editor_send(command.c_str());
             }
             wait();
@@ -336,7 +374,24 @@ int main(int argc, char **argv) {
                 return "SELECT COUNT(*) FROM map_objects WHERE template_name = '" + placed.front() + "' AND abs(x - " +
                        at(x) + ") < 0.01 AND abs(y - " + at(y) + ") < 0.01";
             };
-            const bool ok = after == before + 1 && number(near(cx, cy)) == 1 && number(near(cx + 50, cy)) == 1 &&
+            const int added = 1 + 2 + (road.empty() ? 0 : 2);  // paste, waypoints, road
+            auto preview = std::filesystem::path(out);
+            std::error_code sizeError;
+            preview.replace_extension(".tga");
+            const int checks[] = {
+                count("map_objects o JOIN map_object_properties p ON p.object_id = o.id WHERE o.height = 15 AND "
+                      "p.key = 'objectName' AND p.value = 'EditCheck'"),
+                count("map_object_properties WHERE key = 'objectInitialHealth' AND value = '50'") - health,
+                int(number(near(cx, cy + 60))), count("map_links WHERE kind = 'waypoint'") - waypointLinks,
+                count("map_links WHERE kind = 'road'") - roads};
+            const bool step5 =
+                count("map_objects o JOIN map_object_properties p ON p.object_id = o.id WHERE o.height = 15 AND "
+                      "p.key = 'objectName' AND p.value = 'EditCheck'") == 2 &&
+                checks[1] == 2 &&
+                number(near(cx, cy + 60)) == 1 && count("map_links WHERE kind = 'waypoint'") == waypointLinks + 1 &&
+                count("map_links WHERE kind = 'road'") == roads + (road.empty() ? 0 : 1) &&
+                std::filesystem::file_size(preview, sizeError) == 18 + 128 * 128 * 4 + 26;
+            const bool ok = step5 && after == edited + added && number(near(cx, cy)) == 1 && number(near(cx + 50, cy)) == 1 &&
                             number(near(cx + 100, cy)) == 0 &&
                             number("SELECT COUNT(*) FROM map_objects WHERE abs(x - " + at(x1) + ") < 0.01 AND abs(y - " +
                                    at(y1) + ") < 0.01") >= 1 &&
@@ -346,7 +401,9 @@ int main(int argc, char **argv) {
                                    "' AND o.template_name = '" + placed.front() + "'") >= 2;
             good += ok;
             if(!ok) {
-                std::printf("   %s: %d objects before, %d after (%s)\n", path.c_str(), before, after, saveMessage.c_str());
+                std::printf("   %s: %d objects before, %d after, step 5: %d raised, %d health, %d pasted, %+d links, "
+                            "%+d roads (%s)\n", path.c_str(), before, after, checks[0], checks[1], checks[2], checks[3],
+                            checks[4], saveMessage.c_str());
             }
         }
         std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n", good, paths.size(),

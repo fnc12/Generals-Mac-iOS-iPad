@@ -25,9 +25,16 @@
  *           (grows when map_objects changes), undo_count, redo_count, edited, last_object (what
  *           the last edit, undo or redo changed), edit_message, saved_path
  *   map_players: players of the map's SidesList with their default team (what map.place takes)
- *   map_textures ("terrain" atlas, "water"), map_terrain (mesh chunks), map_water, map_objects,
- *           map_object_properties, map_models, map_model_parts (bind pose), map_model_textures,
- *           map_warnings
+ *   map_textures ("terrain" atlas, "water"), map_terrain (mesh chunks), map_water, map_objects
+ *           (with height above the ground), map_object_properties, map_models, map_model_parts
+ *           (bind pose), map_model_textures, map_warnings
+ *   map_editor (one row, id = 1): what the user is doing (src/map_editor.h): tool, template_name,
+ *           road_type, team, angle, picker (show the object picker), pending (a right click
+ *           waiting for an object), road_start, gesture and drag_dx/dy (a mouse press in progress),
+ *           note and note_kind (what to tell the user; it stays until the next note or map change),
+ *           selection_revision, clipboard_count, revision
+ *   map_selection: the selected objects in order; map_links: waypoint links and road and bridge
+ *           segments (two object ids); road_types: Roads.ini's road and bridge types
  * Column details: src/storage.h.
  *
  * INBOUND (client -> core): tab separated commands through end_editor_send():
@@ -43,10 +50,25 @@
  *   "map.move\t<id>\t<x>\t<y>", "map.rotate\t<id>\t<angle>", "map.delete\t<id>"   (map_objects ids)
  *   "map.undo", "map.redo"
  *   "map.save\t<file>"                writes the map with its edits (uncompressed, every chunk it did not
- *                                     change byte for byte); never into the game folders
+ *                                     change byte for byte) and its preview <file>.tga; never into the
+ *                                     game folders
+ *   Input, as the client sees it (<x> <y>: the ground point under the cursor, both empty when it is
+ *   off the map; <hits>: ids of the objects under the cursor, nearest first, comma separated):
+ *   "map.press\t<x>\t<y>\t<modifiers>\t<hits>"   left button down; modifiers: shift,alt,cmd
+ *   "map.drag\t<x>\t<y>", "map.release\t<ids inside the rubber band>"
+ *   "map.click_right\t<x>\t<y>\t<hits>"  (also ⌃-click)
+ *   "edit.delete", "edit.rotate\t<degrees>", "edit.copy", "edit.paste[\t<x>\t<y>]", "edit.duplicate",
+ *   "edit.cancel", "edit.select_all"
+ *   Tool: "placement.object", "placement.template\t<name>", "placement.waypoint",
+ *   "placement.road[\t<type>]", "placement.bridge[\t<type>]", "placement.owner\t<team>",
+ *   "placement.angle\t<degrees>", "placement.pick", "placement.cancel", "note.clear"
+ *   Inspector (the whole selection, one undo step): "selection.set\t<ids>", "selection.owner\t<team>",
+ *   "selection.height\t<z>", "selection.angle\t<degrees>",
+ *   "selection.property\t<key>\t<bool|int|real|string|unicode>\t<value>", "selection.unset\t<key>",
+ *   "waypoint.link"
  * Errors: error:missing_argument, error:unknown_command, error:no_game (model or map before game),
  * error:no_map (an edit without a map), error:bad_argument (not a number),
- * error:unknown_template. Edits run in the next end_editor_update(), all queued ones at once.
+ * error:unknown_template, error:unknown_road; a refused edit also leaves its note in map_editor. Edits run in the next end_editor_update(), all queued ones at once.
  * Work runs in end_editor_update(), which the client calls once per tick. */
 
 #ifdef __cplusplus

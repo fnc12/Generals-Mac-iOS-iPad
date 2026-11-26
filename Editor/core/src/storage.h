@@ -186,13 +186,14 @@ namespace end_editor {
     };
 
     // A placed object. kind: "model", "marker", "waypoint", "road", "bridge". z is the world
-    // height (ground + offset). model_id: map_models row, 0 when drawn as a marker. color: owner's
-    // player color 0xRRGGBB.
+    // height (ground + height), height the object's height above the ground. model_id: map_models
+    // row, 0 when drawn as a marker. color: owner's player color 0xRRGGBB.
     struct MapObjectRow {
         std::int64_t id = 0;
         std::string templateName;
         std::string kind;
         double x = 0, y = 0, z = 0;
+        double height = 0;
         double angle = 0;
         int flags = 0;
         std::int64_t modelId = 0;
@@ -243,6 +244,63 @@ namespace end_editor {
     struct MapWarningRow {
         std::int64_t id = 0;
         std::string text;
+    };
+
+    // What the user is doing with the map (map_editor.h), one row (id 1); revision grows on every
+    // change. tool: "object" | "waypoint" | "road" | "bridge"; template_name: the object a right
+    // click places ("" none chosen); road_type: the road tools' Roads.ini name; team: owner of
+    // placed objects; angle: degrees. picker: the client shows the object picker (a right click
+    // with no object chosen, or placement.pick); pending: that right click's ground point, placed
+    // once an object is chosen. road_start: the first point of a road or bridge. gesture: the
+    // mouse press in progress: "press_pan", "press_move", "press_band", "press_orbit" (not moved
+    // yet), "pan", "orbit" (the client moves its camera), "move" (the selection is dragged by
+    // drag_dx, drag_dy: the client draws it there), "band" (the client draws its rectangle) or
+    // "". note: what the user is told ("info" or "error"); it stays until the next note or the
+    // next change of the map; note_serial grows with each. selection_revision grows when
+    // map_selection changes.
+    struct MapEditorRow {
+        int id = 1;
+        std::string tool = "object";
+        std::string templateName;
+        std::string roadType;
+        std::string team;
+        double angle = 0;
+        bool picker = false;
+        bool pending = false;
+        double pendingX = 0, pendingY = 0;
+        bool roadStart = false;
+        double roadX = 0, roadY = 0;
+        std::string gesture;
+        double dragX = 0, dragY = 0;
+        std::string note;
+        std::string noteKind;
+        std::int64_t noteSerial = 0;
+        std::int64_t selectionRevision = 0;
+        int selectionCount = 0;
+        int clipboardCount = 0;
+        std::int64_t revision = 0;
+    };
+
+    // The selected objects, in the order they were selected (id).
+    struct MapSelectionRow {
+        std::int64_t id = 0;
+        std::int64_t objectId = 0;
+    };
+
+    // Lines the map view draws between objects: "waypoint" (a link of WaypointsList, from -> to),
+    // "road" and "bridge" (a segment's two points).
+    struct MapLinkRow {
+        std::int64_t id = 0;
+        std::string kind;
+        std::int64_t fromId = 0;
+        std::int64_t toId = 0;
+    };
+
+    // Road and bridge types of Roads.ini, what placement.road / placement.bridge take.
+    struct RoadTypeRow {
+        std::int64_t id = 0;
+        std::string name;
+        bool bridge = false;
     };
 
     inline auto makeStorage(const std::string &path) {
@@ -396,6 +454,7 @@ namespace end_editor {
                        make_column("x", &MapObjectRow::x),
                        make_column("y", &MapObjectRow::y),
                        make_column("z", &MapObjectRow::z),
+                       make_column("height", &MapObjectRow::height),
                        make_column("angle", &MapObjectRow::angle),
                        make_column("flags", &MapObjectRow::flags),
                        make_column("model_id", &MapObjectRow::modelId),
@@ -435,7 +494,43 @@ namespace end_editor {
                        make_column("rgba", &MapModelTextureRow::rgba)),
             make_table("map_warnings",
                        make_column("id", &MapWarningRow::id, primary_key().autoincrement()),
-                       make_column("text", &MapWarningRow::text)));
+                       make_column("text", &MapWarningRow::text)),
+            make_table("map_editor",
+                       make_column("id", &MapEditorRow::id, primary_key()),
+                       make_column("tool", &MapEditorRow::tool),
+                       make_column("template_name", &MapEditorRow::templateName),
+                       make_column("road_type", &MapEditorRow::roadType),
+                       make_column("team", &MapEditorRow::team),
+                       make_column("angle", &MapEditorRow::angle),
+                       make_column("picker", &MapEditorRow::picker),
+                       make_column("pending", &MapEditorRow::pending),
+                       make_column("pending_x", &MapEditorRow::pendingX),
+                       make_column("pending_y", &MapEditorRow::pendingY),
+                       make_column("road_start", &MapEditorRow::roadStart),
+                       make_column("road_x", &MapEditorRow::roadX),
+                       make_column("road_y", &MapEditorRow::roadY),
+                       make_column("gesture", &MapEditorRow::gesture),
+                       make_column("drag_dx", &MapEditorRow::dragX),
+                       make_column("drag_dy", &MapEditorRow::dragY),
+                       make_column("note", &MapEditorRow::note),
+                       make_column("note_kind", &MapEditorRow::noteKind),
+                       make_column("note_serial", &MapEditorRow::noteSerial),
+                       make_column("selection_revision", &MapEditorRow::selectionRevision),
+                       make_column("selection_count", &MapEditorRow::selectionCount),
+                       make_column("clipboard_count", &MapEditorRow::clipboardCount),
+                       make_column("revision", &MapEditorRow::revision)),
+            make_table("map_selection",
+                       make_column("id", &MapSelectionRow::id, primary_key().autoincrement()),
+                       make_column("object_id", &MapSelectionRow::objectId)),
+            make_table("map_links",
+                       make_column("id", &MapLinkRow::id, primary_key().autoincrement()),
+                       make_column("kind", &MapLinkRow::kind),
+                       make_column("from_id", &MapLinkRow::fromId),
+                       make_column("to_id", &MapLinkRow::toId)),
+            make_table("road_types",
+                       make_column("id", &RoadTypeRow::id, primary_key().autoincrement()),
+                       make_column("name", &RoadTypeRow::name),
+                       make_column("bridge", &RoadTypeRow::bridge)));
     }
 
     using Storage = decltype(makeStorage(""));

@@ -1,6 +1,7 @@
 #include "editor_core.h"
 
 #include "game_data.h"
+#include "map_preview.h"
 #include "map_scene.h"
 
 #include <algorithm>
@@ -29,14 +30,6 @@ namespace end_editor {
             }
         }
 
-        // A number of a command argument ("12.5"), independent of the C locale.
-        bool parseNumber(const std::string &text, double &value) {
-            std::istringstream stream(text);
-            stream.imbue(std::locale::classic());
-            stream >> value;
-            return !text.empty() && stream && stream.peek() == std::char_traits<char>::eof() && std::isfinite(value);
-        }
-
         bool isInside(const std::filesystem::path &path, const std::filesystem::path &folder) {
             std::error_code error;
             const auto full = std::filesystem::weakly_canonical(path, error);
@@ -55,10 +48,24 @@ namespace end_editor {
         }
     }
 
-    EditorCore::EditorCore(std::string dbPath) : path(std::move(dbPath)) {
+    EditorCore::EditorCore(std::string dbPath)
+        : path(std::move(dbPath)),
+          editor(MapEditor::Game{[this](const std::string &name) { return this->findObject(name) != nullptr; },
+                                 [this](const std::string &name) { return this->roadKind(name); },
+                                 [this](bool bridge) {
+                                     for(const auto &type: this->roadTypes) {
+                                         if(type.bridge == bridge) {
+                                             return type.name;
+                                         }
+                                     }
+                                     return std::string();
+                                 }}) {
         this->storage = std::make_unique<Storage>(makeStorage(this->path));
         this->storage->open_forever();
         this->storage->pragma.journal_mode(sqlite_orm::journal_mode::WAL);
+        // A view-model store: losing the last commits on a power cut is harmless, and every mouse
+        // move of a gesture is a commit.
+        this->storage->pragma.synchronous(1);  // NORMAL
         this->storage->sync_schema();
         if(auto previous = this->storage->get_pointer<StatusRow>(1)) {
             this->revision = previous->revision;
@@ -73,8 +80,13 @@ namespace end_editor {
         this->setModelState("", "idle", "");
         this->storage->transaction([&] {
             this->storage->remove_all<MapListRow>();
+            this->storage->remove_all<RoadTypeRow>();
             this->clearMap();
             this->setMapState("", "idle", "");
+            if(auto previous = this->storage->get_pointer<MapEditorRow>(1)) {
+                this->revision = std::max(this->revision, previous->revision);
+            }
+            this->publishEditor();
             return true;
         });
     }
@@ -133,34 +145,24 @@ namespace end_editor {
         }
         const bool mapQueued = std::any_of(this->jobs.begin(), this->jobs.end(),
                                            [](const Job &job) { return job.kind == Job::openMap; });
-        if(name == "map.place" || name == "map.move" || name == "map.rotate" || name == "map.delete" ||
-           name == "map.undo" || name == "map.redo") {
-            if(!this->document && !mapQueued) {
-                return "error:no_map";
-            }
-            // Arguments: place <template> <x> <y> <angle> <team>, move <id> <x> <y>,
-            // rotate <id> <angle>, delete <id>.
-            const std::size_t needed = name == "map.place" ? 5 : name == "map.move" ? 3 : name == "map.rotate" ? 2
-                                                                : name == "map.delete"  ? 1
-                                                                                        : 0;
-            if(arguments.size() < needed || (needed > 0 && !hasArgument)) {
-                return "error:missing_argument";
-            }
-            const std::size_t firstNumber = name == "map.place" ? 1 : 0;
-            const std::size_t numbers = name == "map.place" ? 3 : needed;
-            for(std::size_t i = firstNumber; i < firstNumber + numbers; ++i) {
-                double value = 0;
-                if(!parseNumber(arguments[i], value)) {
-                    return "error:bad_argument";
+        if(name.rfind("map.", 0) == 0 || name.rfind("edit.", 0) == 0 || name.rfind("selection.", 0) == 0 ||
+           name.rfind("placement.", 0) == 0 || name == "waypoint.link" || name == "note.clear") {
+            if(name == "map.save" || name == "map.open") {
+                // below
+            } else {
+                const bool needsMap = name.rfind("placement.", 0) != 0 && name != "note.clear";
+                if(needsMap && !this->document && !mapQueued) {
+                    return this->refuse("error:no_map", "No map is open");
                 }
+                const auto error = this->checkEditCommand(name, arguments);
+                if(!error.empty()) {
+                    return error;
+                }
+                std::vector<std::string> edit{std::string(name)};
+                edit.insert(edit.end(), arguments.begin(), arguments.end());
+                this->queueBeforeModelLoading(Job{Job::editMap, edit});
+                return "";
             }
-            if(name == "map.place" && !this->findObject(arguments.front())) {
-                return "error:unknown_template";
-            }
-            std::vector<std::string> edit{std::string(name)};
-            edit.insert(edit.end(), arguments.begin(), arguments.begin() + std::ptrdiff_t(std::min(needed, arguments.size())));
-            this->queueBeforeModelLoading(Job{Job::editMap, edit});
-            return "";
         }
         if(name == "map.save") {
             if(!hasArgument) {
@@ -173,6 +175,104 @@ namespace end_editor {
             return "";
         }
         return "error:unknown_command";
+    }
+
+    std::string EditorCore::refuse(const std::string &error, const std::string &note) {
+        this->editor.setNote(note, "error");
+        this->storage->transaction([&] {
+            this->publishEditor();
+            return true;
+        });
+        return error;
+    }
+
+    int EditorCore::roadKind(const std::string &name) const {
+        for(const auto &type: this->roadTypes) {
+            if(type.name == name) {
+                return type.bridge ? 2 : 1;
+            }
+        }
+        return 0;
+    }
+
+    std::string EditorCore::checkEditCommand(std::string_view name, const std::vector<std::string> &arguments) {
+        const auto arg = [&](std::size_t i) { return i < arguments.size() ? arguments[i] : std::string(); };
+        const auto isNumber = [&](std::size_t i) {
+            double value = 0;
+            return parseNumber(arg(i), value);
+        };
+        // Optional numbers: empty (the cursor is off the map) or a number.
+        const auto isPoint = [&](std::size_t i) { return (arg(i).empty() && arg(i + 1).empty()) || (isNumber(i) && isNumber(i + 1)); };
+        const auto missing = [&] { return this->refuse("error:missing_argument", std::string(name) + ": missing argument"); };
+        const auto bad = [&] { return this->refuse("error:bad_argument", std::string(name) + ": not a number"); };
+        if(name == "map.place") {
+            // place <template> <x> <y> <angle> <team>
+            if(arguments.size() < 5 || arg(0).empty()) {
+                return missing();
+            }
+            if(!isNumber(1) || !isNumber(2) || !isNumber(3)) {
+                return bad();
+            }
+            if(!this->findObject(arg(0))) {
+                return this->refuse("error:unknown_template", "No object " + arg(0) + " in this game");
+            }
+        } else if(name == "map.move" || name == "map.rotate" || name == "map.delete") {
+            const std::size_t needed = name == "map.move" ? 3 : name == "map.rotate" ? 2 : 1;
+            if(arguments.size() < needed || arg(0).empty()) {
+                return missing();
+            }
+            for(std::size_t i = 0; i < needed; ++i) {
+                if(!isNumber(i)) {
+                    return bad();
+                }
+            }
+        } else if(name == "placement.template") {
+            if(arg(0).empty()) {
+                return missing();
+            }
+            if(!this->findObject(arg(0))) {
+                return this->refuse("error:unknown_template", "No object " + arg(0) + " in this game");
+            }
+        } else if(name == "placement.road" || name == "placement.bridge") {
+            if(!arg(0).empty() && this->roadKind(arg(0)) != (name == "placement.road" ? 1 : 2)) {
+                return this->refuse("error:unknown_road",
+                                    std::string("No ") + (name == "placement.road" ? "road " : "bridge ") + arg(0) +
+                                        " in Roads.ini");
+            }
+        } else if(name == "placement.owner" || name == "selection.owner" || name == "selection.unset") {
+            if(arg(0).empty()) {
+                return missing();
+            }
+        } else if(name == "placement.angle" || name == "edit.rotate" || name == "selection.height" ||
+                  name == "selection.angle") {
+            if(arg(0).empty()) {
+                return missing();
+            }
+            if(!isNumber(0)) {
+                return bad();
+            }
+        } else if(name == "map.click_right" || name == "map.press" || name == "map.drag" || name == "edit.paste") {
+            if(!isPoint(0)) {
+                return bad();
+            }
+        } else if(name == "selection.property") {
+            if(arguments.size() < 3 || arg(0).empty()) {
+                return missing();
+            }
+            const auto &type = arg(1);
+            if(type != "bool" && type != "int" && type != "real" && type != "string" && type != "unicode") {
+                return this->refuse("error:bad_argument", "selection.property: unknown type " + type);
+            }
+        } else {
+            static const std::set<std::string_view> plain{
+                "placement.object", "placement.waypoint", "placement.pick", "placement.cancel", "note.clear",
+                "map.release",      "map.undo",           "map.redo",       "edit.delete",      "edit.copy",
+                "edit.duplicate",   "edit.cancel",        "edit.select_all", "selection.set",   "waypoint.link"};
+            if(!plain.count(name)) {
+                return "error:unknown_command";
+            }
+        }
+        return "";
     }
 
     void EditorCore::queueBeforeModelLoading(Job job) {
@@ -291,6 +391,8 @@ namespace end_editor {
                 this->storage->insert(WarningRow{0, warning});
             }
             this->storage->remove_all<MapListRow>();
+            this->storage->remove_all<RoadTypeRow>();
+            this->roadTypes.clear();
             this->clearMap();
             this->setMapState("", "idle", "");
             if(!scan.error.empty()) {
@@ -315,6 +417,17 @@ namespace end_editor {
                 this->storage->insert(row);
             }
             this->listMaps();
+            this->roadTypes.clear();
+            for(const auto &text: this->files.readAll("data/ini/roads.ini")) {
+                for(auto &type: parseRoadTypes(text)) {  // the first copy wins
+                    if(this->roadKind(type.name) == 0) {
+                        this->roadTypes.push_back(std::move(type));
+                    }
+                }
+            }
+            for(const auto &type: this->roadTypes) {
+                this->storage->insert(RoadTypeRow{0, type.name, type.bridge});
+            }
             this->setStatus("ready",
                             std::to_string(scan.objects.size()) + " objects from " +
                                 std::to_string(scan.iniFileCount) + " INI files in " +
@@ -444,12 +557,16 @@ namespace end_editor {
         this->storage->remove_all<MapModelTextureRow>();
         this->storage->remove_all<MapWarningRow>();
         this->storage->remove_all<MapPlayerRow>();
+        this->storage->remove_all<MapLinkRow>();
         this->mapModels.clear();
         this->nextMapModel = 0;
         this->mapTextures.clear();
         this->mapModelIds.clear();
         this->mapModelJobQueued = false;
+        this->editor.open(nullptr, {}, "", {});
         this->document.reset();
+        this->tileColors.clear();
+        this->publishEditor();
     }
 
     void EditorCore::listMaps() {
@@ -588,6 +705,13 @@ namespace end_editor {
                 }
             }
             const auto &opened = this->document->map();
+            this->tileColors = scene.tileColors;
+            this->writeMapLinks();
+            const auto players = mapPlayers(opened);
+            this->editor.open(this->document.get(), mapTeams(opened), players.empty() ? std::string() : players.front().team,
+                              MapEditor::Point{(scene.playable[0] + scene.playable[2]) / 2,
+                                               (scene.playable[1] + scene.playable[3]) / 2});
+            this->publishEditor();
 
             MapRow row;
             row.path = path;
@@ -752,6 +876,7 @@ namespace end_editor {
         row.x = placed.x;
         row.y = placed.y;
         row.z = placed.z;
+        row.height = entry->object.z;
         row.angle = placed.angle;
         row.flags = placed.flags;
         row.owner = placed.owner;
@@ -788,7 +913,7 @@ namespace end_editor {
         row->undoCount = int(this->document->undoCount());
         row->redoCount = int(this->document->redoCount());
         row->edited = this->document->edited();
-        row->lastObject = this->document->lastChanged();
+        row->lastObject = this->document->lastChangedId();
         row->editMessage = message;
         row->modelCount = int(this->mapModelIds.size());
         row->objectCount = int(std::count_if(this->document->objects().begin(), this->document->objects().end(),
@@ -797,37 +922,84 @@ namespace end_editor {
     }
 
     void EditorCore::runEditMap(const std::vector<std::string> &arguments) {
-        if(!this->document || arguments.empty()) {
+        if(arguments.empty()) {
             return;
         }
-        const auto &name = arguments.front();
-        const auto number = [&](std::size_t i) {
-            double value = 0;
-            parseNumber(i < arguments.size() ? arguments[i] : "", value);
-            return value;
-        };
-        bool done = false;
-        if(name == "map.place") {
-            const auto &team = arguments.size() > 5 ? arguments[5] : std::string();
-            this->document->place(arguments[1], float(number(2)), float(number(3)), float(number(4)), team);
-            done = true;
-        } else if(name == "map.move") {
-            done = this->document->move(std::int64_t(number(1)), float(number(2)), float(number(3)));
-        } else if(name == "map.rotate") {
-            done = this->document->rotate(std::int64_t(number(1)), float(number(2)));
-        } else if(name == "map.delete") {
-            done = this->document->remove(std::int64_t(number(1)));
-        } else if(name == "map.undo") {
-            done = this->document->undo();
-        } else if(name == "map.redo") {
-            done = this->document->redo();
+        const auto revision = this->document ? this->document->revision() : -1;
+        this->editor.run(arguments);
+        if(this->document && this->document->revision() != revision) {
+            for(const auto id: this->document->lastChanged()) {
+                this->writeMapObject(id);
+            }
+            this->writeMapLinks();
+            this->updateMapEditState(this->editor.state().note);
         }
-        if(done) {
-            this->writeMapObject(this->document->lastChanged());
+        this->publishEditor();
+    }
+
+    void EditorCore::writeMapLinks() {
+        this->storage->remove_all<MapLinkRow>();
+        if(!this->document) {
+            return;
         }
-        this->updateMapEditState(done ? "" : name == "map.undo" ? "Nothing to undo"
-                                             : name == "map.redo" ? "Nothing to redo"
-                                                                  : "No such object");
+        for(const auto &link: this->document->links()) {
+            const auto from = this->document->waypointObject(link[0]), to = this->document->waypointObject(link[1]);
+            if(from != 0 && to != 0) {
+                this->storage->insert(MapLinkRow{0, "waypoint", from, to});
+            }
+        }
+        for(const auto &entry: this->document->objects()) {
+            if(entry.id == 0 || entry.removed || !(entry.object.flags & (mapObjectRoadPoint1 | mapObjectBridgePoint1))) {
+                continue;
+            }
+            if(const auto partner = this->document->roadPartner(entry.id); partner != 0) {
+                const bool bridge = entry.object.flags & mapObjectBridgePoint1;
+                this->storage->insert(MapLinkRow{0, bridge ? "bridge" : "road", entry.id, partner});
+            }
+        }
+    }
+
+    void EditorCore::publishEditor() {
+        const auto &state = this->editor.state();
+        if(state == this->published && this->publishedSelection == state.selectionRevision) {
+            return;
+        }
+        if(this->publishedSelection != state.selectionRevision) {
+            this->storage->remove_all<MapSelectionRow>();
+            for(const auto id: state.selection) {
+                this->storage->insert(MapSelectionRow{0, id});
+            }
+            this->publishedSelection = state.selectionRevision;
+        }
+        MapEditorRow row;
+        row.tool = state.tool;
+        row.templateName = state.templateName;
+        row.roadType = state.roadType;
+        row.team = state.team;
+        row.angle = state.angle;
+        row.picker = state.picker;
+        row.pending = state.pending.has_value();
+        if(state.pending) {
+            row.pendingX = state.pending->x;
+            row.pendingY = state.pending->y;
+        }
+        row.roadStart = state.roadStart.has_value();
+        if(state.roadStart) {
+            row.roadX = state.roadStart->x;
+            row.roadY = state.roadStart->y;
+        }
+        row.gesture = state.gesture;
+        row.dragX = state.drag.x;
+        row.dragY = state.drag.y;
+        row.note = state.note;
+        row.noteKind = state.noteKind;
+        row.noteSerial = state.noteSerial;
+        row.selectionRevision = state.selectionRevision;
+        row.selectionCount = int(state.selection.size());
+        row.clipboardCount = int(state.clipboardCount);
+        row.revision = ++this->revision;
+        this->storage->replace(row);
+        this->published = state;
     }
 
     void EditorCore::runSaveMap(const std::string &path) {
@@ -835,7 +1007,7 @@ namespace end_editor {
             return;
         }
         const std::filesystem::path target(path);
-        std::string message;
+        std::string message, previewError;
         for(const auto &folder: this->gameFolders) {
             if(isInside(target, folder)) {
                 message = "error: not saved, " + path + " is inside the game folder";
@@ -863,6 +1035,18 @@ namespace end_editor {
                     message = "error: cannot write " + path + ": " + error.message();
                 }
             }
+            if(message.empty()) {
+                // The game's map lists show <name>.tga from next to the map (WorldBuilder writes it too).
+                auto preview = target;
+                preview.replace_extension(".tga");
+                const auto image = encodeTga(mapPreviewSize, mapPreviewSize,
+                                             renderMapPreview(this->document->map(), this->tileColors));
+                std::ofstream file(preview, std::ios::binary | std::ios::trunc);
+                file.write(image.data(), std::streamsize(image.size()));
+                if(!file) {
+                    previewError = "error: saved, but cannot write the preview " + preview.string();
+                }
+            }
             if(!message.empty()) {
                 std::filesystem::remove(temporary, error);
             }
@@ -874,9 +1058,11 @@ namespace end_editor {
                     row->savedPath = path;
                     this->storage->replace(*row);
                 }
-                message = "Saved " + path;
+                message = previewError.empty() ? "Saved " + path : previewError;
             }
             this->updateMapEditState(message);
+            this->editor.setNote(message, message.rfind("error", 0) == 0 ? "error" : "info");
+            this->publishEditor();
             return true;
         });
         if(!this->userMapsFolder.empty() && isInside(target, this->userMapsFolder)) {
