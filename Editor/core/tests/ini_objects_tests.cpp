@@ -65,6 +65,13 @@ End
 ChildObject TestBoatChild TestBoatRed
   Side = America
 End
+
+Object TestTree
+  Draw = W3DTreeDraw ModuleTag_01
+    ModelName = TTree01
+    TextureName = TTree01.tga
+  End
+End
 )";
 }
 
@@ -72,7 +79,7 @@ TEST_CASE("Object blocks and their fields") {
     const auto result = parseObjects(sampleIni, "data/ini/object/test.ini");
     INFO((result.warnings.empty() ? std::string() : result.warnings.front()));
     REQUIRE(result.warnings.empty());
-    REQUIRE(result.objects.size() == 3);
+    REQUIRE(result.objects.size() == 4);
 
     const auto &boat = result.objects[0];
     CHECK(boat.name == "TestBoat");
@@ -93,6 +100,7 @@ TEST_CASE("Object blocks and their fields") {
     CHECK(result.objects[1].parent == "TestBoat");
     CHECK(result.objects[1].model == "TBoatRed");
     CHECK(result.objects[2].parent == "TestBoatRed");
+    CHECK(result.objects[3].model == "TTree01");  // W3DTreeDraw's ModelName
 }
 
 TEST_CASE("Reskins and child objects inherit missing fields") {

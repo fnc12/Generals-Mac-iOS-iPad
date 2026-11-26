@@ -242,7 +242,7 @@ namespace end_editor {
         }
     }
 
-    LoadedModel ModelLoader::load(const std::string &modelName, const Hiding &hiding) {
+    LoadedModel ModelLoader::load(const std::string &modelName, const Hiding &hiding, bool listAnimations) {
         this->cache.clear();
         LoadedModel model;
         model.name = modelName;
@@ -382,7 +382,7 @@ namespace end_editor {
                 }
             }
         };
-        if(!model.hierarchy.name.empty()) {
+        if(listAnimations && !model.hierarchy.name.empty()) {
             addAnimations(*file, path);
             this->indexAnimationFiles();
             const auto range = this->animationFilesByHierarchy.equal_range(lower(model.hierarchy.name));

@@ -80,7 +80,8 @@ namespace end_editor {
                 error = "unterminated file name";
                 return std::nullopt;
             }
-            entry.path = normalizeArchivePath(std::string_view(index).substr(position, nameEnd - position));
+            entry.name = index.substr(position, nameEnd - position);
+            entry.path = normalizeArchivePath(entry.name);
             position = nameEnd + 1;
             if(std::uint64_t(entry.offset) + entry.size > fileSize) {
                 error = "entry outside the archive: " + entry.path;

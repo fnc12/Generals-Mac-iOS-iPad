@@ -13,6 +13,7 @@ namespace end_editor {
     // ("data/ini/object/americavehicle.ini").
     struct BigEntry {
         std::string path;
+        std::string name;  // as the archive writes it ("Maps\\Alpine Assault\\Alpine Assault.map")
         std::uint32_t offset = 0;
         std::uint32_t size = 0;
     };

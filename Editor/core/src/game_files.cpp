@@ -10,6 +10,7 @@ namespace end_editor {
                           std::string &error) {
         this->archives.clear();
         this->sources.clear();
+        this->shadowed.clear();
         std::error_code ec;
         if(folders.empty() || !std::filesystem::is_directory(folders.front(), ec)) {
             error = "not a folder: " + (folders.empty() ? std::string() : folders.front().string());
@@ -23,7 +24,7 @@ namespace end_editor {
             }
 
             // Loose files first: they win over this folder's archives.
-            for(const char *top: {"Data", "Art"}) {
+            for(const char *top: {"Data", "Art", "Maps"}) {
                 const auto root = folder / top;
                 if(!std::filesystem::is_directory(root, ec)) {
                     continue;
@@ -35,7 +36,7 @@ namespace end_editor {
                         continue;
                     }
                     const auto relative = std::filesystem::relative(it->path(), folder, ec).generic_string();
-                    this->sources.emplace(normalizeArchivePath(relative), Source{-1, {}, it->path()});
+                    this->add(normalizeArchivePath(relative), Source{-1, {}, it->path(), relative});
                 }
             }
 
@@ -57,7 +58,7 @@ namespace end_editor {
                 }
                 const int index = int(this->archives.size());
                 for(const auto &entry: archive->entries()) {
-                    this->sources.emplace(entry.path, Source{index, entry, {}});
+                    this->add(entry.path, Source{index, entry, {}, {}});
                 }
                 this->archives.push_back(std::move(*archive));
             }
@@ -69,12 +70,38 @@ namespace end_editor {
         return this->readPrefix(path, UINT32_MAX, out);
     }
 
+    void GameFiles::add(const std::string &path, Source source) {
+        if(this->sources.count(path)) {
+            this->shadowed.emplace(path, std::move(source));
+        } else {
+            this->sources.emplace(path, std::move(source));
+        }
+    }
+
+    std::vector<std::string> GameFiles::readAll(const std::string &path) const {
+        std::vector<std::string> result;
+        std::string bytes;
+        if(this->read(path, bytes)) {
+            result.push_back(std::move(bytes));
+        }
+        const auto range = this->shadowed.equal_range(path);
+        for(auto it = range.first; it != range.second; ++it) {
+            if(this->readSource(it->second, UINT32_MAX, bytes)) {
+                result.push_back(std::move(bytes));
+            }
+        }
+        return result;
+    }
+
     bool GameFiles::readPrefix(const std::string &path, std::uint32_t maxBytes, std::string &out) const {
         const auto found = this->sources.find(path);
         if(found == this->sources.end()) {
             return false;
         }
-        const auto &source = found->second;
+        return this->readSource(found->second, maxBytes, out);
+    }
+
+    bool GameFiles::readSource(const Source &source, std::uint32_t maxBytes, std::string &out) const {
         if(source.archive >= 0) {
             return this->archives[std::size_t(source.archive)].readPrefix(source.entry, maxBytes, out);
         }
@@ -87,6 +114,27 @@ namespace end_editor {
         file.seekg(0);
         out.resize(std::size_t(std::min<std::uint64_t>(size, maxBytes)));
         return bool(file.read(out.data(), std::streamsize(out.size())));
+    }
+
+    std::string GameFiles::originalPath(const std::string &path) const {
+        const auto found = this->sources.find(path);
+        if(found == this->sources.end()) {
+            return path;
+        }
+        std::string name = found->second.archive >= 0 ? found->second.entry.name : found->second.relativeName;
+        std::replace(name.begin(), name.end(), '\\', '/');
+        return name;
+    }
+
+    std::string GameFiles::sourceOf(const std::string &path) const {
+        const auto found = this->sources.find(path);
+        if(found == this->sources.end()) {
+            return {};
+        }
+        if(found->second.archive >= 0) {
+            return this->archives[std::size_t(found->second.archive)].path().filename().string();
+        }
+        return found->second.looseFile.string();
     }
 
     std::vector<std::string> GameFiles::list(const std::function<bool(const std::string &)> &keep) const {

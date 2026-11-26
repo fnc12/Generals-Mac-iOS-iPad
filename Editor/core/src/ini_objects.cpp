@@ -193,6 +193,10 @@ namespace end_editor {
                     appendWord(current.hiddenSubObjects, name);
                     names = trim(names.substr(name.size()));
                 }
+            } else if(equalsNoCase(key, "ModelName") && blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") &&
+                      !drawDone && current.model.empty()) {
+                // W3DTreeDraw (trees, bushes) names its model directly, without condition states.
+                current.model = std::string(firstWord(rest));
             } else if(equalsNoCase(key, "Model") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
                 const bool inDefaultState = equalsNoCase(blocks.back(), "DefaultConditionState");
                 if(current.model.empty() || (inDefaultState && !modelFromDefaultState)) {

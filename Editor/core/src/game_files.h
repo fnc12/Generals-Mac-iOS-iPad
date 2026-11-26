@@ -10,7 +10,8 @@
 
 namespace end_editor {
 
-    // The files the game sees: loose files and .big archives of one or more folders, merged.
+    // The files the game sees: loose files (under Data/, Art/ and Maps/) and .big archives of one
+    // or more folders, merged.
     // Paths are normalized ("art/w3d/avtank.w3d"). Who wins when a path exists more than once:
     //   - an earlier folder wins over a later one (Zero Hour is mounted before base Generals);
     //   - inside a folder a loose file (under Data/ or Art/) wins over an archived one;
@@ -30,7 +31,15 @@ namespace end_editor {
             return this->sources.count(path) != 0;
         }
         bool read(const std::string &path, std::string &out) const;
+        // Every copy of a path, the winning one first (for files the game merges, like a mod's
+        // Terrain.ini over the base game's).
+        std::vector<std::string> readAll(const std::string &path) const;
         bool readPrefix(const std::string &path, std::uint32_t maxBytes, std::string &out) const;
+
+        // The path with its original case and '/' separators ("Maps/Alpine Assault/Alpine Assault.map").
+        std::string originalPath(const std::string &path) const;
+        // Where the winning copy is: the archive's file name, or the loose file's full path.
+        std::string sourceOf(const std::string &path) const;
 
         // All known paths for which `keep` returns true, in path order.
         std::vector<std::string> list(const std::function<bool(const std::string &)> &keep) const;
@@ -40,9 +49,14 @@ namespace end_editor {
             int archive = -1;  // index in `archives`, or -1 for a loose file
             BigEntry entry;
             std::filesystem::path looseFile;
+            std::string relativeName;  // loose files: path under the folder, original case
         };
 
         std::vector<BigArchive> archives;
+        void add(const std::string &path, Source source);
+        bool readSource(const Source &source, std::uint32_t maxBytes, std::string &out) const;
+
         std::map<std::string, Source> sources;
+        std::multimap<std::string, Source> shadowed;  // copies that lost, in mount order
     };
 }

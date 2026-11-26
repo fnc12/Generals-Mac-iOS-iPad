@@ -76,7 +76,8 @@ namespace end_editor {
             std::string subObjects;
         };
 
-        LoadedModel load(const std::string &modelName, const Hiding &hiding = {});
+        // `listAnimations` false skips looking for animation files (the map view needs none).
+        LoadedModel load(const std::string &modelName, const Hiding &hiding = {}, bool listAnimations = true);
 
         // Pose of `model` for an animation from model.animations; the bind pose (one frame)
         // when `animationName` is empty or unknown.
