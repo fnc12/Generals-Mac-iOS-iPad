@@ -1201,18 +1201,16 @@ struct MapScreen: View {
 /// What a right click places: object template, owner and angle; undo, redo and save.
 struct PlacementBar: View {
     @Environment(EditorModel.self) private var editor
-    @State private var choosing = false
 
     var body: some View {
         @Bindable var editor = editor
         HStack(spacing: 10) {
             Text("Place").foregroundStyle(.secondary)
-            Button(editor.placementTemplate ?? "Choose an object…") { choosing = true }
-                .popover(isPresented: $choosing, arrowEdge: .top) {
-                    TemplatePicker { name in
-                        editor.placementTemplate = name
-                        choosing = false
-                    }
+            Button(editor.placementTemplate ?? "Choose an object…") { editor.choosingTemplate = true }
+                .popover(isPresented: Binding(get: { editor.choosingTemplate },
+                                              set: { if !$0 { editor.choosingTemplate = false; editor.pendingPlacement = nil } }),
+                         arrowEdge: .top) {
+                    TemplatePicker { name in editor.choosePlacementTemplate(name) }
                 }
                 .help("The object a right click on the map places")
             Picker("Owner", selection: $editor.placementTeam) {
@@ -1233,11 +1231,12 @@ struct PlacementBar: View {
                 .disabled(editor.mapEdit.redoCount == 0).help("Redo (⇧⌘Z)")
             Button("Save As…") { editor.saveMapAs() }.help("Save the map with its edits (⇧⌘S)")
             if editor.mapEdit.edited { Text("Edited").font(.caption).foregroundStyle(.orange) }
-            if !editor.mapEdit.message.isEmpty {
-                Text(editor.mapEdit.message).font(.caption)
-                    .foregroundStyle(editor.mapEdit.message.hasPrefix("error") || editor.mapEdit.message.contains("error:")
+            let note = editor.editNote.isEmpty ? editor.mapEdit.message : editor.editNote
+            if !note.isEmpty {
+                Text(note).font(.caption)
+                    .foregroundStyle(!editor.editNote.isEmpty || note.hasPrefix("error") || note.contains("error:")
                                      ? .red : .secondary)
-                    .lineLimit(1).truncationMode(.middle).help(editor.mapEdit.message)
+                    .lineLimit(1).truncationMode(.middle).help(note)
             }
         }
         .padding(.horizontal, 10)

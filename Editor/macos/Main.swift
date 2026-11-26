@@ -346,6 +346,12 @@ final class EditorModel {
     var placementTemplate: String?
     var placementTeam = ""
     var placementAngle: Double = 0
+    /// A right click with no template chosen yet: the picker opens and the object goes here once chosen.
+    var pendingPlacement: SIMD2<Float>?
+    var choosingTemplate = false
+    /// The client's own notes (a refused command). Kept apart from mapEdit.message, which every
+    /// store read replaces, so they don't vanish on the next tick.
+    var editNote = ""
     @ObservationIgnored private var mapRevision: Int64 = -1
     @ObservationIgnored private var mapModelRevision: Int64 = -1
     @ObservationIgnored private var lastMapTexture: Int64 = 0
@@ -486,9 +492,10 @@ final class EditorModel {
     private func edit(_ command: String) {
         let result = String(cString: end_editor_send(command))
         if result.isEmpty {
+            editNote = ""
             tick()
         } else {
-            mapEdit.message = "\(command.split(separator: "\t").first ?? ""): \(result)"
+            editNote = "\(command.split(separator: "\t").first ?? ""): \(result)"
         }
     }
 
@@ -496,12 +503,23 @@ final class EditorModel {
 
     func placeObject(at point: SIMD2<Float>) {
         guard let template = placementTemplate else {
-            mapEdit.message = "Choose an object to place (the Place menu below the map, or the Objects list)"
+            pendingPlacement = point  // placed as soon as an object is chosen in the picker
+            choosingTemplate = true
             return
         }
         let angle = Float(placementAngle * .pi / 180)
         edit(["map.place", template, Self.number(point.x), Self.number(point.y), Self.number(angle), placementTeam]
             .joined(separator: "\t"))
+    }
+
+    /// The picker's choice: becomes what right clicks place, and fills a pending right click.
+    func choosePlacementTemplate(_ name: String) {
+        placementTemplate = name
+        choosingTemplate = false
+        if let point = pendingPlacement {
+            pendingPlacement = nil
+            placeObject(at: point)
+        }
     }
 
     func moveObject(_ id: Int64, to point: SIMD2<Float>) {
