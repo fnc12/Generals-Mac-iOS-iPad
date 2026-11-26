@@ -69,6 +69,9 @@ namespace end_editor {
         Image waterTexture;
         std::vector<PlacedObject> objects;
         std::array<float, 4> playable{};  // world rectangle x0 y0 x1 y1 of the first boundary
+        // Average color (RGB 0..1) of each source tile by tile number (MapFile::tiles >> 2), what
+        // WorldHeightMap::getTerrainColorAt gives the map preview; black for tiles of no class.
+        std::vector<std::array<float, 3>> tileColors;
         std::vector<std::string> warnings;
     };
 

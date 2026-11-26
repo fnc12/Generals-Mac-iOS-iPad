@@ -237,20 +237,72 @@ final class StoreReader {
             scene.water.append((Self.blob(s, 0), Self.blob(s, 1)))
         }
         scene.objects = mapObjects()
+        scene.links = mapLinks()
         return scene
     }
 
     func mapObjects() -> [MapObjectItem] {
         var objects: [MapObjectItem] = []
-        rows("SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color FROM map_objects ORDER BY id") { s in
+        rows("""
+            SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color, height FROM map_objects ORDER BY id
+            """) { s in
             objects.append(MapObjectItem(
                 id: sqlite3_column_int64(s, 0), templateName: Self.text(s, 1), kind: Self.text(s, 2),
                 position: SIMD3(Float(sqlite3_column_double(s, 3)), Float(sqlite3_column_double(s, 4)),
                                 Float(sqlite3_column_double(s, 5))),
+                height: Float(sqlite3_column_double(s, 11)),
                 angle: Float(sqlite3_column_double(s, 6)), flags: Int(sqlite3_column_int(s, 7)),
                 modelId: sqlite3_column_int64(s, 8), owner: Self.text(s, 9), color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 10))))
         }
         return objects
+    }
+
+    func mapLinks() -> [MapLink] {
+        var links: [MapLink] = []
+        rows("SELECT kind, from_id, to_id FROM map_links ORDER BY id") { s in
+            links.append(MapLink(kind: Self.text(s, 0), from: sqlite3_column_int64(s, 1), to: sqlite3_column_int64(s, 2)))
+        }
+        return links
+    }
+
+    /// The map_editor row: (state, gesture).
+    func mapEditor() -> (MapEditorState, MapGesture)? {
+        var result: (MapEditorState, MapGesture)?
+        rows("""
+            SELECT tool, template_name, road_type, team, angle, picker, pending, pending_x, pending_y, road_start, road_x,
+                   road_y, gesture, drag_dx, drag_dy, note, note_kind, note_serial, selection_revision, selection_count,
+                   clipboard_count, revision FROM map_editor WHERE id = 1
+            """) { s in
+            func point(_ flag: Int32, _ x: Int32) -> SIMD2<Float>? {
+                sqlite3_column_int(s, flag) != 0
+                    ? SIMD2(Float(sqlite3_column_double(s, x)), Float(sqlite3_column_double(s, x + 1))) : nil
+            }
+            let state = MapEditorState(
+                tool: Self.text(s, 0), templateName: Self.text(s, 1), roadType: Self.text(s, 2), team: Self.text(s, 3),
+                angle: sqlite3_column_double(s, 4), picker: sqlite3_column_int(s, 5) != 0, pending: point(6, 7),
+                roadStart: point(9, 10), note: Self.text(s, 15), noteKind: Self.text(s, 16),
+                noteSerial: sqlite3_column_int64(s, 17), selectionRevision: sqlite3_column_int64(s, 18),
+                selectionCount: Int(sqlite3_column_int(s, 19)), clipboardCount: Int(sqlite3_column_int(s, 20)),
+                revision: sqlite3_column_int64(s, 21))
+            let gesture = MapGesture(kind: Self.text(s, 12),
+                                     drag: SIMD2(Float(sqlite3_column_double(s, 13)), Float(sqlite3_column_double(s, 14))))
+            result = (state, gesture)
+        }
+        return result
+    }
+
+    func mapSelection() -> [Int64] {
+        var ids: [Int64] = []
+        rows("SELECT object_id FROM map_selection ORDER BY id") { s in ids.append(sqlite3_column_int64(s, 0)) }
+        return ids
+    }
+
+    func roadTypes() -> [RoadTypeItem] {
+        var types: [RoadTypeItem] = []
+        rows("SELECT name, bridge FROM road_types ORDER BY id") { s in
+            types.append(RoadTypeItem(name: Self.text(s, 0), bridge: sqlite3_column_int(s, 1) != 0))
+        }
+        return types
     }
 
     /// Models loaded since `afterId` (ready or failed, not pending), with their parts.
@@ -338,20 +390,21 @@ final class EditorModel {
     var mapWarnings: [String] = []
     var mapModelsLoaded = 0
     var mapModelCount = 0
-    var selectedMapObject: Int64?
     var mapEdit = MapEditState()
     var mapPlayers: [MapPlayer] = []
-    /// What a right click on the map places: an object template, owned by a team of map_players,
-    /// turned by `placementAngle` degrees.
-    var placementTemplate: String?
-    var placementTeam = ""
-    var placementAngle: Double = 0
-    /// A right click with no template chosen yet: the picker opens and the object goes here once chosen.
-    var pendingPlacement: SIMD2<Float>?
-    var choosingTemplate = false
-    /// The client's own notes (a refused command). Kept apart from mapEdit.message, which every
-    /// store read replaces, so they don't vanish on the next tick.
-    var editNote = ""
+    var roadTypes: [RoadTypeItem] = []
+    /// The core's editing state (map_editor): tool, template, owner, angle, picker request, note.
+    var mapEditor = MapEditorState()
+    /// The selected objects (map_selection), in the order they were selected.
+    var mapSelection: [Int64] = []
+    /// The gesture in progress; read by the renderer every frame and by the map view, not by
+    /// SwiftUI views (a drag changes it with every mouse move).
+    @ObservationIgnored var mapGesture = MapGesture()
+    /// The ground point under the cursor while it is over the map: where ⌘V pastes.
+    @ObservationIgnored var cursorGround: SIMD2<Float>?
+    var mapOverlay: MapOverlay {
+        MapOverlay(selection: mapSelection, gesture: mapGesture, roadStart: mapEditor.roadStart, pending: mapEditor.pending)
+    }
     @ObservationIgnored private var mapRevision: Int64 = -1
     @ObservationIgnored private var mapModelRevision: Int64 = -1
     @ObservationIgnored private var lastMapTexture: Int64 = 0
@@ -372,7 +425,9 @@ final class EditorModel {
         }
         reader = StoreReader(path: String(cString: end_editor_db_path()))
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+            // Not MainActor.assumeIsolated: its executor check crashed while a check of --ui-check
+            // walked the accessibility tree (a nested run loop inside a main-actor task).
+            DispatchQueue.main.async { self?.tick() }
         }
         if let last = UserDefaults.standard.string(forKey: Self.lastGameDirKey) {
             openGame(at: last)
@@ -488,60 +543,31 @@ final class EditorModel {
             .appendingPathComponent("Maps", isDirectory: true)
     }
 
-    /// Sends an editing command and applies it at once (the core runs edits in its next update).
-    private func edit(_ command: String) {
+    /// Sends a command to the core and shows its result at once (the core runs it in the next
+    /// update). A refused command leaves its note in the store too.
+    func send(_ command: String) {
         let result = String(cString: end_editor_send(command))
-        if result.isEmpty {
-            editNote = ""
-            tick()
-        } else {
-            editNote = "\(command.split(separator: "\t").first ?? ""): \(result)"
-        }
+        if !result.isEmpty { NSLog("END Editor: \(command.split(separator: "\t").first ?? ""): \(result)") }
+        tick()
     }
 
-    private static func number(_ value: Float) -> String { String(format: "%.4f", value) }
+    static func number(_ value: Float) -> String { String(format: "%.4f", value) }
 
-    func placeObject(at point: SIMD2<Float>) {
-        guard let template = placementTemplate else {
-            pendingPlacement = point  // placed as soon as an object is chosen in the picker
-            choosingTemplate = true
-            return
-        }
-        let angle = Float(placementAngle * .pi / 180)
-        edit(["map.place", template, Self.number(point.x), Self.number(point.y), Self.number(angle), placementTeam]
-            .joined(separator: "\t"))
+    /// The placement tool: "object", "waypoint", "road" or "bridge" (the core picks the road type
+    /// chosen before or the first one).
+    func chooseTool(_ tool: String) {
+        send("placement." + tool)
     }
 
-    /// The picker's choice: becomes what right clicks place, and fills a pending right click.
-    func choosePlacementTemplate(_ name: String) {
-        placementTemplate = name
-        choosingTemplate = false
-        if let point = pendingPlacement {
-            pendingPlacement = nil
-            placeObject(at: point)
-        }
+    /// ⌘C, ⌘V (at the cursor, or the map's middle when the cursor is off the map), ⌘D, ⌘A.
+    func copy() { send("edit.copy") }
+    func paste() {
+        send("edit.paste\t" + (cursorGround.map { Self.number($0.x) + "\t" + Self.number($0.y) } ?? "\t"))
     }
-
-    func moveObject(_ id: Int64, to point: SIMD2<Float>) {
-        edit("map.move\t\(id)\t\(Self.number(point.x))\t\(Self.number(point.y))")
-    }
-
-    func rotateObject(_ id: Int64, to angle: Float) {
-        edit("map.rotate\t\(id)\t\(Self.number(angle))")
-    }
-
-    func rotateSelected(by degrees: Float) {
-        guard let id = selectedMapObject, let object = mapScene.objects.first(where: { $0.id == id }) else { return }
-        rotateObject(id, to: object.angle + degrees * .pi / 180)
-    }
-
-    func deleteSelected() {
-        guard let id = selectedMapObject else { return }
-        edit("map.delete\t\(id)")
-    }
-
-    func undo() { edit("map.undo") }
-    func redo() { edit("map.redo") }
+    func duplicate() { send("edit.duplicate") }
+    func selectAll() { send("edit.select_all") }
+    func undo() { send("map.undo") }
+    func redo() { send("map.redo") }
 
     var canEditMap: Bool { mapState == "ready" }
 
@@ -556,7 +582,20 @@ final class EditorModel {
         panel.directoryURL = maps
         panel.allowedContentTypes = [.init(filenameExtension: "map") ?? .data]
         panel.nameFieldStringValue = mapScene.name.isEmpty ? "New Map" : mapScene.name
-        guard panel.runModal() == .OK, var url = panel.url else { return }
+        // A sheet on the window rather than runModal: the app keeps running while it is open.
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.save(chosen: url, maps: maps)
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
+    }
+
+    private func save(chosen: URL, maps: URL) {
+        var url = chosen
         let name = url.deletingPathExtension().lastPathComponent
         if url.deletingLastPathComponent().standardizedFileURL == maps.standardizedFileURL {
             url = maps.appendingPathComponent(name, isDirectory: true).appendingPathComponent(name + ".map")
@@ -572,21 +611,34 @@ final class EditorModel {
     }
 
     func saveMap(to url: URL) {
-        edit("map.save\t" + url.path)
+        send("map.save\t" + url.path)
     }
 
-    /// Picks up edits: the objects, the undo state and which object the last edit changed.
+    /// Picks up edits: the objects, their links and the undo state.
     private func readMapEdits(_ reader: StoreReader, _ header: StoreReader.MapHeader) {
         guard header.edit != mapEdit else { return }
         let objectsChanged = header.edit.objectRevision != mapEdit.objectRevision
         mapEdit = header.edit
         guard objectsChanged, header.state == "ready" else { return }
         mapScene.objects = reader.mapObjects()
+        mapScene.links = reader.mapLinks()
         mapScene.objectsRevision = header.edit.objectRevision
-        // Select what the edit placed, moved or turned (nothing after a delete).
-        let changed = header.edit.lastObject
-        if changed != 0 {
-            selectedMapObject = mapScene.objects.contains { $0.id == changed } ? changed : nil
+    }
+
+    /// Picks up the core's editing state: tool, note, selection, gesture.
+    private func readEditor(_ reader: StoreReader) {
+        guard let (state, gesture) = reader.mapEditor(), state.revision != mapEditor.revision else { return }
+        if gesture != mapGesture { mapGesture = gesture }
+        if state.selectionRevision != mapEditor.selectionRevision {
+            let selection = reader.mapSelection()
+            if selection != mapSelection { mapSelection = selection }
+        }
+        var compared = state
+        compared.revision = mapEditor.revision
+        if compared != mapEditor {
+            mapEditor = state
+        } else {
+            mapEditor.revision = state.revision
         }
     }
 
@@ -603,15 +655,11 @@ final class EditorModel {
             mapModelRevision = -1
             mapModelCount = header.modelCount
             mapModelsLoaded = 0
-            selectedMapObject = nil
             mapScene = header.state == "ready" ? reader.mapScene() : MapScene()
             mapScene.objectsRevision = header.edit.objectRevision
             mapWarnings = header.state == "ready" ? reader.mapWarnings() : []
             mapEdit = header.edit
             mapPlayers = header.state == "ready" ? reader.mapPlayers() : []
-            if !mapPlayers.contains(where: { $0.team == placementTeam }) {
-                placementTeam = mapPlayers.first?.team ?? ""  // the neutral player comes first
-            }
         }
         readMapEdits(reader, header)
         if header.state == "ready" && header.modelRevision != mapModelRevision {
@@ -638,12 +686,14 @@ final class EditorModel {
                 objects = reader.objects()
                 warnings = reader.warnings()
                 maps = reader.maps()
+                roadTypes = reader.roadTypes()
                 modelName = ""
                 preview = PreviewModel()
                 animations = []
             }
         }
         readMap(reader)
+        readEditor(reader)
         if let header = reader.modelHeader(), header.revision != modelRevision {
             modelRevision = header.revision
             modelState = header.state
@@ -753,10 +803,10 @@ struct ObjectBrowser: View {
         } detail: {
             if let id = selection, let item = model.objects.first(where: { $0.id == id }) {
                 ObjectDetail(item: item)
-                    .onAppear { model.showModel(of: item); model.placementTemplate = item.name }
+                    .onAppear { model.showModel(of: item); model.send("placement.template\t" + item.name) }
                     .onChange(of: item) { _, newItem in
                         model.showModel(of: newItem)
-                        model.placementTemplate = newItem.name  // what a right click on a map places
+                        model.send("placement.template\t" + newItem.name)  // what a right click on a map places
                     }
             } else {
                 Text("Select an object").foregroundStyle(.secondary)
@@ -918,7 +968,7 @@ enum Snapshot {
         if let pick {
             let size = CGSize(width: width, height: height)
             if let id = renderer.pick(at: pick, size: size), let object = scene.objects.first(where: { $0.id == id }) {
-                renderer.selected = id
+                renderer.overlay.selection = [id]
                 print("pick: #\(id) \(object.templateName) (\(object.kind)) at \(object.position)")
                 for property in reader.mapObjectProperties(of: id) {
                     print("   \(property.key) (\(property.type)) = \(property.value)")
@@ -976,11 +1026,13 @@ struct EndEditorApp: App {
     }
 }
 
-/// Undo, redo and "Save Map As…" for map edits. A text field being edited keeps its own undo.
+/// Undo, redo, copy, paste, duplicate and "Save Map As…" for map edits. A text field being edited
+/// keeps its own undo and pasteboard.
 struct MapCommands: Commands {
     let model: EditorModel
 
     private var editingText: Bool { NSApp.keyWindow?.firstResponder is NSTextView }
+    private func send(_ action: String) { NSApp.sendAction(Selector((action)), to: nil, from: nil) }
 
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
@@ -993,10 +1045,17 @@ struct MapCommands: Commands {
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
+        CommandGroup(replacing: .pasteboard) {
+            Button("Copy") { if editingText { send("copy:") } else { model.copy() } }.keyboardShortcut("c")
+            Button("Paste") { if editingText { send("paste:") } else { model.paste() } }.keyboardShortcut("v")
+            // Not .disabled(!model.canEditMap): a Commands body does not follow the model's changes,
+            // so the item stayed disabled; without a map the core refuses with a note.
+            Button("Duplicate") { model.duplicate() }.keyboardShortcut("d")
+            Button("Select All") { if editingText { send("selectAll:") } else { model.selectAll() } }.keyboardShortcut("a")
+        }
         CommandGroup(after: .saveItem) {
             Button("Save Map As…") { model.saveMapAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(!model.canEditMap)
         }
     }
 }
