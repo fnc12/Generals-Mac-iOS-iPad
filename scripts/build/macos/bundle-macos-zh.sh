@@ -398,12 +398,11 @@ export DYLD_LIBRARY_PATH="${LIB_DIR}:${BIN_DIR}:${DYLD_LIBRARY_PATH:-}"
 # brightness, Ctrl+1..5 window snap). Only loaded when the bundled dylib is
 # present and SAGE_PATCH_DISABLED is not set. Also seeds the engine INI loader
 # via Resources/Data/INI/GameData/SagePatch.ini.
+# GeneralsX @bugfix fnc12 26/11/2026 SagePatch goes into the game process only. Exported, DYLD_INSERT_LIBRARIES
+# also reached every child of this script (cp, mv, the grep filters below) and crashed them.
+GAME_INSERT_LIBRARIES="${DYLD_INSERT_LIBRARIES:-}"
 if [[ -f "${LIB_DIR}/libsage_patch.dylib" && "${SAGE_PATCH_DISABLED:-0}" != "1" ]]; then
-    if [[ -n "${DYLD_INSERT_LIBRARIES:-}" ]]; then
-        export DYLD_INSERT_LIBRARIES="${LIB_DIR}/libsage_patch.dylib:${DYLD_INSERT_LIBRARIES}"
-    else
-        export DYLD_INSERT_LIBRARIES="${LIB_DIR}/libsage_patch.dylib"
-    fi
+    GAME_INSERT_LIBRARIES="${LIB_DIR}/libsage_patch.dylib${GAME_INSERT_LIBRARIES:+:${GAME_INSERT_LIBRARIES}}"
 fi
 
 # GeneralsX @bugfix fbraz3 20/03/2026 DXVK requires this env var on non-Win32; SDL3 matches game windowing layer
@@ -485,7 +484,7 @@ if [[ -d "${CNC_GENERALS_ZH_PATH}" ]]; then
     # defaults in the user data directory on first run.
 fi
 
-"${BIN_DIR}/GeneralsXZH" "$@" 2>&1 | grep --line-buffered -v "Unimplemented render state D3DRS_PATCHSEGMENTS" | grep --line-buffered -v "No accelerated colorspace conversion"
+DYLD_INSERT_LIBRARIES="${GAME_INSERT_LIBRARIES}" "${BIN_DIR}/GeneralsXZH" "$@" 2>&1 | grep --line-buffered -v "Unimplemented render state D3DRS_PATCHSEGMENTS" | grep --line-buffered -v "No accelerated colorspace conversion"
 exit ${PIPESTATUS[0]}
 WRAPPER
 chmod +x "${MACOS_DIR}/run.sh"

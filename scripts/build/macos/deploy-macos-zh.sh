@@ -227,12 +227,11 @@ export DYLD_LIBRARY_PATH="\${SCRIPT_DIR}:\${DYLD_LIBRARY_PATH:-}"
 # SagePatch (optional QoL features). Loaded via DYLD_INSERT_LIBRARIES so it
 # can interpose SDL3 functions for hot-keys (F11 screenshot, Scroll Lock cursor
 # lock, Ctrl+PageUp/PageDown brightness, Ctrl+1..5 window snap).
+# GeneralsX @bugfix fnc12 26/11/2026 SagePatch goes into the game process only. Exported, DYLD_INSERT_LIBRARIES
+# also reached every child of this script (cp, mv, the grep filters below) and crashed them.
+GAME_INSERT_LIBRARIES="\${DYLD_INSERT_LIBRARIES:-}"
 if [[ -f "\${SCRIPT_DIR}/libsage_patch.dylib" && "\${SAGE_PATCH_DISABLED:-0}" != "1" ]]; then
-    if [[ -n "\${DYLD_INSERT_LIBRARIES:-}" ]]; then
-        export DYLD_INSERT_LIBRARIES="\${SCRIPT_DIR}/libsage_patch.dylib:\${DYLD_INSERT_LIBRARIES}"
-    else
-        export DYLD_INSERT_LIBRARIES="\${SCRIPT_DIR}/libsage_patch.dylib"
-    fi
+    GAME_INSERT_LIBRARIES="\${SCRIPT_DIR}/libsage_patch.dylib\${GAME_INSERT_LIBRARIES:+:\${GAME_INSERT_LIBRARIES}}"
 fi
 
 # GeneralsX @bugfix fbraz3 20/03/2026 DXVK requires DXVK_WSI_DRIVER on non-Win32; must match game windowing (SDL3)
@@ -274,7 +273,7 @@ fi
 cd "\${SCRIPT_DIR}" || exit 1
 
 LOG_FILE="\${SCRIPT_DIR}/game.log"
-"./GeneralsXZH" "\$@" 2>&1 | grep --line-buffered -v "Unimplemented render state D3DRS_PATCHSEGMENTS" | grep --line-buffered -v "No accelerated colorspace conversion" | tee "\${LOG_FILE}"
+DYLD_INSERT_LIBRARIES="\${GAME_INSERT_LIBRARIES}" "./GeneralsXZH" "\$@" 2>&1 | grep --line-buffered -v "Unimplemented render state D3DRS_PATCHSEGMENTS" | grep --line-buffered -v "No accelerated colorspace conversion" | tee "\${LOG_FILE}"
 exit \${PIPESTATUS[0]}
 WRAPPER
 chmod +x "${RUNTIME_DIR}/run.sh"
