@@ -239,7 +239,7 @@ enum PerfHarness {
                  editor.modelState, editor.modelMessage)
             _ = (editor.maps, editor.mapScene, editor.mapModels, editor.mapModelTextures, editor.mapState,
                  editor.mapMessage, editor.mapWarnings, editor.mapModelsLoaded, editor.mapModelCount,
-                 editor.selectedMapObject)
+                 editor.mapSelection, editor.mapEditor)
         } onChange: {
             Task { @MainActor in
                 recorder.modelChanges += 1

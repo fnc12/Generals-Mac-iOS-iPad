@@ -18,11 +18,24 @@ struct MapObjectItem: Identifiable, Hashable {
     let templateName: String
     let kind: String        // "model", "marker", "waypoint", "road", "bridge"
     let position: SIMD3<Float>
+    let height: Float       // above the ground
     let angle: Float
     let flags: Int
     let modelId: Int64
     let owner: String
     let color: UInt32       // 0xRRGGBB
+
+    func at(_ position: SIMD3<Float>) -> MapObjectItem {
+        MapObjectItem(id: id, templateName: templateName, kind: kind, position: position, height: height, angle: angle,
+                      flags: flags, modelId: modelId, owner: owner, color: color)
+    }
+}
+
+/// A line the map draws between two objects (map_links): a waypoint link, a road or bridge segment.
+struct MapLink: Hashable {
+    let kind: String
+    let from: Int64
+    let to: Int64
 }
 
 /// The open map's editing state (map row columns).
@@ -34,6 +47,47 @@ struct MapEditState: Equatable {
     var lastObject: Int64 = 0
     var message = ""
     var savedPath = ""
+}
+
+/// The core's map_editor row: the placement tool, what waits for input, the note. The client
+/// shows it and sends commands; it decides nothing itself.
+struct MapEditorState: Equatable {
+    var tool = "object"
+    var templateName = ""
+    var roadType = ""
+    var team = ""
+    var angle: Double = 0
+    var picker = false
+    var pending: SIMD2<Float>?
+    var roadStart: SIMD2<Float>?
+    var note = ""
+    var noteKind = ""
+    var noteSerial: Int64 = 0
+    var selectionRevision: Int64 = -1
+    var selectionCount = 0
+    var clipboardCount = 0
+    var revision: Int64 = -1
+}
+
+/// The mouse gesture in progress (map_editor's gesture, drag_dx, drag_dy): kept apart from
+/// MapEditorState so a drag does not re-render the bars and the inspector.
+struct MapGesture: Equatable {
+    var kind = ""
+    var drag = SIMD2<Float>(0, 0)
+}
+
+/// What the renderer draws over the map besides the store's objects.
+struct MapOverlay: Equatable {
+    var selection: [Int64] = []
+    var gesture = MapGesture()
+    var roadStart: SIMD2<Float>?
+    var pending: SIMD2<Float>?
+}
+
+struct RoadTypeItem: Hashable, Identifiable {
+    let name: String
+    let bridge: Bool
+    var id: String { name }
 }
 
 /// A player of the map's SidesList; placed objects are owned by its default team.
@@ -91,7 +145,8 @@ struct MapScene {
     var terrain: [(vertices: Data, indices: Data)] = []
     var water: [(vertices: Data, indices: Data)] = []
     var objects: [MapObjectItem] = []
-    var objectsRevision: Int64 = -1  // grows when edits change `objects`
+    var links: [MapLink] = []
+    var objectsRevision: Int64 = -1  // grows when edits change `objects` or `links`
 
     var isEmpty: Bool { heights.isEmpty }
 
@@ -124,15 +179,6 @@ final class MapViewState: ObservableObject {
     var pitch: Float = 0.85
     var distance: Float = 1000
     let fovY: Float = 0.8
-    /// Set by the view: a click (not a drag) at a point in view coordinates, origin top left.
-    var onClick: ((CGPoint, CGSize) -> Void)?
-    /// A right click on the ground (world x, y): place the chosen object there.
-    var onPlace: ((SIMD2<Float>) -> Void)?
-    /// The selected object was dragged to a new ground position.
-    var onMoveObject: ((Int64, SIMD2<Float>) -> Void)?
-    var onDelete: (() -> Void)?
-    var onRotate: ((Float) -> Void)?  // degrees
-
     var eye: SIMD3<Float> {
         target + distance * SIMD3(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch))
     }
@@ -447,20 +493,24 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         didSet { if batchesDirty { contentGeneration += 1 } }
     }
     private var batchOptions = (models: true, markers: true)
-    var selected: Int64?
+    /// Selection, gesture and points waiting for input, from the store (the editor model);
+    /// asked for every frame. Without a source (snapshots), `overlay` is used as it is.
+    var overlaySource: (@MainActor () -> MapOverlay)?
+    var overlay = MapOverlay() {
+        didSet {
+            if overlay.selection != oldValue.selection || overlay.gesture != oldValue.gesture { batchesDirty = true }
+            selectionSet = Set(overlay.selection)
+        }
+    }
+    private var selectionSet: Set<Int64> = []
     /// Grows whenever what is drawn changes other than the camera (scene, models, batches).
     private var contentGeneration = 0
     /// What the last presented frame showed; a frame that would look the same is not drawn.
     private var presented: FrameKey?
 
-    /// The selected object while it is dragged: drawn here until the store has its new place.
-    var dragging: (id: Int64, position: SIMD3<Float>)? {
-        didSet { batchesDirty = true }
-    }
-
     private struct FrameKey: Equatable {
         var generation: Int
-        var selected: Int64?
+        var overlay: MapOverlay
         var showModels: Bool, showMarkers: Bool, showWater: Bool
         var target: SIMD3<Float>
         var yaw: Float, pitch: Float, distance: Float
@@ -603,7 +653,6 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         guard newScene.key != sceneKey else {
             if newScene.objectsRevision != scene.objectsRevision {
                 batchesDirty = true
-                dragging = nil
             }
             scene = newScene
             return
@@ -618,8 +667,6 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         models = [:]
         failedModels = []
         modelTextures = [:]
-        selected = nil
-        dragging = nil
         batchesDirty = true
         state.frame(newScene)
     }
@@ -653,12 +700,12 @@ final class MapRenderer: NSObject, MTKViewDelegate {
 
     // MARK: Instances
 
-    /// The object as drawn: where it is dragged to, if it is.
+    /// The object as drawn: a selected object being dragged shows where it goes, at its height
+    /// above the ground there.
     private func displayed(_ object: MapObjectItem) -> MapObjectItem {
-        guard let dragging, dragging.id == object.id else { return object }
-        return MapObjectItem(id: object.id, templateName: object.templateName, kind: object.kind,
-                             position: dragging.position, angle: object.angle, flags: object.flags,
-                             modelId: object.modelId, owner: object.owner, color: object.color)
+        guard overlay.gesture.kind == "move", selectionSet.contains(object.id) else { return object }
+        let xy = SIMD2(object.position.x, object.position.y) + overlay.gesture.drag
+        return object.at(SIMD3(xy.x, xy.y, scene.groundHeight(x: xy.x, y: xy.y) + object.height))
     }
 
     func object(_ id: Int64) -> MapObjectItem? {
@@ -780,20 +827,29 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         return near
     }
 
-    /// The object under a point of the view (origin top left), nearest to the camera first.
-    func pick(at point: CGPoint, size: CGSize) -> Int64? {
+    /// The objects under a point of the view (origin top left), nearest to the camera first.
+    func hits(at point: CGPoint, size: CGSize) -> [Int64] {
         let ray = state.ray(at: point, size: size)
-        var best: (Int64, Float)?
+        var found: [(Int64, Float)] = []
         for stored in scene.objects where isShown(stored) {
-            if let near = hitDistance(displayed(stored), ray), best == nil || near < best!.1 { best = (stored.id, near) }
+            if let near = hitDistance(displayed(stored), ray) { found.append((stored.id, near)) }
         }
-        return best?.0
+        return found.sorted { $0.1 < $1.1 }.map(\.0)
     }
 
-    /// Whether a point of the view is on an object, also when another object is in front of it.
-    func hits(_ id: Int64, at point: CGPoint, size: CGSize) -> Bool {
-        guard let object = object(id), isShown(object) else { return false }
-        return hitDistance(object, state.ray(at: point, size: size)) != nil
+    /// The object under a point of the view, nearest to the camera.
+    func pick(at point: CGPoint, size: CGSize) -> Int64? { hits(at: point, size: size).first }
+
+    /// Shown objects whose middle is inside a rectangle of the view (origin top left).
+    func objects(in rect: CGRect, size: CGSize) -> [Int64] {
+        scene.objects.filter { stored in
+            guard isShown(stored) else { return false }
+            let object = displayed(stored)
+            let (low, high) = localBounds(object)
+            guard let point = state.viewPoint(of: object.position + SIMD3(0, 0, (low.z + high.z) / 2), size: size)
+            else { return false }
+            return rect.contains(point)
+        }.map(\.id)
     }
 
     // MARK: Drawing
@@ -804,7 +860,11 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         // The view's display link calls this every vsync. Drawing an unchanged frame is not only
         // wasted: asking for a drawable blocks the main thread until the GPU frees one, which
         // starves everything else on it (scrolling the map list, SwiftUI updates).
-        let key = FrameKey(generation: contentGeneration, selected: selected, showModels: state.showModels,
+        if let overlaySource {
+            let fresh = overlaySource()
+            if fresh != overlay { overlay = fresh }
+        }
+        let key = FrameKey(generation: contentGeneration, overlay: overlay, showModels: state.showModels,
                            showMarkers: state.showMarkers, showWater: state.showWater, target: state.target,
                            yaw: state.yaw, pitch: state.pitch, distance: state.distance, size: view.drawableSize)
         guard key != presented else { return }
@@ -940,8 +1000,38 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         }
         drawParts(false)
 
-        // The selected object's box, over everything.
-        if let selected, let object = object(selected) {
+        // Waypoint links and road segments, then the selected objects' boxes and the points
+        // waiting for input, over everything.
+        encoder.setRenderPipelineState(linePipeline)
+        encoder.setDepthStencilState(overlayDepthState)
+        func lines(_ points: [SIMD3<Float>], _ color: SIMD4<Float>) {
+            guard !points.isEmpty else { return }
+            var values = points.flatMap { [$0.x, $0.y, $0.z] }
+            var flags = PartUniforms(flags: .zero, baseColor: color)
+            values.withUnsafeMutableBytes { bytes in
+                if bytes.count <= 4096 {
+                    encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
+                } else if let buffer = device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count) {
+                    encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+                }
+            }
+            encoder.setFragmentBytes(&flags, length: MemoryLayout<PartUniforms>.stride, index: 3)
+            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: points.count)
+        }
+        if state.showMarkers && !scene.links.isEmpty {
+            var byKind: [String: [SIMD3<Float>]] = [:]
+            let positions = Dictionary(uniqueKeysWithValues: scene.objects.map { ($0.id, $0) })
+            for link in scene.links {
+                guard let a = positions[link.from].map(displayed), let b = positions[link.to].map(displayed) else { continue }
+                byKind[link.kind, default: []] += [a.position + SIMD3(0, 0, 3), b.position + SIMD3(0, 0, 3)]
+            }
+            lines(byKind["waypoint"] ?? [], SIMD4(1, 0.85, 0.2, 1))
+            lines(byKind["road"] ?? [], SIMD4(0.8, 0.8, 0.8, 1))
+            lines(byKind["bridge"] ?? [], SIMD4(0.75, 0.5, 0.3, 1))
+        }
+        var boxes: [SIMD3<Float>] = []
+        for id in overlay.selection {
+            guard let object = object(id) else { continue }
             let (low, high) = localBounds(object)
             let transform = Self.transform(of: object)
             var corners: [SIMD3<Float>] = []
@@ -950,15 +1040,17 @@ final class MapRenderer: NSObject, MTKViewDelegate {
                 let w = transform * SIMD4(p, 1)
                 corners.append(SIMD3(w.x, w.y, w.z))
             }
-            let edges = [0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7]
-            var points = edges.flatMap { [corners[$0].x, corners[$0].y, corners[$0].z] }
-            encoder.setRenderPipelineState(linePipeline)
-            encoder.setDepthStencilState(overlayDepthState)
-            encoder.setVertexBytes(&points, length: points.count * 4, index: 0)
-            var flags = PartUniforms(flags: .zero, baseColor: SIMD4(1, 0.9, 0.2, 1))
-            encoder.setFragmentBytes(&flags, length: MemoryLayout<PartUniforms>.stride, index: 3)
-            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: edges.count)
+            boxes += [0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7].map { corners[$0] }
         }
+        lines(boxes, SIMD4(1, 0.9, 0.2, 1))
+        // A road's first point and a right click waiting for an object: a post with a cross.
+        var points: [SIMD3<Float>] = []
+        for point in [overlay.roadStart, overlay.pending].compactMap({ $0 }) {
+            let ground = SIMD3(point.x, point.y, scene.groundHeight(x: point.x, y: point.y))
+            points += [ground, ground + SIMD3(0, 0, 20), ground + SIMD3(-6, 0, 1), ground + SIMD3(6, 0, 1),
+                       ground + SIMD3(0, -6, 1), ground + SIMD3(0, 6, 1)]
+        }
+        lines(points, SIMD4(0.3, 1, 0.5, 1))
     }
 }
 
@@ -985,26 +1077,66 @@ private func mapPerspective(fovY: Float, aspect: Float, near: Float, far: Float)
         SIMD4(0, 0, z * near, 0)))
 }
 
-/// MTKView with the map's controls: drag pans, ⌥-drag (or ⌘-drag) turns and tilts, scroll and
-/// pinch zoom, the rotate gesture turns, a click selects. Editing: a right click (or ⌃-click)
-/// places the chosen object on the ground, dragging the selected object moves it, Delete removes
-/// it, [ and ] turn it by 15°.
+/// MTKView that turns mouse and key input into core commands (`map.press`, `map.drag`,
+/// `map.release`, `map.click_right`, `edit.*`) with what needs the camera: the ground point under
+/// the cursor, the objects under it and those inside a rubber band. What an input means (select,
+/// move, place, pan) is the core's decision; the view moves its camera when the store's gesture
+/// says "pan" or "orbit". Scroll and pinch zoom and the rotate gesture turn the camera directly.
 final class MapMTKView: MTKView {
     var state: MapViewState?
     weak var renderer: MapRenderer?
+    weak var editor: EditorModel?
     private var downPoint: NSPoint?
     private var lastPoint: NSPoint?
     private var dragged = false
-    /// Dragging the selected object: its id, the offset from the ground point under the cursor
-    /// to the object, and its height above the ground.
-    private var objectDrag: (id: Int64, offset: SIMD2<Float>, height: Float)?
+    private let band = CAShapeLayer()
+    private var tracking: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
 
     /// A point of the view with the origin top left, as MapViewState takes it.
-    private func viewPoint(_ event: NSEvent) -> CGPoint {
-        let point = convert(event.locationInWindow, from: nil)
-        return CGPoint(x: point.x, y: bounds.height - point.y)
+    private func viewPoint(_ point: NSPoint) -> CGPoint { CGPoint(x: point.x, y: bounds.height - point.y) }
+    private func viewPoint(_ event: NSEvent) -> CGPoint { viewPoint(convert(event.locationInWindow, from: nil)) }
+
+    private func ground(_ event: NSEvent) -> SIMD2<Float>? {
+        guard let state, let renderer,
+              let point = state.groundPoint(at: viewPoint(event), size: bounds.size, scene: renderer.scene) else { return nil }
+        return SIMD2(point.x, point.y)
+    }
+
+    /// "x\ty" of the ground under the cursor, "\t" when it is off the map.
+    private func groundArgument(_ event: NSEvent) -> String {
+        guard let point = ground(event) else { return "\t" }
+        return EditorModel.number(point.x) + "\t" + EditorModel.number(point.y)
+    }
+
+    private func hitsArgument(_ event: NSEvent) -> String {
+        (renderer?.hits(at: viewPoint(event), size: bounds.size) ?? []).map(String.init).joined(separator: ",")
+    }
+
+    private static func modifiers(_ event: NSEvent) -> String {
+        var names: [String] = []
+        if event.modifierFlags.contains(.shift) { names.append("shift") }
+        if event.modifierFlags.contains(.option) { names.append("alt") }
+        if event.modifierFlags.contains(.command) { names.append("cmd") }
+        return names.joined(separator: ",")
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        editor?.cursorGround = ground(event)  // where ⌘V pastes
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        editor?.cursorGround = nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1016,71 +1148,73 @@ final class MapMTKView: MTKView {
         downPoint = convert(event.locationInWindow, from: nil)
         lastPoint = downPoint
         dragged = false
-        objectDrag = nil
-        // A press on the selected object drags it (also where another object is in front of
-        // it); anywhere else pans.
-        let modifiers = event.modifierFlags.intersection([.option, .command, .shift])
-        if modifiers.isEmpty, let state, let renderer, let selected = renderer.selected,
-           renderer.hits(selected, at: viewPoint(event), size: bounds.size),
-           let object = renderer.object(selected),
-           let ground = state.groundPoint(at: viewPoint(event), size: bounds.size, scene: renderer.scene) {
-            let height = object.position.z - renderer.scene.groundHeight(x: object.position.x, y: object.position.y)
-            objectDrag = (selected, SIMD2(object.position.x, object.position.y) - SIMD2(ground.x, ground.y), height)
-        }
+        editor?.send("map.press\t" + groundArgument(event) + "\t" + Self.modifiers(event) + "\t" + hitsArgument(event))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let state else { return }
+        guard let state, let editor, let downPoint else { return }
         // Deltas from the locations, not event.deltaX/Y (not every event source fills those).
         let point = convert(event.locationInWindow, from: nil)
         let dx = Float(point.x - (lastPoint ?? point).x)
         let dy = Float((lastPoint ?? point).y - point.y)  // down is positive, like NSEvent.deltaY
         lastPoint = point
-        if let downPoint, !dragged {
+        if !dragged {
             dragged = hypot(point.x - downPoint.x, point.y - downPoint.y) > 3
+            guard dragged else { return }
         }
-        if let objectDrag, let renderer {
-            guard dragged, let ground = state.groundPoint(at: viewPoint(event), size: bounds.size, scene: renderer.scene)
-            else { return }
-            let xy = SIMD2(ground.x, ground.y) + objectDrag.offset
-            renderer.dragging = (objectDrag.id, SIMD3(xy.x, xy.y, renderer.scene.groundHeight(x: xy.x, y: xy.y) + objectDrag.height))
-        } else if event.modifierFlags.contains(.option) || event.modifierFlags.contains(.command) {
-            state.rotate(dx: dx, dy: dy)
-        } else {
-            state.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height))
+        editor.send("map.drag\t" + groundArgument(event))
+        switch editor.mapGesture.kind {
+        case "pan": state.pan(dx: dx, dy: dy, viewHeight: Float(bounds.height))
+        case "orbit": state.rotate(dx: dx, dy: dy)
+        case "band": showBand(from: downPoint, to: point)
+        default: break  // "move": the renderer draws the selection where the store says
         }
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { downPoint = nil; lastPoint = nil; objectDrag = nil }
-        guard let state else { return }
-        if let objectDrag, dragged {
-            if let position = renderer?.dragging?.position, renderer?.dragging?.id == objectDrag.id {
-                state.onMoveObject?(objectDrag.id, SIMD2(position.x, position.y))
-            }
-            return
+        defer { downPoint = nil; lastPoint = nil; band.removeFromSuperlayer() }
+        guard let editor, downPoint != nil else { return }
+        var inside = ""
+        if editor.mapGesture.kind == "band", let renderer, let downPoint {
+            let point = convert(event.locationInWindow, from: nil)
+            let a = viewPoint(downPoint), b = viewPoint(point)
+            let rect = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+            inside = renderer.objects(in: rect, size: bounds.size).map(String.init).joined(separator: ",")
         }
-        guard !dragged else { return }
-        state.onClick?(viewPoint(event), bounds.size)
+        editor.send("map.release\t" + inside)
+    }
+
+    private func showBand(from a: NSPoint, to b: NSPoint) {
+        if band.superlayer == nil, let layer {
+            band.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
+            band.strokeColor = NSColor.controlAccentColor.cgColor
+            band.lineWidth = 1
+            layer.addSublayer(band)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        band.frame = bounds
+        band.path = CGPath(rect: CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)),
+                           transform: nil)
+        CATransaction.commit()
     }
 
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        guard let state, let renderer,
-              let ground = state.groundPoint(at: viewPoint(event), size: bounds.size, scene: renderer.scene) else { return }
-        state.onPlace?(SIMD2(ground.x, ground.y))
+        editor?.send("map.click_right\t" + groundArgument(event) + "\t" + hitsArgument(event))
     }
 
     override func keyDown(with event: NSEvent) {
+        guard let editor else { return super.keyDown(with: event) }
         switch event.keyCode {
-        case 51, 117:  // Delete, Forward Delete
-            state?.onDelete?()
+        case 51, 117: editor.send("edit.delete")  // Delete, Forward Delete
+        case 53: editor.send("edit.cancel")       // Esc
         default:
             switch event.charactersIgnoringModifiers {  // with ⇧ these are { and } on most layouts
-            case "[": state?.onRotate?(-15)
-            case "]": state?.onRotate?(15)
-            case "{": state?.onRotate?(-1)
-            case "}": state?.onRotate?(1)
+            case "[": editor.send("edit.rotate\t-15")
+            case "]": editor.send("edit.rotate\t15")
+            case "{": editor.send("edit.rotate\t-1")
+            case "}": editor.send("edit.rotate\t1")
             default: super.keyDown(with: event)
             }
         }
@@ -1103,13 +1237,8 @@ struct MapMetalView: NSViewRepresentable {
     let scene: MapScene
     let models: [MapModelData]
     let textures: [String: PreviewTexture]
-    let selected: Int64?
+    let editor: EditorModel
     @ObservedObject var state: MapViewState
-    let onSelect: (Int64?) -> Void
-    var onPlace: (SIMD2<Float>) -> Void = { _ in }
-    var onMoveObject: (Int64, SIMD2<Float>) -> Void = { _, _ in }
-    var onDelete: () -> Void = {}
-    var onRotate: (Float) -> Void = { _ in }
 
     func makeCoordinator() -> MapRenderer? { MapRenderer(state: state) }
 
@@ -1122,11 +1251,14 @@ struct MapMetalView: NSViewRepresentable {
         let view = MapMTKView(frame: .zero, device: renderer.device)
         view.state = state
         view.renderer = renderer
+        view.editor = editor
         view.colorPixelFormat = .bgra8Unorm
         view.depthStencilPixelFormat = .depth32Float
         view.clearColor = MTLClearColor(red: 0.12, green: 0.13, blue: 0.15, alpha: 1)
         view.preferredFramesPerSecond = 60
         view.delegate = renderer
+        // Read every frame, outside SwiftUI: a drag changes it with every mouse move.
+        renderer.overlaySource = { [weak editor] in editor?.mapOverlay ?? MapOverlay() }
         update(renderer)
         return view
     }
@@ -1138,16 +1270,10 @@ struct MapMetalView: NSViewRepresentable {
     private func update(_ renderer: MapRenderer) {
         renderer.show(scene)
         if renderer.loadedModelCount < models.count { renderer.add(models: models, textures: textures) }
-        renderer.selected = selected
-        state.onClick = { [weak renderer] point, size in onSelect(renderer?.pick(at: point, size: size)) }
-        state.onPlace = onPlace
-        state.onMoveObject = onMoveObject
-        state.onDelete = onDelete
-        state.onRotate = onRotate
     }
 }
 
-/// The map with its controls, the placement bar and the selected object's inspector.
+/// The map with its controls, the placement bar and the selection's inspector.
 struct MapScreen: View {
     @Environment(EditorModel.self) private var editor
     @StateObject private var state = MapViewState()
@@ -1156,12 +1282,7 @@ struct MapScreen: View {
         VStack(spacing: 0) {
             ZStack {
                 MapMetalView(scene: editor.mapScene, models: editor.mapModels, textures: editor.mapModelTextures,
-                             selected: editor.selectedMapObject, state: state,
-                             onSelect: { editor.selectedMapObject = $0 },
-                             onPlace: { editor.placeObject(at: $0) },
-                             onMoveObject: { editor.moveObject($0, to: $1) },
-                             onDelete: { editor.deleteSelected() },
-                             onRotate: { editor.rotateSelected(by: $0) })
+                             editor: editor, state: state)
                 switch editor.mapState {
                 case "loading": ProgressView("Reading the map…").controlSize(.small)
                 case "error": Text(editor.mapMessage).foregroundStyle(.secondary).padding()
@@ -1173,7 +1294,7 @@ struct MapScreen: View {
             HStack(spacing: 12) {
                 Toggle("Models", isOn: $state.showModels).toggleStyle(.checkbox)
                 Toggle("Markers", isOn: $state.showMarkers).toggleStyle(.checkbox)
-                    .help("Waypoints, road points, sounds and objects whose model is missing")
+                    .help("Waypoints and their links, roads, sounds and objects whose model is missing")
                 Toggle("Water", isOn: $state.showWater).toggleStyle(.checkbox)
                 Spacer()
                 if editor.mapModelCount > 0 && editor.mapModelsLoaded < editor.mapModelCount {
@@ -1186,57 +1307,84 @@ struct MapScreen: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            Text("Drag to pan, ⌥-drag to turn, scroll or pinch to zoom, click to select. Right-click places, "
-                 + "drag the selected object to move it, [ ] turn it, Delete removes it, ⌘Z undoes")
+            Text("Drag to pan, ⌥-drag to turn, scroll or pinch to zoom, click to select, ⇧-click or ⇧-drag to add. "
+                 + "Right-click places, drag the selection to move it, [ ] turn it, Delete removes it, "
+                 + "⌘C ⌘V ⌘D copy, paste, duplicate, ⌘Z undoes")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.bottom, 4)
         }
-        .inspector(isPresented: Binding(get: { editor.selectedMapObject != nil },
-                                        set: { if !$0 { editor.selectedMapObject = nil } })) {
+        .inspector(isPresented: Binding(get: { !editor.mapSelection.isEmpty },
+                                        set: { if !$0 { editor.send("selection.set\t") } })) {
             MapObjectInspector()
-                .inspectorColumnWidth(min: 260, ideal: 320)
+                .inspectorColumnWidth(min: 280, ideal: 340)
         }
     }
 }
 
-/// What a right click places: object template, owner and angle; undo, redo and save.
+/// The placement tool (object, waypoint, road, bridge) with what it places; undo, redo, save and
+/// the core's note.
 struct PlacementBar: View {
     @Environment(EditorModel.self) private var editor
 
     var body: some View {
-        @Bindable var editor = editor
+        let state = editor.mapEditor
         HStack(spacing: 10) {
-            Text("Place").foregroundStyle(.secondary)
-            Button(editor.placementTemplate ?? "Choose an object…") { editor.choosingTemplate = true }
-                .popover(isPresented: Binding(get: { editor.choosingTemplate },
-                                              set: { if !$0 { editor.choosingTemplate = false; editor.pendingPlacement = nil } }),
-                         arrowEdge: .top) {
-                    TemplatePicker { name in editor.choosePlacementTemplate(name) }
-                }
-                .help("The object a right click on the map places")
-            Picker("Owner", selection: $editor.placementTeam) {
-                ForEach(editor.mapPlayers) { player in
-                    Text(player.label).tag(player.team)
-                }
+            Picker("Place", selection: Binding(get: { state.tool }, set: { editor.chooseTool($0) })) {
+                Text("Object").tag("object")
+                Text("Waypoint").tag("waypoint")
+                Text("Road").tag("road")
+                Text("Bridge").tag("bridge")
             }
-            .frame(maxWidth: 220)
-            .help("Placed objects belong to this player's default team")
-            Stepper(value: $editor.placementAngle, in: -180...180, step: 15) {
-                Text(String(format: "%.0f°", editor.placementAngle)).monospacedDigit().frame(width: 40, alignment: .trailing)
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .accessibilityIdentifier("placement.tool")
+            .help("What a right click on the map places")
+            switch state.tool {
+            case "object":
+                Button(state.templateName.isEmpty ? "Choose an object…" : state.templateName) { editor.send("placement.pick") }
+                    .accessibilityIdentifier("placement.template")
+                    .popover(isPresented: Binding(get: { state.picker },
+                                                  set: { if !$0 && editor.mapEditor.picker { editor.send("placement.cancel") } }),
+                             arrowEdge: .top) {
+                        TemplatePicker { name in editor.send("placement.template\t" + name) }
+                    }
+                Picker("Owner", selection: Binding(get: { state.team }, set: { editor.send("placement.owner\t" + $0) })) {
+                    ForEach(editor.mapPlayers) { player in Text(player.label).tag(player.team) }
+                }
+                .frame(maxWidth: 200)
+                .accessibilityIdentifier("placement.owner")
+                .help("Placed objects belong to this player's default team")
+                Stepper(value: Binding(get: { state.angle }, set: { editor.send("placement.angle\t\($0)") }),
+                        in: -180...180, step: 15) {
+                    Text(String(format: "%.0f°", state.angle)).monospacedDigit().frame(width: 40, alignment: .trailing)
+                }
+                .help("Angle of placed objects")
+            case "road", "bridge":
+                let bridge = state.tool == "bridge"
+                Picker(bridge ? "Bridge" : "Road", selection: Binding(get: { state.roadType }, set: {
+                    editor.send((bridge ? "placement.bridge\t" : "placement.road\t") + $0)
+                })) {
+                    ForEach(editor.roadTypes.filter { $0.bridge == bridge }) { type in Text(type.name).tag(type.name) }
+                }
+                .frame(maxWidth: 260)
+                .accessibilityIdentifier("placement.road")
+                Text(state.roadStart == nil ? "Right-click the start, then the end" : "Right-click the end, Esc cancels")
+                    .font(.caption).foregroundStyle(.secondary)
+            default:
+                Text("Right-click places a waypoint linked from the selected one; right-click a waypoint to link it")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            .help("Angle of placed objects")
             Spacer()
-            Button { editor.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+            Button { editor.send("map.undo") } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(editor.mapEdit.undoCount == 0).help("Undo (⌘Z)")
-            Button { editor.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+            Button { editor.send("map.redo") } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(editor.mapEdit.redoCount == 0).help("Redo (⇧⌘Z)")
-            Button("Save As…") { editor.saveMapAs() }.help("Save the map with its edits (⇧⌘S)")
+            Button("Save As…") { editor.saveMapAs() }.help("Save the map with its edits and preview (⇧⌘S)")
             if editor.mapEdit.edited { Text("Edited").font(.caption).foregroundStyle(.orange) }
-            let note = editor.editNote.isEmpty ? editor.mapEdit.message : editor.editNote
-            if !note.isEmpty {
-                Text(note).font(.caption)
-                    .foregroundStyle(!editor.editNote.isEmpty || note.hasPrefix("error") || note.contains("error:")
-                                     ? .red : .secondary)
-                    .lineLimit(1).truncationMode(.middle).help(note)
+            if !state.note.isEmpty {
+                Text(state.note).font(.caption)
+                    .foregroundStyle(state.noteKind == "error" ? .red : .secondary)
+                    .lineLimit(1).truncationMode(.middle).help(state.note)
+                    .accessibilityIdentifier("placement.note")
             }
         }
         .padding(.horizontal, 10)
@@ -1259,6 +1407,7 @@ struct TemplatePicker: View {
     var body: some View {
         VStack(spacing: 6) {
             TextField("Name or side", text: $search).textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("picker.search")
             List(shown) { item in
                 Button { choose(item.name) } label: {
                     HStack {
@@ -1269,6 +1418,7 @@ struct TemplatePicker: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("picker.item." + item.name)
             }
             .frame(width: 340, height: 420)
         }
@@ -1276,55 +1426,165 @@ struct TemplatePicker: View {
     }
 }
 
-struct MapObjectInspector: View {
-    @Environment(EditorModel.self) private var editor
-    @State private var angleText = ""
+/// A text field that sends its value when Return is pressed and shows the store's value otherwise.
+struct CommitField: View {
+    let title: String
+    let value: String
+    let identifier: String
+    let commit: (String) -> Void
+    @State private var text = ""
 
     var body: some View {
-        if let id = editor.selectedMapObject, let object = editor.mapScene.objects.first(where: { $0.id == id }) {
-            Form {
-                Section(object.templateName) {
-                    LabeledContent("Kind", value: object.kind)
-                    LabeledContent("Position", value: String(format: "%.1f, %.1f, %.1f", object.position.x,
-                                                              object.position.y, object.position.z))
-                    LabeledContent("Angle") {
-                        HStack(spacing: 4) {
-                            TextField("Angle", text: $angleText)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 60)
-                                .onSubmit {
-                                    if let degrees = Float(angleText.replacingOccurrences(of: ",", with: ".")) {
-                                        editor.rotateObject(id, to: degrees * .pi / 180)
-                                    }
-                                }
-                            Text("°")
-                            Stepper("", onIncrement: { editor.rotateSelected(by: 15) },
-                                    onDecrement: { editor.rotateSelected(by: -15) }).labelsHidden()
-                        }
-                    }
-                    .onAppear { angleText = Self.degrees(object.angle) }
-                    .onChange(of: object.angle) { _, angle in angleText = Self.degrees(angle) }
-                    LabeledContent("Owner", value: object.owner.isEmpty ? "—" : object.owner)
-                    if let model = editor.mapModels.first(where: { $0.id == object.modelId }) {
-                        LabeledContent("Model", value: model.ready ? model.name : "\(model.name) (\(model.message))")
-                    }
-                    if object.flags != 0 { LabeledContent("Flags", value: String(format: "0x%X", object.flags)) }
-                    Button("Delete", role: .destructive) { editor.deleteSelected() }
-                }
-                Section("Properties") {
-                    let properties = editor.mapObjectProperties(of: id)
-                    if properties.isEmpty { Text("—").foregroundStyle(.secondary) }
-                    ForEach(properties, id: \.self) { property in
-                        LabeledContent(property.key) {
-                            Text(property.value).textSelection(.enabled).help(property.type)
-                        }
-                    }
-                }
-            }
-            .formStyle(.grouped)
+        TextField(title, text: $text)
+            .multilineTextAlignment(.trailing)
+            .onAppear { text = value }
+            .onChange(of: value) { _, fresh in text = fresh }
+            .onSubmit { commit(text) }
+            .accessibilityIdentifier(identifier)
+    }
+}
+
+/// The selection: one object with every field, or several with what they share. Every change is
+/// a selection.* command; the core applies it to all of them as one undo step.
+struct MapObjectInspector: View {
+    @Environment(EditorModel.self) private var editor
+
+    var body: some View {
+        let objects = editor.mapSelection.compactMap { id in editor.mapScene.objects.first { $0.id == id } }
+        if let first = objects.first {
+            SelectionForm(objects: objects, properties: editor.mapObjectProperties(of: first.id),
+                          others: objects.dropFirst().map { editor.mapObjectProperties(of: $0.id) })
         } else {
             Text("No object selected").foregroundStyle(.secondary)
         }
+    }
+}
+
+/// The inspector's form for the selected objects (the first one's properties, and the others').
+private struct SelectionForm: View {
+    @Environment(EditorModel.self) private var editor
+    let objects: [MapObjectItem]
+    let properties: [MapObjectProperty]
+    let others: [[MapObjectProperty]]
+    @State private var newKey = ""
+    @State private var newType = "string"
+    @State private var newValue = ""
+
+    private static let flags: [(String, String)] = [
+        ("objectEnabled", "Enabled"), ("objectIndestructible", "Indestructible"), ("objectUnsellable", "Unsellable"),
+        ("objectPowered", "Powered"), ("objectTargetable", "Targetable"), ("objectRecruitableAI", "Recruitable by AI"),
+    ]
+
+    /// A property every selected object has with the same value.
+    private func shared(_ key: String) -> MapObjectProperty? {
+        guard let mine = properties.first(where: { $0.key == key }) else { return nil }
+        return others.allSatisfy({ $0.contains(mine) }) ? mine : nil
+    }
+
+    private func set(_ key: String, _ type: String, _ value: String) {
+        editor.send("selection.property\t\(key)\t\(type)\t\(value)")
+    }
+
+    var body: some View {
+        let first = objects[0]
+        let single = objects.count == 1
+        Form {
+            Section(single ? first.templateName : "\(objects.count) objects") {
+                if single {
+                    LabeledContent("Kind", value: first.kind)
+                    LabeledContent("Position", value: String(format: "%.1f, %.1f (ground + %.1f)", first.position.x,
+                                                              first.position.y, first.height))
+                    if let model = editor.mapModels.first(where: { $0.id == first.modelId }) {
+                        LabeledContent("Model", value: model.ready ? model.name : "\(model.name) (\(model.message))")
+                    }
+                    if first.flags != 0 { LabeledContent("Flags", value: String(format: "0x%X", first.flags)) }
+                }
+                LabeledContent("Angle") {
+                    HStack(spacing: 4) {
+                        CommitField(title: "Angle", value: objects.allSatisfy { $0.angle == first.angle }
+                                    ? Self.degrees(first.angle) : "", identifier: "inspector.angle") {
+                            editor.send("selection.angle\t" + $0.replacingOccurrences(of: ",", with: "."))
+                        }
+                        .frame(width: 60)
+                        Text("°")
+                        Stepper("", onIncrement: { editor.send("edit.rotate\t15") },
+                                onDecrement: { editor.send("edit.rotate\t-15") }).labelsHidden()
+                    }
+                }
+                LabeledContent("Height") {
+                    CommitField(title: "Height", value: objects.allSatisfy { $0.height == first.height }
+                                ? String(format: "%.1f", first.height) : "", identifier: "inspector.height") {
+                        editor.send("selection.height\t" + $0.replacingOccurrences(of: ",", with: "."))
+                    }
+                    .frame(width: 80)
+                }
+                Picker("Owner", selection: Binding(get: { objects.allSatisfy { $0.owner == first.owner } ? first.owner : "" },
+                                                   set: { editor.send("selection.owner\t" + $0) })) {
+                    if !objects.allSatisfy({ $0.owner == first.owner }) { Text("Several").tag("") }
+                    ForEach(editor.mapPlayers) { player in Text(player.label).tag(player.team) }
+                    if !first.owner.isEmpty && !editor.mapPlayers.contains(where: { $0.team == first.owner }) {
+                        Text(first.owner).tag(first.owner)
+                    }
+                }
+                .accessibilityIdentifier("inspector.owner")
+                LabeledContent("Name") {
+                    CommitField(title: "Name", value: shared("objectName")?.value ?? "", identifier: "inspector.name") {
+                        set("objectName", shared("objectName")?.type == "unicode" ? "unicode" : "string", $0)
+                    }
+                }
+                LabeledContent("Script") {
+                    CommitField(title: "Script", value: shared("objectScriptAttachment")?.value ?? "",
+                                identifier: "inspector.script") { set("objectScriptAttachment", "string", $0) }
+                }
+                LabeledContent("Health %") {
+                    CommitField(title: "Health", value: shared("objectInitialHealth")?.value ?? "",
+                                identifier: "inspector.health") { set("objectInitialHealth", "int", $0) }
+                    .frame(width: 60)
+                }
+                ForEach(Self.flags, id: \.0) { key, label in
+                    Toggle(label, isOn: Binding(get: { shared(key)?.value == "true" },
+                                                set: { set(key, "bool", $0 ? "true" : "false") }))
+                }
+                HStack {
+                    if objects.count == 2 && objects.allSatisfy({ $0.kind == "waypoint" }) {
+                        Button("Link Waypoints") { editor.send("waypoint.link") }
+                    }
+                    Button("Delete", role: .destructive) { editor.send("edit.delete") }
+                }
+            }
+            Section(single ? "Properties" : "Properties of \(first.templateName)") {
+                ForEach(properties, id: \.self) { property in
+                    LabeledContent(property.key) {
+                        HStack(spacing: 4) {
+                            CommitField(title: property.type, value: property.value,
+                                        identifier: "inspector.property." + property.key) {
+                                set(property.key, property.type, $0)
+                            }
+                            .help(property.type)
+                            Button { editor.send("selection.unset\t" + property.key) } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless).help("Remove \(property.key)")
+                        }
+                    }
+                }
+                HStack(spacing: 4) {
+                    TextField("key", text: $newKey).frame(width: 110)
+                    Picker("", selection: $newType) {
+                        ForEach(["string", "int", "real", "bool", "unicode"], id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden().frame(width: 80)
+                    TextField("value", text: $newValue)
+                    Button("Add") {
+                        set(newKey, newType, newValue)
+                        newKey = ""
+                        newValue = ""
+                    }
+                    .disabled(newKey.isEmpty)
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 
     private static func degrees(_ radians: Float) -> String { String(format: "%.1f", radians * 180 / .pi) }
@@ -1348,6 +1608,7 @@ struct MapBrowser: View {
                     Text(item.source).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
                 .tag(item.id)
+                .accessibilityIdentifier("maps.item." + item.name)
             }
             .searchable(text: $search, placement: .sidebar, prompt: "Map name")
             .navigationSplitViewColumnWidth(min: 200, ideal: 260)
