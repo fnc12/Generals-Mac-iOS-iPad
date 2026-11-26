@@ -7,12 +7,22 @@
 // --all-models opens the model of every object and prints a summary of what failed.
 // --map opens one map (a path from the maps table or a .map file) and waits for its models.
 // --all-maps opens every listed map (without models) and counts errors and warnings.
+// --roundtrip-maps <folder> opens every listed map, saves it unchanged into the folder (map.save)
+//                  and compares the file with the unpacked original, byte for byte.
+// --edit-maps <folder> opens every listed map, moves, turns, deletes and places objects (with an
+//                  undo and a redo), saves, opens the saved file and checks what it holds.
 #include "end_editor/editor_core_c.h"
+
+#include "compression.h"
+#include "game_files.h"
 
 #include <sqlite3.h>
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -60,7 +70,7 @@ namespace {
 int main(int argc, char **argv) {
     std::string gameDir, baseDir, dbArg, modelName, objectName, animation;
     bool allModels = false, allMaps = false;
-    std::string mapPath;
+    std::string mapPath, roundTripDir, editDir;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -80,6 +90,10 @@ int main(int argc, char **argv) {
             mapPath = next();
         } else if(arg == "--all-maps") {
             allMaps = true;
+        } else if(arg == "--roundtrip-maps") {
+            roundTripDir = next();
+        } else if(arg == "--edit-maps") {
+            editDir = next();
         } else {
             gameDir = arg;
         }
@@ -228,6 +242,115 @@ int main(int argc, char **argv) {
         for(const auto &item: failed) {
             std::printf("   failed: %s\n", item.c_str());
         }
+    }
+    if(!roundTripDir.empty()) {
+        // The original bytes, read like the core reads them.
+        end_editor::GameFiles files;
+        std::vector<std::string> warnings;
+        std::string error;
+        std::vector<std::filesystem::path> folders{gameDir};
+        if(!baseDir.empty()) {
+            folders.emplace_back(baseDir);
+        }
+        files.mount(folders, warnings, error);
+        std::filesystem::create_directories(roundTripDir);
+        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        int identical = 0;
+        for(const auto &path: paths) {
+            std::string packed, original;
+            if(!files.read(path, packed) || !end_editor::decompressGameData(packed, original, error)) {
+                std::printf("   %s: cannot read the original\n", path.c_str());
+                continue;
+            }
+            const auto out = (std::filesystem::path(roundTripDir) / "roundtrip.map").string();
+            send("map.open\t" + path);
+            send("map.save\t" + out);
+            while(column("SELECT saved_path FROM map").front() != out && end_editor_pending_work() > 0 &&
+                  column("SELECT edit_message FROM map").front().rfind("error", 0) != 0) {
+                end_editor_update();
+            }
+            std::ifstream file(out, std::ios::binary);
+            const std::string saved((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            if(saved == original) {
+                ++identical;
+                continue;
+            }
+            std::size_t at = 0;
+            while(at < saved.size() && at < original.size() && saved[at] == original[at]) {
+                ++at;
+            }
+            std::printf("   %s: differs at byte %zu (saved %zu bytes, original %zu): %s\n", path.c_str(), at,
+                        saved.size(), original.size(), column("SELECT edit_message FROM map").front().c_str());
+        }
+        std::printf("-- round trip: %d of %zu maps saved byte for byte as they were\n", identical, paths.size());
+    }
+
+    if(!editDir.empty()) {
+        std::filesystem::create_directories(editDir);
+        const auto out = (std::filesystem::path(editDir) / "edited.map").string();
+        const auto placed = column("SELECT name FROM objects WHERE model <> '' AND kind_of LIKE '%VEHICLE%' "
+                                   "ORDER BY name LIMIT 1");
+        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        int good = 0;
+        const auto number = [&](const std::string &sql) {
+            const auto values = column(sql.c_str());
+            return values.empty() ? 0.0 : std::stod(values.front());
+        };
+        const auto wait = [&]() {
+            while(end_editor_pending_work() > 0 && column("SELECT saved_path FROM map").front() != out &&
+                  column("SELECT edit_message FROM map").front().rfind("error", 0) != 0) {
+                end_editor_update();
+            }
+        };
+        for(const auto &path: paths) {
+            send("map.open\t" + path);
+            const int before = int(number("SELECT COUNT(*) FROM map_objects"));
+            if(before < 3 || placed.empty()) {
+                ++good;  // nothing to edit
+                continue;
+            }
+            const auto team = column("SELECT team FROM map_players ORDER BY neutral DESC, id LIMIT 1");
+            // Object 1 moves by (10, 20), object 2 turns to 1 radian, object 3 goes; one object
+            // is placed in the middle of the map, a second one is placed, undone and redone, a
+            // third is placed and undone.
+            const double x1 = number("SELECT x FROM map_objects WHERE id = 1") + 10;
+            const double y1 = number("SELECT y FROM map_objects WHERE id = 1") + 20;
+            const double cx = number("SELECT (playable_x0 + playable_x1) / 2 FROM map");
+            const double cy = number("SELECT (playable_y0 + playable_y1) / 2 FROM map");
+            const auto at = [](double v) { return std::to_string(v); };
+            const std::string owner = team.empty() ? "" : team.front();
+            for(const auto &command: std::vector<std::string>{
+                    "map.move\t1\t" + at(x1) + "\t" + at(y1), "map.rotate\t2\t1", "map.delete\t3",
+                    "map.place\t" + placed.front() + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
+                    "map.place\t" + placed.front() + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
+                    "map.undo", "map.redo",
+                    "map.place\t" + placed.front() + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
+                    "map.undo", "map.save\t" + out}) {
+                end_editor_send(command.c_str());
+            }
+            wait();
+            const auto saveMessage = column("SELECT edit_message FROM map").front();
+            send("map.open\t" + out);
+            const int after = int(number("SELECT COUNT(*) FROM map_objects"));
+            const auto near = [&](double x, double y) {
+                return "SELECT COUNT(*) FROM map_objects WHERE template_name = '" + placed.front() + "' AND abs(x - " +
+                       at(x) + ") < 0.01 AND abs(y - " + at(y) + ") < 0.01";
+            };
+            const bool ok = after == before + 1 && number(near(cx, cy)) == 1 && number(near(cx + 50, cy)) == 1 &&
+                            number(near(cx + 100, cy)) == 0 &&
+                            number("SELECT COUNT(*) FROM map_objects WHERE abs(x - " + at(x1) + ") < 0.01 AND abs(y - " +
+                                   at(y1) + ") < 0.01") >= 1 &&
+                            number("SELECT COUNT(*) FROM map_objects WHERE abs(angle - 1) < 0.0001") >= 1 &&
+                            number("SELECT COUNT(*) FROM map_object_properties p JOIN map_objects o ON o.id = "
+                                   "p.object_id WHERE p.key = 'originalOwner' AND p.value = '" + owner +
+                                   "' AND o.template_name = '" + placed.front() + "'") >= 2;
+            good += ok;
+            if(!ok) {
+                std::printf("   %s: %d objects before, %d after (%s)\n", path.c_str(), before, after, saveMessage.c_str());
+            }
+        }
+        std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n", good, paths.size(),
+                    placed.empty() ? "nothing" : placed.front().c_str());
     }
     sqlite3_close(db);
     end_editor_shutdown();
