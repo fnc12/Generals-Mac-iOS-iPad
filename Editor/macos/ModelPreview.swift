@@ -4,6 +4,7 @@
 import AppKit
 import MetalKit
 import SwiftUI
+import UniformTypeIdentifiers
 import simd
 
 struct PreviewPart {
@@ -287,8 +288,21 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
         commands.commit()
     }
 
-    /// Renders one frame into an image without a window (for `--snapshot`).
-    func renderImage(width: Int, height: Int, frame: Int) -> CGImage? {
+    /// Renders one frame into an image without a window (for `--snapshot` and GIF export).
+    /// `supersample` > 1 draws at that many times the size and scales down, smoothing the edges.
+    func renderImage(width: Int, height: Int, frame: Int, supersample: Int = 1) -> CGImage? {
+        guard supersample > 1 else { return renderTexture(width: width, height: height, frame: frame) }
+        guard let large = renderTexture(width: width * supersample, height: height * supersample, frame: frame),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(large, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
+    private func renderTexture(width: Int, height: Int, frame: Int) -> CGImage? {
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
         colorDescriptor.usage = [.renderTarget, .shaderRead]
@@ -457,6 +471,8 @@ struct MetalPreview: NSViewRepresentable {
 struct ModelPreviewPanel: View {
     @EnvironmentObject var editor: EditorModel
     @StateObject private var playback = PreviewPlayback()
+    @State private var exporting = false
+    @State private var exportMessage = ""
 
     var body: some View {
         let preview = editor.preview
@@ -493,6 +509,20 @@ struct ModelPreviewPanel: View {
                     Image(systemName: playback.playing ? "pause.fill" : "play.fill")
                 }
                 .disabled(preview.frameCount <= 1)
+                Menu {
+                    ForEach(GifFormat.allCases) { format in
+                        Button(format.title) { exportGif(preview, format: format) }
+                    }
+                } label: {
+                    Label("Export GIF", systemImage: "square.and.arrow.up")
+                }
+                .fixedSize()
+                .help("One cycle of the selected animation, from the current view")
+                .disabled(preview.frameCount <= 1 || exporting)
+                if exporting { ProgressView().controlSize(.small) }
+            }
+            if !exportMessage.isEmpty {
+                Text(exportMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             HStack {
                 Toggle("Hidden parts", isOn: $playback.showHidden).toggleStyle(.checkbox)
@@ -500,6 +530,31 @@ struct ModelPreviewPanel: View {
                 Text(editor.modelMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Text("Drag to turn, scroll to zoom").font(.caption2).foregroundStyle(.tertiary)
+        }
+        .onChange(of: preview.animation) { exportMessage = "" }
+    }
+
+    private func exportGif(_ model: PreviewModel, format: GifFormat) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.gif]
+        panel.nameFieldStringValue = GifExport.suggestedName(object: model.name, animation: model.animation)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let camera = playback.exportCamera()
+        exporting = true
+        exportMessage = "Exporting \(model.frameCount) frames…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try GifExport.write(model, camera: camera, format: format, to: url) }
+            DispatchQueue.main.async {
+                exporting = false
+                switch result {
+                case .success:
+                    let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    exportMessage = "Saved \(url.lastPathComponent), "
+                        + ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+                case .failure(let error):
+                    exportMessage = "GIF export failed: \(error)"
+                }
+            }
         }
     }
 }

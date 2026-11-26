@@ -39,6 +39,8 @@ Hour folder ("Generals" or Steam's "Command and Conquer Generals") or chosen in 
 
 `END Editor --snapshot <zh> <base> <model> <animation|-> <frame> <out.png>` renders one frame
 without a window (checks on a machine nobody is watching).
+`END Editor --gif <zh> <base> <model> <animation> <square|wide> <out.gif>` writes the same GIF
+as the preview's "Export GIF" button, from the default camera.
 
 ## What works (step 1)
 
@@ -56,6 +58,8 @@ without a window (checks on a machine nobody is watching).
   color ("ZHC" textures, "HOUSECOLOR" meshes), muzzle flashes and `HideSubObject` parts hidden
   while idle (a checkbox shows them).
 - 997 of 1020 object models load; the others have no file or no meshes in the game either.
+- "Export GIF": one cycle of the selected animation (every frame, real timing, looping) from
+  the current camera, square 800×800 or 16:9 1280×720, drawn at 2× and scaled down.
 
 Not yet: condition states (damaged models, the INI's animation per state), the INI's texture
 replacements, particle effects, LODs other than the most detailed one.
