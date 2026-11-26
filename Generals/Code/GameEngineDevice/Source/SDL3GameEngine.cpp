@@ -58,11 +58,26 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 // Extern globals for input devices (set by GameClient)
 extern Mouse *TheMouse;
 extern Keyboard *TheKeyboard;
 extern GameWindowManager *TheWindowManager;
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#include "SDL3Device/Common/IOSApp.h"
+
+namespace {
+// Touch gestures arrive as synthesized mouse events through the same path real mice use.
+void sendToGameMouse(SDL_Event *event, void *context)
+{
+	static_cast<SDL3Mouse *>(context)->addSDLEvent(event);
+}
+} // anonymous namespace
+#endif // TARGET_OS_IPHONE
 
 namespace {
 
@@ -189,6 +204,12 @@ void SDL3GameEngine::init(void)
 	m_IsInitialized = true;
 	m_IsActive = true;
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	// Lifecycle events can fire outside the poll cycle on iOS; catch them
+	// immediately so rendering halts before the process is suspended.
+	IOSApp::installLifecycleWatcher();
+#endif
+
 	fprintf(stderr, "INFO: SDL3GameEngine using pre-initialized window\n");
 
 	// Call parent init to initialize game subsystems
@@ -215,6 +236,16 @@ void SDL3GameEngine::reset(void)
 void SDL3GameEngine::update(void)
 {
 	pollSDL3Events();
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	// Pause sim + render while backgrounded OR inactive (see IOSApp.cpp).
+	// Acquiring a Metal drawable in these windows fights iOS for the layer and,
+	// across repeated suspend/switcher cycles, crashes MoltenVK. Keep polling so
+	// we still catch the resume events; just don't touch the GPU.
+	if (IOSApp::shouldPauseRendering()) {
+		SDL_Delay(50);
+		return;
+	}
+#endif
 	GameEngine::update();
 }
 
@@ -338,6 +369,20 @@ void SDL3GameEngine::pollSDL3Events(void)
 				}
 				break;
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+			case SDL_EVENT_FINGER_DOWN:
+			case SDL_EVENT_FINGER_MOTION:
+			case SDL_EVENT_FINGER_UP:
+			case SDL_EVENT_FINGER_CANCELED:
+				if (TheMouse && m_SDLWindow) {
+					SDL3Mouse* mouse = dynamic_cast<SDL3Mouse*>(TheMouse);
+					if (mouse) {
+						IOSApp::handleTouchEvent(m_SDLWindow, event, sendToGameMouse, mouse);
+					}
+				}
+				break;
+#endif
+
 			case SDL_EVENT_WINDOW_RESIZED:
 				handleWindowEvent(event.window);
 				break;
@@ -349,6 +394,16 @@ void SDL3GameEngine::pollSDL3Events(void)
 
 		updateTextInputState();
 	}
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	// Poll the long-press timer every frame; a stationary finger emits no events.
+	if (TheMouse && m_SDLWindow) {
+		SDL3Mouse* touchMouse = dynamic_cast<SDL3Mouse*>(TheMouse);
+		if (touchMouse) {
+			IOSApp::updateTouch(m_SDLWindow, sendToGameMouse, touchMouse);
+		}
+	}
+#endif
 }
 
 // GeneralsX @bugfix felipebraz 01/04/2026 Enable SDL text input only while an entry gadget owns focus.

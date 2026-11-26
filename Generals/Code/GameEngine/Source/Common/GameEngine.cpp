@@ -1187,7 +1187,11 @@ void updateTGAtoDDS()
 
 	fp->close();
 
+	// GeneralsX @build fnc12 26/11/2026 Same as Zero Hour: the nvdxt batch is Windows-only,
+	// and iOS has no system() at all.
+#ifdef _WIN32
 	system(CONVERT_EXEC1);
+#endif
 }
 
 // If we're using the Wide character version of MessageBox, then there's no additional

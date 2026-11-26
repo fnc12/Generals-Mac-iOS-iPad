@@ -31,6 +31,15 @@
 // SYSTEM INCLUDES
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+// On iOS, SDL renames main() to SDL_main and provides its own UIApplicationMain
+// bootstrap; the app lifecycle (suspend/resume, window) is owned by SDL.
+#include <SDL3/SDL_main.h>
+#include "SDL3Device/Common/IOSApp.h"
+#endif
 #include <cstdlib>
 #include <cctype>
 #include <cstring>
@@ -240,6 +249,10 @@ int main(int argc, char* argv[])
 	__argc = argc;
 	__argv = argv;
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	IOSApp::prepareProcess(argc, argv, IOSApp::Game{ "Generals", "GeneralsX", nullptr });
+#endif
+
 	fprintf(stderr, "=================================================\n");
 	fprintf(stderr, " Command & Conquer Generals (Linux)\n");
 	fprintf(stderr, " SDL3 + DXVK Build\n");
@@ -277,6 +290,9 @@ int main(int argc, char* argv[])
 			// This prevents LLVM SIGSEGV crash during Vulkan driver enumeration
 			// Must be done here, not in SDL3GameEngine::init() which is too late
 			fprintf(stderr, "INFO: Initializing SDL3 video subsystem...\n");
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+			IOSApp::setSDLHints();
+#endif
 			if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
 				fprintf(stderr, "FATAL: Failed to initialize SDL3: %s\n", SDL_GetError());
 				return 1;
@@ -342,6 +358,10 @@ int main(int argc, char* argv[])
 			// Store window handle globally (cast SDL_Window* to HWND for compatibility)
 			ApplicationHWnd = (HWND)TheSDL3Window;
 			fprintf(stderr, "INFO: SDL3 window created successfully\n");
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+			IOSApp::appendScreenResolution(TheSDL3Window, __argc, __argv);
+#endif
 		}
 
 		// Call cross-platform game entry point
