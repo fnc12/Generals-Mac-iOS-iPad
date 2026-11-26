@@ -54,6 +54,7 @@ add_library(end_editor_core STATIC
     src/map_file.cpp
     src/terrain_ini.cpp
     src/map_scene.cpp
+    src/map_document.cpp
     src/editor_core.cpp
     src/editor_core_c.cpp
 )
@@ -81,6 +82,8 @@ set_target_properties(end_editor_core PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAK
 if(END_EDITOR_BUILD_CLI)
     add_executable(end-editor-cli cli/main.cpp)
     target_link_libraries(end-editor-cli PRIVATE end_editor_core)
+    # The round-trip check reads the original map bytes with the core's own file and unpacking code.
+    target_include_directories(end-editor-cli PRIVATE src)
 endif()
 
 if(END_EDITOR_BUILD_TESTS)
@@ -92,7 +95,7 @@ if(END_EDITOR_BUILD_TESTS)
         FIND_PACKAGE_ARGS 3 CONFIG)
     FetchContent_MakeAvailable(Catch2)
     add_executable(end_editor_tests tests/big_archive_tests.cpp tests/ini_objects_tests.cpp tests/editor_core_tests.cpp
-        tests/model_tests.cpp tests/map_tests.cpp)
+        tests/model_tests.cpp tests/map_tests.cpp tests/map_edit_tests.cpp)
     target_include_directories(end_editor_tests PRIVATE src)
     target_include_directories(end_editor_tests BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
     target_link_libraries(end_editor_tests PRIVATE end_editor_core Catch2::Catch2WithMain)

@@ -317,6 +317,12 @@ TEST_CASE("EditorCore lists and opens maps") {
     CHECK(objects[1].modelId == 0);
     CHECK(reader.get<MapModelRow>(1).state == "pending");
 
+    // An edit runs in the next update, before the models still to load.
+    REQUIRE(core.send("map.move\t1\t16\t6").empty());
+    core.update();
+    CHECK(reader.get<MapObjectRow>(1).x == 16);
+    CHECK(reader.get<MapModelRow>(1).state == "pending");
+
     // Models come in the next updates.
     REQUIRE(core.hasPendingWork());
     while(core.hasPendingWork()) {

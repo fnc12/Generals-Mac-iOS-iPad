@@ -41,9 +41,10 @@ namespace end_editor {
         struct Chunk {
             std::string name;
             std::uint16_t version = 0;
-            std::size_t start = 0;  // first data byte
+            std::size_t start = 0;  // first data byte (the 10-byte header is just before it)
             std::size_t end = 0;    // one past the last data byte
         };
+        static constexpr std::size_t headerBytes = 10;  // name id, version, size
 
         // Opens the next chunk inside the current one (or at the top level). Returns false at the end.
         bool openChunk(Chunk &chunk);
@@ -68,12 +69,20 @@ namespace end_editor {
         Dict readDict();
 
         const std::string &nameOf(std::uint32_t id) const;
+        // The table of contents (name id -> name) and where it ends (the first chunk header).
+        const std::map<std::uint32_t, std::string> &nameTable() const {
+            return this->names;
+        }
+        std::size_t tableEnd() const {
+            return this->tocEnd;
+        }
 
       private:
         void need(std::size_t count) const;
 
         std::string_view data;
         std::size_t position = 0;
+        std::size_t tocEnd = 0;
         std::map<std::uint32_t, std::string> names;
         std::vector<Chunk> open;
     };

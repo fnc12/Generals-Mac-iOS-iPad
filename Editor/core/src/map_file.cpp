@@ -170,6 +170,8 @@ namespace end_editor {
         void parseObjects(DataChunkReader &file, MapFile &map) {
             DataChunkReader::Chunk child;
             while(file.openChunk(child)) {
+                map.objectChunks.push_back(
+                    MapChunkSpan{child.name, child.version, child.start - DataChunkReader::headerBytes, child.end});
                 if(child.name == "Object") {
                     MapObject object;
                     object.x = file.readReal();
@@ -184,8 +186,8 @@ namespace end_editor {
                     if(child.version >= 2) {
                         object.properties = file.readDict();
                     }
-                    // The engine drops objects far above or below the terrain.
-                    if(object.z >= -100 * mapXYFactor && object.z <= 255 * 10 * mapHeightScale) {
+                    object.chunk = map.objectChunks.size() - 1;
+                    if(isPlausibleObjectHeight(object.z)) {
                         map.objects.push_back(std::move(object));
                     }
                 }
@@ -304,9 +306,13 @@ namespace end_editor {
         }
         try {
             DataChunkReader file(data);
+            map.tableEnd = file.tableEnd();
+            map.names = file.nameTable();
             DataChunkReader::Chunk chunk;
             while(file.openChunk(chunk)) {
                 map.chunkNames.push_back(chunk.name);
+                map.chunks.push_back(
+                    MapChunkSpan{chunk.name, chunk.version, chunk.start - DataChunkReader::headerBytes, chunk.end});
                 const auto depth = file.depth();
                 try {
                     if(chunk.name == "HeightMapData") {
@@ -317,7 +323,8 @@ namespace end_editor {
                         map.worldInfo = file.readDict();
                     } else if(chunk.name == "SidesList") {
                         parseSides(file, chunk, map);
-                    } else if(chunk.name == "ObjectsList") {
+                    } else if(chunk.name == "ObjectsList" && map.objectsVersion == 0) {
+                        map.objectsVersion = std::max<std::uint16_t>(chunk.version, 1);
                         parseObjects(file, map);
                     } else if(chunk.name == "PolygonTriggers") {
                         parsePolygons(file, chunk, map);
@@ -351,10 +358,16 @@ namespace end_editor {
             error = "the map has no height map";
             return false;
         }
+        map.data = std::move(data);
         if(!map.hasTiles) {
             map.warnings.push_back("no terrain tiles (BlendTileData)");
         }
         return true;
+    }
+
+    bool isPlausibleObjectHeight(float z) {
+        // The engine drops objects far above or below the terrain.
+        return z >= -100 * mapXYFactor && z <= 255 * 10 * mapHeightScale;
     }
 
     float groundHeight(const MapFile &map, float x, float y) {

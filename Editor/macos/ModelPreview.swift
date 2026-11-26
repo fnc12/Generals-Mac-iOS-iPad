@@ -469,7 +469,7 @@ struct MetalPreview: NSViewRepresentable {
 
 /// The preview with its controls, for the detail pane.
 struct ModelPreviewPanel: View {
-    @EnvironmentObject var editor: EditorModel
+    @Environment(EditorModel.self) private var editor
     @StateObject private var playback = PreviewPlayback()
     @State private var exporting = false
     @State private var exportMessage = ""

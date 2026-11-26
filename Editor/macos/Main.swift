@@ -2,6 +2,7 @@
 // Commands go to the core through end_editor_send(); everything the UI shows is read from the
 // core's SQLite store with the client's own read-only connection.
 import AppKit
+import Observation
 import SQLite3
 import SwiftUI
 
@@ -27,6 +28,7 @@ struct CoreStatus: Equatable {
     var gameDir = ""
     var objectCount: Int64 = 0
     var revision: Int64 = -1
+    var mapListRevision: Int64 = 0
 }
 
 /// Read side of the core's store.
@@ -53,9 +55,10 @@ final class StoreReader {
 
     func status() -> CoreStatus? {
         var result: CoreStatus?
-        rows("SELECT state, message, game_dir, object_count, revision FROM status WHERE id = 1") { s in
+        rows("SELECT state, message, game_dir, object_count, revision, map_list_revision FROM status WHERE id = 1") { s in
             result = CoreStatus(state: Self.text(s, 0), message: Self.text(s, 1), gameDir: Self.text(s, 2),
-                                objectCount: sqlite3_column_int64(s, 3), revision: sqlite3_column_int64(s, 4))
+                                objectCount: sqlite3_column_int64(s, 3), revision: sqlite3_column_int64(s, 4),
+                                mapListRevision: sqlite3_column_int64(s, 5))
         }
         return result
     }
@@ -161,14 +164,35 @@ final class StoreReader {
         var path = "", name = "", state = "", message = ""
         var revision: Int64 = -1, modelRevision: Int64 = -1
         var modelsLoaded = 0, modelCount = 0
+        var edit = MapEditState()
     }
 
     func mapHeader() -> MapHeader? {
         var result: MapHeader?
-        rows("SELECT path, name, state, message, revision, model_revision, models_loaded, model_count FROM map WHERE id = 1") { s in
+        rows("""
+            SELECT path, name, state, message, revision, model_revision, models_loaded, model_count,
+                   object_revision, undo_count, redo_count, edited, last_object, edit_message, saved_path
+            FROM map WHERE id = 1
+            """) { s in
             result = MapHeader(path: Self.text(s, 0), name: Self.text(s, 1), state: Self.text(s, 2), message: Self.text(s, 3),
                                revision: sqlite3_column_int64(s, 4), modelRevision: sqlite3_column_int64(s, 5),
-                               modelsLoaded: Int(sqlite3_column_int(s, 6)), modelCount: Int(sqlite3_column_int(s, 7)))
+                               modelsLoaded: Int(sqlite3_column_int(s, 6)), modelCount: Int(sqlite3_column_int(s, 7)),
+                               edit: MapEditState(objectRevision: sqlite3_column_int64(s, 8),
+                                                  undoCount: Int(sqlite3_column_int(s, 9)),
+                                                  redoCount: Int(sqlite3_column_int(s, 10)),
+                                                  edited: sqlite3_column_int(s, 11) != 0,
+                                                  lastObject: sqlite3_column_int64(s, 12),
+                                                  message: Self.text(s, 13), savedPath: Self.text(s, 14)))
+        }
+        return result
+    }
+
+    func mapPlayers() -> [MapPlayer] {
+        var result: [MapPlayer] = []
+        rows("SELECT name, display_name, team, color, neutral FROM map_players ORDER BY neutral DESC, id") { s in
+            result.append(MapPlayer(name: Self.text(s, 0), displayName: Self.text(s, 1), team: Self.text(s, 2),
+                                    color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 3)),
+                                    neutral: sqlite3_column_int(s, 4) != 0))
         }
         return result
     }
@@ -212,15 +236,21 @@ final class StoreReader {
         rows("SELECT vertices, indices FROM map_water ORDER BY id") { s in
             scene.water.append((Self.blob(s, 0), Self.blob(s, 1)))
         }
+        scene.objects = mapObjects()
+        return scene
+    }
+
+    func mapObjects() -> [MapObjectItem] {
+        var objects: [MapObjectItem] = []
         rows("SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color FROM map_objects ORDER BY id") { s in
-            scene.objects.append(MapObjectItem(
+            objects.append(MapObjectItem(
                 id: sqlite3_column_int64(s, 0), templateName: Self.text(s, 1), kind: Self.text(s, 2),
                 position: SIMD3(Float(sqlite3_column_double(s, 3)), Float(sqlite3_column_double(s, 4)),
                                 Float(sqlite3_column_double(s, 5))),
                 angle: Float(sqlite3_column_double(s, 6)), flags: Int(sqlite3_column_int(s, 7)),
                 modelId: sqlite3_column_int64(s, 8), owner: Self.text(s, 9), color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 10))))
         }
-        return scene
+        return objects
     }
 
     /// Models loaded since `afterId` (ready or failed, not pending), with their parts.
@@ -282,36 +312,46 @@ final class StoreReader {
     }
 }
 
+/// The client's view of the store. @Observable: a view is updated only when a property it read
+/// changes, so new map models do not re-render the object table and the reverse.
 @MainActor
-final class EditorModel: ObservableObject {
-    @Published var status = CoreStatus()
-    @Published var objects: [ObjectItem] = []
-    @Published var warnings: [String] = []
-    @Published var coreError: String?
-    @Published var preview = PreviewModel()
-    @Published var animations: [String] = []
-    @Published var modelState = "idle"
-    @Published var modelMessage = ""
-    private var modelRevision: Int64 = -1
-    private var modelName = ""
-    private var geometryRequested = false
+@Observable
+final class EditorModel {
+    var status = CoreStatus()
+    var objects: [ObjectItem] = []
+    var warnings: [String] = []
+    var coreError: String?
+    var preview = PreviewModel()
+    var animations: [String] = []
+    var modelState = "idle"
+    var modelMessage = ""
+    @ObservationIgnored private var modelRevision: Int64 = -1
+    @ObservationIgnored private var modelName = ""
+    @ObservationIgnored private var geometryRequested = false
 
-    @Published var maps: [MapListItem] = []
-    @Published var mapScene = MapScene()
-    @Published var mapModels: [MapModelData] = []
-    @Published var mapModelTextures: [String: PreviewTexture] = [:]
-    @Published var mapState = "idle"
-    @Published var mapMessage = ""
-    @Published var mapWarnings: [String] = []
-    @Published var mapModelsLoaded = 0
-    @Published var mapModelCount = 0
-    @Published var selectedMapObject: Int64?
-    private var mapRevision: Int64 = -1
-    private var mapModelRevision: Int64 = -1
-    private var lastMapTexture: Int64 = 0
+    var maps: [MapListItem] = []
+    var mapScene = MapScene()
+    var mapModels: [MapModelData] = []
+    var mapModelTextures: [String: PreviewTexture] = [:]
+    var mapState = "idle"
+    var mapMessage = ""
+    var mapWarnings: [String] = []
+    var mapModelsLoaded = 0
+    var mapModelCount = 0
+    var selectedMapObject: Int64?
+    var mapEdit = MapEditState()
+    var mapPlayers: [MapPlayer] = []
+    /// What a right click on the map places: an object template, owned by a team of map_players,
+    /// turned by `placementAngle` degrees.
+    var placementTemplate: String?
+    var placementTeam = ""
+    var placementAngle: Double = 0
+    @ObservationIgnored private var mapRevision: Int64 = -1
+    @ObservationIgnored private var mapModelRevision: Int64 = -1
+    @ObservationIgnored private var lastMapTexture: Int64 = 0
 
-    private var reader: StoreReader?
-    private var timer: Timer?
+    @ObservationIgnored private var reader: StoreReader?
+    @ObservationIgnored private var timer: Timer?
     private static let lastGameDirKey = "lastGameDir"
     private static let baseGameDirKey = "baseGameDir"
 
@@ -334,6 +374,8 @@ final class EditorModel: ObservableObject {
             let guess = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("GeneralsX/GeneralsZH").path
             if FileManager.default.fileExists(atPath: guess) { openGame(at: guess) }
         }
+        PerfHarness.run(self)
+        UICheck.run(self)
     }
 
     /// The base Generals folder: most models and textures live in its archives. Chosen by the
@@ -352,6 +394,7 @@ final class EditorModel: ObservableObject {
     }
 
     func openGame(at path: String) {
+        _ = end_editor_send("maps.user\t" + Self.userMapsFolder(forGame: path).path)
         var command = "game.open\t" + path
         if let base = baseGameDir(for: path), base != path { command += "\t" + base }
         let result = String(cString: end_editor_send(command))
@@ -426,6 +469,109 @@ final class EditorModel: ObservableObject {
         reader?.mapObjectProperties(of: id) ?? []
     }
 
+    // MARK: Map editing
+
+    /// The game's user Maps folder, where the game finds maps saved there
+    /// (GlobalData's user data path on macOS + MapCache's "Maps").
+    static func userMapsFolder(forGame gameDir: String) -> URL {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: gameDir))?.map { $0.lowercased() } ?? []
+        let zeroHour = names.contains { $0.hasSuffix("zh.big") } || !names.contains { $0.hasSuffix(".big") }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/GeneralsX", isDirectory: true)
+            .appendingPathComponent(zeroHour ? "GeneralsZH" : "Generals", isDirectory: true)
+            .appendingPathComponent("Maps", isDirectory: true)
+    }
+
+    /// Sends an editing command and applies it at once (the core runs edits in its next update).
+    private func edit(_ command: String) {
+        let result = String(cString: end_editor_send(command))
+        if result.isEmpty {
+            tick()
+        } else {
+            mapEdit.message = "\(command.split(separator: "\t").first ?? ""): \(result)"
+        }
+    }
+
+    private static func number(_ value: Float) -> String { String(format: "%.4f", value) }
+
+    func placeObject(at point: SIMD2<Float>) {
+        guard let template = placementTemplate else {
+            mapEdit.message = "Choose an object to place (the Place menu below the map, or the Objects list)"
+            return
+        }
+        let angle = Float(placementAngle * .pi / 180)
+        edit(["map.place", template, Self.number(point.x), Self.number(point.y), Self.number(angle), placementTeam]
+            .joined(separator: "\t"))
+    }
+
+    func moveObject(_ id: Int64, to point: SIMD2<Float>) {
+        edit("map.move\t\(id)\t\(Self.number(point.x))\t\(Self.number(point.y))")
+    }
+
+    func rotateObject(_ id: Int64, to angle: Float) {
+        edit("map.rotate\t\(id)\t\(Self.number(angle))")
+    }
+
+    func rotateSelected(by degrees: Float) {
+        guard let id = selectedMapObject, let object = mapScene.objects.first(where: { $0.id == id }) else { return }
+        rotateObject(id, to: object.angle + degrees * .pi / 180)
+    }
+
+    func deleteSelected() {
+        guard let id = selectedMapObject else { return }
+        edit("map.delete\t\(id)")
+    }
+
+    func undo() { edit("map.undo") }
+    func redo() { edit("map.redo") }
+
+    var canEditMap: Bool { mapState == "ready" }
+
+    /// "Save Map As…": into the game's user Maps folder by default, as Maps/<name>/<name>.map
+    /// (the layout the game looks for); never over the game's own files.
+    func saveMapAs() {
+        guard canEditMap else { return }
+        let maps = Self.userMapsFolder(forGame: status.gameDir)
+        try? FileManager.default.createDirectory(at: maps, withIntermediateDirectories: true)
+        let panel = NSSavePanel()
+        panel.message = "Maps saved in the game's Maps folder show in the game's map lists"
+        panel.directoryURL = maps
+        panel.allowedContentTypes = [.init(filenameExtension: "map") ?? .data]
+        panel.nameFieldStringValue = mapScene.name.isEmpty ? "New Map" : mapScene.name
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        let name = url.deletingPathExtension().lastPathComponent
+        if url.deletingLastPathComponent().standardizedFileURL == maps.standardizedFileURL {
+            url = maps.appendingPathComponent(name, isDirectory: true).appendingPathComponent(name + ".map")
+            if FileManager.default.fileExists(atPath: url.path) && url.path != mapEdit.savedPath {
+                let alert = NSAlert()
+                alert.messageText = "\(name) already exists in the Maps folder. Replace it?"
+                alert.addButton(withTitle: "Replace")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+        }
+        saveMap(to: url)
+    }
+
+    func saveMap(to url: URL) {
+        edit("map.save\t" + url.path)
+    }
+
+    /// Picks up edits: the objects, the undo state and which object the last edit changed.
+    private func readMapEdits(_ reader: StoreReader, _ header: StoreReader.MapHeader) {
+        guard header.edit != mapEdit else { return }
+        let objectsChanged = header.edit.objectRevision != mapEdit.objectRevision
+        mapEdit = header.edit
+        guard objectsChanged, header.state == "ready" else { return }
+        mapScene.objects = reader.mapObjects()
+        mapScene.objectsRevision = header.edit.objectRevision
+        // Select what the edit placed, moved or turned (nothing after a delete).
+        let changed = header.edit.lastObject
+        if changed != 0 {
+            selectedMapObject = mapScene.objects.contains { $0.id == changed } ? changed : nil
+        }
+    }
+
     /// Picks up map changes from the store: a new map, or more of its models.
     private func readMap(_ reader: StoreReader) {
         guard let header = reader.mapHeader() else { return }
@@ -437,13 +583,22 @@ final class EditorModel: ObservableObject {
             mapModelTextures = [:]
             lastMapTexture = 0
             mapModelRevision = -1
+            mapModelCount = header.modelCount
+            mapModelsLoaded = 0
             selectedMapObject = nil
             mapScene = header.state == "ready" ? reader.mapScene() : MapScene()
+            mapScene.objectsRevision = header.edit.objectRevision
             mapWarnings = header.state == "ready" ? reader.mapWarnings() : []
+            mapEdit = header.edit
+            mapPlayers = header.state == "ready" ? reader.mapPlayers() : []
+            if !mapPlayers.contains(where: { $0.team == placementTeam }) {
+                placementTeam = mapPlayers.first?.team ?? ""  // the neutral player comes first
+            }
         }
-        mapModelCount = header.modelCount
+        readMapEdits(reader, header)
         if header.state == "ready" && header.modelRevision != mapModelRevision {
             mapModelRevision = header.modelRevision
+            mapModelCount = header.modelCount
             mapModelsLoaded = header.modelsLoaded
             let (last, textures) = reader.mapModelTextures(after: lastMapTexture)
             lastMapTexture = last
@@ -456,7 +611,10 @@ final class EditorModel: ObservableObject {
     private func tick() {
         end_editor_update()
         guard let reader else { return }
-        if let fresh = reader.status(), fresh.revision != status.revision {
+        if let fresh = reader.status(), fresh.revision == status.revision, fresh.mapListRevision != status.mapListRevision {
+            status = fresh
+            maps = reader.maps()  // only the list changed (a map saved into the user Maps folder)
+        } else if let fresh = reader.status(), fresh.revision != status.revision {
             status = fresh
             if fresh.state == "ready" || fresh.state == "error" {
                 objects = reader.objects()
@@ -494,7 +652,7 @@ enum EditorMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     @AppStorage("editorMode") private var mode = EditorMode.objects
 
     var body: some View {
@@ -531,7 +689,7 @@ struct ContentView: View {
 }
 
 struct ObjectBrowser: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     @State private var side: String? = Self.allSides
     @State private var search = ""
     @State private var selection: ObjectItem.ID?
@@ -577,8 +735,11 @@ struct ObjectBrowser: View {
         } detail: {
             if let id = selection, let item = model.objects.first(where: { $0.id == id }) {
                 ObjectDetail(item: item)
-                    .onAppear { model.showModel(of: item) }
-                    .onChange(of: item) { _, newItem in model.showModel(of: newItem) }
+                    .onAppear { model.showModel(of: item); model.placementTemplate = item.name }
+                    .onChange(of: item) { _, newItem in
+                        model.showModel(of: newItem)
+                        model.placementTemplate = newItem.name  // what a right click on a map places
+                    }
             } else {
                 Text("Select an object").foregroundStyle(.secondary)
             }
@@ -587,7 +748,7 @@ struct ObjectBrowser: View {
 }
 
 struct StatusText: View {
-    @EnvironmentObject var model: EditorModel
+    @Environment(EditorModel.self) private var model
     var body: some View {
         switch model.status.state {
         case "loading": HStack { ProgressView().controlSize(.small); Text("Reading game data…") }
@@ -780,14 +941,44 @@ enum Snapshot {
 
 @main
 struct EndEditorApp: App {
-    @StateObject private var model = EditorModel()
+    @State private var model: EditorModel
 
     init() {
+        // Before the model exists: the snapshot tools exit without a window, --perf sets defaults.
         Snapshot.runIfRequested()
+        PerfHarness.parseArguments()
+        UICheck.parseArguments()
+        _model = State(initialValue: EditorModel())
     }
     var body: some Scene {
         WindowGroup("END Editor") {
-            ContentView().environmentObject(model).frame(minWidth: 1000, minHeight: 600)
+            ContentView().environment(model).frame(minWidth: 1000, minHeight: 600)
+        }
+        .commands { MapCommands(model: model) }
+    }
+}
+
+/// Undo, redo and "Save Map As…" for map edits. A text field being edited keeps its own undo.
+struct MapCommands: Commands {
+    let model: EditorModel
+
+    private var editingText: Bool { NSApp.keyWindow?.firstResponder is NSTextView }
+
+    var body: some Commands {
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") {
+                if editingText { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) } else { model.undo() }
+            }
+            .keyboardShortcut("z")
+            Button("Redo") {
+                if editingText { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } else { model.redo() }
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+        CommandGroup(after: .saveItem) {
+            Button("Save Map As…") { model.saveMapAs() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(!model.canEditMap)
         }
     }
 }

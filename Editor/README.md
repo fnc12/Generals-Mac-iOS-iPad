@@ -12,10 +12,11 @@ idea 13). macOS first; Windows (C#) and Linux (gtkmm) clients later. No Qt.
     `model`, `model_parts`, `model_bones`, `model_textures`, `model_animations`, and the map's
     `maps`, `map`, `map_textures`, `map_terrain`, `map_water`, `map_objects`,
     `map_object_properties`, `map_models`, `map_model_parts`, `map_model_textures`,
-    `map_warnings` (`core/src/storage.h`).
+    `map_players`, `map_warnings` (`core/src/storage.h`).
   - Client → core: tab separated commands through the C ABI
     (`core/include/end_editor/editor_core_c.h`): `game.open`, `model.open`, `model.animation`,
-    `map.open`.
+    `map.open`, `maps.user`, `map.place`, `map.move`, `map.rotate`, `map.delete`, `map.undo`,
+    `map.redo`, `map.save`.
   - `end_editor_update()` runs queued work; the client calls it once per tick.
 - `macos/` — SwiftUI client. Links the core's static library and the system SQLite.
 
@@ -33,6 +34,9 @@ build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Gener
 build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Generals \
     --map "maps/tournament desert/tournament desert.map"   # one map: sizes, objects, models, warnings
 build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Generals --all-maps
+# every map saved unchanged and compared with the original; every map edited, saved, read back
+build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Generals --roundtrip-maps /tmp/rt
+build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Generals --edit-maps /tmp/ed
 
 # macOS app -> build/editor-macos/END Editor.app
 Editor/macos/build.sh
@@ -55,6 +59,15 @@ as the preview's "Export GIF" button, from the default camera.
 renders it: the default view, top-down, or looking at a world point. `--pick` clicks at a pixel
 (origin top left), prints the selected object and its properties and draws its box. The map
 path is one of the `maps` table (`maps/<name>/<name>.map`) or a .map file.
+
+Two checks open the real window and drive it from inside the app (input through its own event
+queue; for a machine nobody is watching, like the gui-sandbox VM):
+`END Editor --perf <zh> <base> <map path> <out.txt>` measures idle, a drag over the map and
+scrolling the map list and the object table: display-link frame intervals and missed vsyncs,
+map frames, model changes and main-thread busy and CPU time.
+`END Editor --ui-check <zh> <base> <map path> <template> <save.map> <out.txt>` places, drags,
+turns, deletes, undoes and redoes an object, saves the map, opens it again and checks each step;
+the exit code is the number of failed checks.
 
 ## What works (step 1)
 
@@ -109,4 +122,50 @@ texture replacements, so environment-mapped glass shows its reflection texture);
 scorch marks, lights, the sky and shadows are not drawn; passability, scripts and build lists
 are not read.
 
-Next: placing objects (right-click), then saving.
+## What works (step 4)
+
+- Smooth map view and lists. Two causes of lag, measured with `--perf` in the gui-sandbox VM
+  (Tournament Desert, 784 objects): the client re-published the map's model count on every
+  100 ms tick, so every view re-rendered and laid out 10 times a second (~400 ms/s of
+  main-thread CPU while idle); and the map view drew every vsync although nothing moved, each
+  frame waiting on the main thread for a drawable, which starved list scrolling next to it.
+  Now the model changes only when the store does, `EditorModel` is `@Observable` (a view
+  updates only for what it reads) and the map view skips frames that would look the same.
+  Missed vsyncs in 4 s (median of 3 runs before, 9 after; the VM shares a busy host, so single
+  runs vary): dragging the map 66 → 2 (46–48 fps → 59–60), scrolling the map list 97 → 3, the
+  object table 133 → 7. Main-thread CPU (not skewed by the host's load): idle 396–413 →
+  20–52 ms/s, dragging 399–427 → 57–73, map list 550–606 → 259–337, object table 716–741 →
+  311–406.
+- Placing objects: a right click (or ⌃-click) on the terrain places the chosen object template
+  at that ground point, on the terrain, with the placement bar's angle (Stepper, 15° steps) and
+  owner (a player of the map's SidesList; its default team becomes `originalOwner`; neutral
+  first). The template comes from the bar's searchable list or the object selected in the
+  Objects mode. Placed objects show at once with their model (loaded like the map's) and are
+  selected; they get MapObject's default properties and a uniqueID like WorldBuilder's.
+- Editing: a press on the selected object drags it over the ground (one move when released,
+  also when another object is in front of it); `[` / `]` turn it by 15° (`{` / `}` by 1°), the
+  inspector's Angle field and stepper set it; Delete removes it. Undo and redo (⌘Z, ⇧⌘Z,
+  buttons in the placement bar) cover place, move, turn and delete; a text field being edited
+  keeps its own undo.
+- Saving: File > Save Map As… (⇧⌘S) writes the map with its edits, by default as
+  `~/Library/Application Support/GeneralsX/GeneralsZH/Maps/<name>/<name>.map` (GlobalData's user
+  data path on macOS plus MapCache's `Maps`, the folder the game scans for user maps; base
+  Generals: `…/GeneralsX/Generals/Maps`). That folder is listed in the map list. The core never
+  writes inside the game folders, so files in `.big` archives are never touched.
+- The file: every chunk but ObjectsList is copied byte for byte, and so is every object that
+  was not changed (also those the engine drops and chunks of other kinds inside ObjectsList); a
+  move or a turn rewrites only the position and angle inside its chunk; placed objects are
+  Object version 3 chunks; names they need are appended to the table of contents. Maps are
+  written uncompressed (the game reads both). Checked: all 150 maps of the Zero Hour and base
+  archives save unchanged byte for byte (`--roundtrip-maps`), and all 150 are edited (move,
+  turn, delete, place, undo, redo), saved and read back as expected (`--edit-maps`). In the VM
+  the game (GeneralsXZH, `-headless`) read a saved Tournament Desert with a placed tank into its
+  user map cache as a 2-player multiplayer map with its start, tech and supply positions.
+
+Not yet: moving or turning several objects at once, copy and paste, editing an object's
+properties or owner after placing it, objects' height above the ground (moves keep it), placing
+waypoints, roads and bridges (only object templates are offered; existing ones can be moved and
+keep their flags), a map preview image for the game's map list. The release game has no `-file` option (it is
+debug-only), so a saved map was not started in a game here.
+
+Next: object properties and owners in the inspector, then terrain editing.

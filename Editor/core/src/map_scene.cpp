@@ -482,6 +482,36 @@ namespace end_editor {
         return false;
     }
 
+    PlacedObject resolveObject(const MapFile &map, const MapObject &object, const ObjectLookup &findObject) {
+        PlacedObject placed;
+        placed.templateName = object.templateName;
+        placed.x = object.x;
+        placed.y = object.y;
+        placed.z = groundHeight(map, object.x, object.y) + object.z;
+        placed.angle = object.angle;
+        placed.flags = object.flags;
+        placed.properties = object.properties;
+        if(const auto *owner = findDictValue(object.properties, "originalOwner")) {
+            placed.owner = owner->text;
+        }
+        placed.color = ownerColor(map, placed.owner);
+        const auto *info = findObject ? findObject(object.templateName) : nullptr;
+        if(object.flags & mapObjectRoadFlags) {
+            placed.kind = "road";
+        } else if(object.flags & mapObjectBridgeFlags) {
+            placed.kind = "bridge";
+        } else if(findDictValue(object.properties, "waypointID")) {
+            placed.kind = "waypoint";
+        } else if(info && !info->model.empty()) {
+            placed.kind = "model";
+            placed.model = info->model;
+            placed.modelKey = info->model + "\t" + info->muzzleFlashes + "\t" + info->hiddenSubObjects;
+        } else {
+            placed.kind = "marker";
+        }
+        return placed;
+    }
+
     MapScene buildMapScene(const MapFile &map, const GameFiles &files, const ObjectLookup &findObject) {
         MapScene scene;
         TerrainBuilder terrain(map, files, scene);
@@ -522,35 +552,8 @@ namespace end_editor {
             scene.water.push_back(std::move(area));
         }
 
-        // Objects.
         for(const auto &object: map.objects) {
-            PlacedObject placed;
-            placed.templateName = object.templateName;
-            placed.x = object.x;
-            placed.y = object.y;
-            placed.z = groundHeight(map, object.x, object.y) + object.z;
-            placed.angle = object.angle;
-            placed.flags = object.flags;
-            placed.properties = object.properties;
-            if(const auto *owner = findDictValue(object.properties, "originalOwner")) {
-                placed.owner = owner->text;
-            }
-            placed.color = ownerColor(map, placed.owner);
-            const auto *info = findObject ? findObject(object.templateName) : nullptr;
-            if(object.flags & mapObjectRoadFlags) {
-                placed.kind = "road";
-            } else if(object.flags & mapObjectBridgeFlags) {
-                placed.kind = "bridge";
-            } else if(findDictValue(object.properties, "waypointID")) {
-                placed.kind = "waypoint";
-            } else if(info && !info->model.empty()) {
-                placed.kind = "model";
-                placed.model = info->model;
-                placed.modelKey = info->model + "\t" + info->muzzleFlashes + "\t" + info->hiddenSubObjects;
-            } else {
-                placed.kind = "marker";
-            }
-            scene.objects.push_back(std::move(placed));
+            scene.objects.push_back(resolveObject(map, object, findObject));
         }
         return scene;
     }
