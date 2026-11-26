@@ -172,6 +172,15 @@ bool DX8Wrapper::Pillarbox_Setup(int gameW, int gameH)
 				density = 1.0f;
 			}
 		}
+	} else {
+		// The present-parameter backbuffer is in pixels; Pillarbox_Get_Rect reports
+		// window points, so the density is needed here too. Without it, high-density
+		// displays (iOS, Retina) map input against a pixel-sized rect.
+		int winW = 0, winH = 0;
+		float winDensity = 1.0f;
+		if (GetWindowSize(winW, winH, winDensity) && winDensity > 0.0f) {
+			density = winDensity;
+		}
 	}
 
 	// No pillarbox needed if backbuffer matches game resolution
@@ -3738,6 +3747,19 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
 
+	// While a pillarboxed frame is in flight, "the default target" is the offscreen
+	// game-resolution surface, not the swapchain backbuffer. Mid-frame RTT passes
+	// (water reflections, texture projectors) restore the default when done; sending
+	// them to the real backbuffer made everything drawn afterwards (terrain included)
+	// land outside the offscreen image and get wiped by the Pillarbox_End blit.
+	if (s_pillarboxActive && s_offscreenSurf && s_depthSurf &&
+		(render_target == nullptr || render_target == DefaultRenderTarget))
+	{
+		Set_Render_Target(s_offscreenSurf, s_depthSurf);
+		IsRenderToTexture = false;
+		return;
+	}
+
 	//
 	//	Should we restore the default render target set a new one?
 	//
@@ -3863,6 +3885,19 @@ void DX8Wrapper::Set_Render_Target
 {
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
+
+	// While a pillarboxed frame is in flight, "the default target" is the offscreen
+	// game-resolution surface, not the swapchain backbuffer. Mid-frame RTT passes
+	// (water reflections, texture projectors) restore the default when done; sending
+	// them to the real backbuffer made everything drawn afterwards (terrain included)
+	// land outside the offscreen image and get wiped by the Pillarbox_End blit.
+	if (s_pillarboxActive && s_offscreenSurf && s_depthSurf &&
+		(render_target == nullptr || render_target == DefaultRenderTarget))
+	{
+		Set_Render_Target(s_offscreenSurf, s_depthSurf);
+		IsRenderToTexture = false;
+		return;
+	}
 
 	//
 	//	Should we restore the default render target set a new one?

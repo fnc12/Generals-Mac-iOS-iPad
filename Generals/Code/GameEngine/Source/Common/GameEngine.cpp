@@ -26,6 +26,9 @@
 // Implementation of the Game Engine singleton
 // Author: Michael S. Booth, April 2001
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/ActionManager.h"
@@ -1133,5 +1136,9 @@ void updateTGAtoDDS()
 
 	fp->close();
 
+	// system() does not exist on iOS; this developer-only TGA->DDS batch step
+	// has nothing to run there anyway.
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
 	system(CONVERT_EXEC1);
+#endif
 }

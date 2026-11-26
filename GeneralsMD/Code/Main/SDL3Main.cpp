@@ -471,6 +471,12 @@ int main(int argc, char* argv[])
 		// SDL3GameEngine.cpp; SDL's automatic touch->mouse synthesis would
 		// double-deliver finger 1 and fight the two-finger pan logic.
 		SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+		// Defer the system edge gestures like other fullscreen games: the first
+		// swipe from the bottom only reveals the (dimmed) home indicator, the
+		// second one leaves the app. The window is neither FULLSCREEN nor
+		// BORDERLESS, so SDL would not pick this by default. Dragging a selection
+		// box toward the bottom edge otherwise drops the player on the home screen.
+		SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
 #endif
 		if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
 			fprintf(stderr, "FATAL: Failed to initialize SDL3: %s\n", SDL_GetError());
@@ -546,6 +552,12 @@ int main(int argc, char* argv[])
 				static char yresFlag[] = "-yres";
 				const int yres = winH;
 				int xres = winW;
+				// Cap the internal aspect at 16:9 (the widest the 4:3-designed HUD is
+				// meant for, same cap as the Options resolution filter). On 19.5:9
+				// phones the rest is pillarboxed by DX8Wrapper instead of stretching
+				// the control bar across the whole panel.
+				const int maxXres = yres * 16 / 9;
+				if (xres > maxXres) xres = maxXres;
 				xres &= ~1;  // keep it even
 				snprintf(xresVal, sizeof(xresVal), "%d", xres);
 				snprintf(yresVal, sizeof(yresVal), "%d", yres);
