@@ -1076,9 +1076,11 @@ final class MapMTKView: MTKView {
         case 51, 117:  // Delete, Forward Delete
             state?.onDelete?()
         default:
-            switch event.charactersIgnoringModifiers {
-            case "[": state?.onRotate?(event.modifierFlags.contains(.shift) ? -1 : -15)
-            case "]": state?.onRotate?(event.modifierFlags.contains(.shift) ? 1 : 15)
+            switch event.charactersIgnoringModifiers {  // with ⇧ these are { and } on most layouts
+            case "[": state?.onRotate?(-15)
+            case "]": state?.onRotate?(15)
+            case "{": state?.onRotate?(-1)
+            case "}": state?.onRotate?(1)
             default: super.keyDown(with: event)
             }
         }
