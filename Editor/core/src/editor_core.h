@@ -59,6 +59,7 @@ namespace end_editor {
         void listMaps();
         void runOpenMap(const std::string &path);
         void runLoadMapModels();
+        void queueBeforeModelLoading(Job job);
         void runEditMap(const std::vector<std::string> &arguments);
         void runSaveMap(const std::string &path);
         void relistMaps();

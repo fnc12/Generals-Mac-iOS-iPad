@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <locale>
 #include <sstream>
 #include <system_error>
@@ -158,7 +159,7 @@ namespace end_editor {
             }
             std::vector<std::string> edit{std::string(name)};
             edit.insert(edit.end(), arguments.begin(), arguments.begin() + std::ptrdiff_t(std::min(needed, arguments.size())));
-            this->jobs.push_back(Job{Job::editMap, edit});
+            this->queueBeforeModelLoading(Job{Job::editMap, edit});
             return "";
         }
         if(name == "map.save") {
@@ -168,10 +169,20 @@ namespace end_editor {
             if(!this->document && !mapQueued) {
                 return "error:no_map";
             }
-            this->jobs.push_back(Job{Job::saveMap, arguments});
+            this->queueBeforeModelLoading(Job{Job::saveMap, arguments});
             return "";
         }
         return "error:unknown_command";
+    }
+
+    void EditorCore::queueBeforeModelLoading(Job job) {
+        // Model loading re-queues itself at the back; an edit or a save goes before it so it runs
+        // in the next update and the client sees it at once.
+        auto at = this->jobs.end();
+        while(at != this->jobs.begin() && std::prev(at)->kind == Job::loadMapModels) {
+            --at;
+        }
+        this->jobs.insert(at, std::move(job));
     }
 
     void EditorCore::update() {
