@@ -334,6 +334,7 @@ final class EditorModel: ObservableObject {
             let guess = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("GeneralsX/GeneralsZH").path
             if FileManager.default.fileExists(atPath: guess) { openGame(at: guess) }
         }
+        PerfHarness.run(self)
     }
 
     /// The base Generals folder: most models and textures live in its archives. Chosen by the
@@ -784,6 +785,7 @@ struct EndEditorApp: App {
 
     init() {
         Snapshot.runIfRequested()
+        PerfHarness.parseArguments()
     }
     var body: some Scene {
         WindowGroup("END Editor") {

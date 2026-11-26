@@ -681,11 +681,13 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
               let commands = queue.makeCommandBuffer(),
               let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else { return }
+        let started = CACurrentMediaTime()
         let size = view.drawableSize
         encode(encoder, aspect: Float(size.width / max(size.height, 1)))
         encoder.endEncoding()
         commands.present(drawable)
         commands.commit()
+        PerfRecorder.shared?.mapFrame(encode: CACurrentMediaTime() - started)
     }
 
     /// Renders the current view into an image without a window (for `--map-snapshot`).
