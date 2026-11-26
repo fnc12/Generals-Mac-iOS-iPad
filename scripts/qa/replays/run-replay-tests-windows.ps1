@@ -15,7 +15,8 @@
 # The run uses a throwaway user data folder (GENERALSX_USER_DATA_DIR under -WorkDir, default
 # %TEMP%), so the real Documents profile, maps and replays are not touched. The game runs
 # with -headless: no window. Logs: logs\replay-tests\ (<name>.log, and <name>.crc with the
-# compared CRCs as "frame crc" lines, for diffing against another platform).
+# compared CRCs as "frame crc" lines, for diffing against another platform). -KeepDebug <dir>
+# keeps the game's Debug folder (deep CRC dumps written on a mismatch).
 #
 # A replay passes only if the game exits 0 AND compared at least one CRC (REPLAY_CRC_COMPARE
 # lines) AND none of them mismatched. Exit code: number of failed replays (0 = all passed).
@@ -26,7 +27,8 @@ param(
     [string]$GeneralsData = "",
     [string]$WorkDir = $env:TEMP,
     [string]$ExtraArgs = "",
-    [int]$TimeoutSeconds = 900
+    [int]$TimeoutSeconds = 900,
+    [string]$KeepDebug = ""
 )
 $ErrorActionPreference = 'Stop'
 
@@ -125,6 +127,11 @@ try {
         }
     }
 } finally {
+    # On a mismatch the game writes deep CRC dumps (the serialized state of the last CRC frames) to Debug.
+    if ($KeepDebug -and (Test-Path (Join-Path $userData 'Debug'))) {
+        New-Item -ItemType Directory -Force $KeepDebug | Out-Null
+        Copy-Item (Join-Path $userData 'Debug\*') $KeepDebug -Recurse -Force
+    }
     Remove-Item $userData -Recurse -Force -ErrorAction SilentlyContinue
 }
 "Results: $pass passed, $fail failed"
