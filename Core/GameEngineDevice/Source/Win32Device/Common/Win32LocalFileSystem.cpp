@@ -33,6 +33,7 @@
 #include "Win32Device/Common/Win32LocalFileSystem.h"
 #include "Win32Device/Common/Win32LocalFile.h"
 #include <io.h>
+#include <stdlib.h>
 
 Win32LocalFileSystem::Win32LocalFileSystem() : LocalFileSystem()
 {
@@ -66,6 +67,13 @@ File * Win32LocalFileSystem::openFile(const Char *filename, Int access, size_t b
 			dirName.concat('\\');
 			dirName.concat(token);
 		}
+	}
+
+	// GeneralsX @bugfix fnc12 26/11/2026 A loose file missing from the working directory is read from the asset root.
+	AsciiString readPath;
+	if (!(access & File::WRITE)) {
+		readPath = resolveReadPath(filename);
+		filename = readPath.str();
 	}
 
 	// TheSuperHackers @fix Mauller 21/04/2025 Create new file handle when necessary to prevent memory leak
@@ -106,6 +114,21 @@ void Win32LocalFileSystem::update()
 
 void Win32LocalFileSystem::init()
 {
+	// GeneralsX @bugfix fnc12 26/11/2026 Default asset root from the environment, as StdLocalFileSystem::init does.
+	// BIGFileSystem::init replaces it with the directory it actually loaded the archives from.
+	if (m_assetRootPath.isEmpty())
+	{
+#if RTS_ZEROHOUR
+		const char *env = getenv("CNC_GENERALS_ZH_PATH");
+		if (!env || !env[0]) env = getenv("CNC_GENERALS_PATH");
+#else
+		const char *env = getenv("CNC_GENERALS_PATH");
+#endif
+		if (env && env[0])
+		{
+			setAssetRootPath(AsciiString(env));
+		}
+	}
 }
 
 void Win32LocalFileSystem::reset()
@@ -116,7 +139,7 @@ void Win32LocalFileSystem::reset()
 Bool Win32LocalFileSystem::doesFileExist(const Char *filename) const
 {
 	//USE_PERF_TIMER(Win32LocalFileSystem_doesFileExist)
-	if (_access(filename, 0) == 0) {
+	if (_access(resolveReadPath(filename).str(), 0) == 0) {
 		return TRUE;
 	}
 
@@ -189,7 +212,7 @@ Bool Win32LocalFileSystem::getFileInfo(const AsciiString& filename, FileInfo *fi
 {
 	WIN32_FIND_DATA findData;
 	HANDLE findHandle = nullptr;
-	findHandle = FindFirstFile(filename.str(), &findData);
+	findHandle = FindFirstFile(resolveReadPath(filename.str()).str(), &findData);
 
 	if (findHandle == INVALID_HANDLE_VALUE) {
 		return FALSE;
@@ -231,4 +254,37 @@ AsciiString Win32LocalFileSystem::normalizePath(const AsciiString& filePath) con
 	}
 
 	return normalizedFilePath;
+}
+
+// GeneralsX @bugfix fnc12 26/11/2026 On Windows the game makes the exe folder its working directory (unless
+// -useCwd), and the .big archives may come from elsewhere (CNC_GENERALS_ZH_PATH, ini, registry). Loose files
+// such as Data\Scripts\SkirmishScripts.scb were then only searched next to the exe, so an exe outside the
+// game folder ran the skirmish AI without teams or scripts. BIGFileSystem::init passes the directory it loaded
+// the archives from; an empty path (archives from the working directory) disables the fallback.
+void Win32LocalFileSystem::setAssetRootPath(const AsciiString& path)
+{
+	m_assetRootPath = path;
+	if (m_assetRootPath.isNotEmpty() && !m_assetRootPath.endsWith("\\") && !m_assetRootPath.endsWith("/")) {
+		m_assetRootPath.concat('\\');
+	}
+	DEBUG_LOG(("Win32LocalFileSystem::setAssetRootPath - asset fallback path set to '%s'", m_assetRootPath.str()));
+}
+
+// The working directory wins; a relative path that does not exist there is looked up in the asset root.
+AsciiString Win32LocalFileSystem::resolveReadPath(const Char *filename) const
+{
+	AsciiString path(filename);
+	if (m_assetRootPath.isEmpty() || path.isEmpty() || _access(filename, 0) == 0) {
+		return path;
+	}
+	const Bool isAbsolute = filename[0] == '\\' || filename[0] == '/' || (filename[0] != '\0' && filename[1] == ':');
+	if (isAbsolute) {
+		return path;
+	}
+	AsciiString assetPath = m_assetRootPath;
+	assetPath.concat(filename);
+	if (_access(assetPath.str(), 0) == 0) {
+		return assetPath;
+	}
+	return path;
 }
