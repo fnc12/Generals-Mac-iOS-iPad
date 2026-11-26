@@ -145,6 +145,141 @@ final class StoreReader {
         rows("SELECT text FROM warnings ORDER BY id") { s in result.append(Self.text(s, 0)) }
         return result
     }
+
+    // MARK: Map
+
+    func maps() -> [MapListItem] {
+        var result: [MapListItem] = []
+        rows("SELECT id, path, name, source FROM maps ORDER BY name COLLATE NOCASE") { s in
+            result.append(MapListItem(id: sqlite3_column_int64(s, 0), path: Self.text(s, 1), name: Self.text(s, 2),
+                                      source: Self.text(s, 3)))
+        }
+        return result
+    }
+
+    struct MapHeader {
+        var path = "", name = "", state = "", message = ""
+        var revision: Int64 = -1, modelRevision: Int64 = -1
+        var modelsLoaded = 0, modelCount = 0
+    }
+
+    func mapHeader() -> MapHeader? {
+        var result: MapHeader?
+        rows("SELECT path, name, state, message, revision, model_revision, models_loaded, model_count FROM map WHERE id = 1") { s in
+            result = MapHeader(path: Self.text(s, 0), name: Self.text(s, 1), state: Self.text(s, 2), message: Self.text(s, 3),
+                               revision: sqlite3_column_int64(s, 4), modelRevision: sqlite3_column_int64(s, 5),
+                               modelsLoaded: Int(sqlite3_column_int(s, 6)), modelCount: Int(sqlite3_column_int(s, 7)))
+        }
+        return result
+    }
+
+    private func floats(_ data: Data) -> [Float] {
+        data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    }
+
+    /// The open map without its models.
+    func mapScene() -> MapScene {
+        var scene = MapScene()
+        rows("""
+            SELECT path, revision, name, width, height, border, playable_x0, playable_y0, playable_x1, playable_y1,
+                   lighting, heights, water_r, water_g, water_b, water_a, water_repeat FROM map WHERE id = 1
+            """) { s in
+            scene.key = "\(Self.text(s, 0))#\(sqlite3_column_int64(s, 1))"
+            scene.name = Self.text(s, 2)
+            scene.width = Int(sqlite3_column_int(s, 3))
+            scene.height = Int(sqlite3_column_int(s, 4))
+            scene.border = Int(sqlite3_column_int(s, 5))
+            scene.playable = SIMD4(Float(sqlite3_column_double(s, 6)), Float(sqlite3_column_double(s, 7)),
+                                   Float(sqlite3_column_double(s, 8)), Float(sqlite3_column_double(s, 9)))
+            scene.lighting = floats(Self.blob(s, 10))
+            scene.heights = Self.blob(s, 11)
+            scene.waterColor = SIMD4(Float(sqlite3_column_double(s, 12)), Float(sqlite3_column_double(s, 13)),
+                                     Float(sqlite3_column_double(s, 14)), Float(sqlite3_column_double(s, 15)))
+            scene.waterRepeat = Float(sqlite3_column_double(s, 16))
+        }
+        rows("SELECT name, width, height, rgba FROM map_textures") { s in
+            let texture = PreviewTexture(width: Int(sqlite3_column_int(s, 1)), height: Int(sqlite3_column_int(s, 2)),
+                                         rgba: Self.blob(s, 3))
+            switch Self.text(s, 0) {
+            case "terrain": scene.atlas = texture
+            case "water": scene.waterTexture = texture
+            default: break
+            }
+        }
+        rows("SELECT vertices, indices FROM map_terrain ORDER BY id") { s in
+            scene.terrain.append((Self.blob(s, 0), Self.blob(s, 1)))
+        }
+        rows("SELECT vertices, indices FROM map_water ORDER BY id") { s in
+            scene.water.append((Self.blob(s, 0), Self.blob(s, 1)))
+        }
+        rows("SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color FROM map_objects ORDER BY id") { s in
+            scene.objects.append(MapObjectItem(
+                id: sqlite3_column_int64(s, 0), templateName: Self.text(s, 1), kind: Self.text(s, 2),
+                position: SIMD3(Float(sqlite3_column_double(s, 3)), Float(sqlite3_column_double(s, 4)),
+                                Float(sqlite3_column_double(s, 5))),
+                angle: Float(sqlite3_column_double(s, 6)), flags: Int(sqlite3_column_int(s, 7)),
+                modelId: sqlite3_column_int64(s, 8), owner: Self.text(s, 9), color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 10))))
+        }
+        return scene
+    }
+
+    /// Models loaded since `afterId` (ready or failed, not pending), with their parts.
+    func mapModels(after afterId: Int64) -> [MapModelData] {
+        var result: [MapModelData] = []
+        rows("""
+            SELECT id, name, state, message, min_x, min_y, min_z, max_x, max_y, max_z FROM map_models
+            WHERE id > \(afterId) AND state <> 'pending' ORDER BY id
+            """) { s in
+            result.append(MapModelData(
+                id: sqlite3_column_int64(s, 0), name: Self.text(s, 1), ready: Self.text(s, 2) == "ready",
+                message: Self.text(s, 3),
+                boundsMin: SIMD3(Float(sqlite3_column_double(s, 4)), Float(sqlite3_column_double(s, 5)),
+                                 Float(sqlite3_column_double(s, 6))),
+                boundsMax: SIMD3(Float(sqlite3_column_double(s, 7)), Float(sqlite3_column_double(s, 8)),
+                                 Float(sqlite3_column_double(s, 9))),
+                parts: []))
+        }
+        guard let first = result.first?.id, let last = result.last?.id else { return [] }
+        var parts: [Int64: [MapModelPart]] = [:]
+        rows("""
+            SELECT model_id, texture, blend, house_color, vertices, indices FROM map_model_parts
+            WHERE model_id BETWEEN \(first) AND \(last) ORDER BY id
+            """) { s in
+            parts[sqlite3_column_int64(s, 0), default: []].append(MapModelPart(
+                texture: Self.text(s, 1), blend: Int(sqlite3_column_int(s, 2)), houseColor: Int(sqlite3_column_int(s, 3)),
+                vertices: Self.blob(s, 4), indices: Self.blob(s, 5)))
+        }
+        return result.map { model in
+            MapModelData(id: model.id, name: model.name, ready: model.ready, message: model.message,
+                         boundsMin: model.boundsMin, boundsMax: model.boundsMax, parts: parts[model.id] ?? [])
+        }
+    }
+
+    /// Model textures with ids above `afterId`: (last id, textures by name).
+    func mapModelTextures(after afterId: Int64) -> (Int64, [String: PreviewTexture]) {
+        var last = afterId
+        var result: [String: PreviewTexture] = [:]
+        rows("SELECT id, name, width, height, rgba FROM map_model_textures WHERE id > \(afterId) ORDER BY id") { s in
+            last = sqlite3_column_int64(s, 0)
+            result[Self.text(s, 1)] = PreviewTexture(width: Int(sqlite3_column_int(s, 2)),
+                                                     height: Int(sqlite3_column_int(s, 3)), rgba: Self.blob(s, 4))
+        }
+        return (last, result)
+    }
+
+    func mapObjectProperties(of objectId: Int64) -> [MapObjectProperty] {
+        var result: [MapObjectProperty] = []
+        rows("SELECT key, type, value FROM map_object_properties WHERE object_id = \(objectId) ORDER BY id") { s in
+            result.append(MapObjectProperty(key: Self.text(s, 0), type: Self.text(s, 1), value: Self.text(s, 2)))
+        }
+        return result
+    }
+
+    func mapWarnings() -> [String] {
+        var result: [String] = []
+        rows("SELECT text FROM map_warnings ORDER BY id") { s in result.append(Self.text(s, 0)) }
+        return result
+    }
 }
 
 @MainActor
@@ -160,6 +295,20 @@ final class EditorModel: ObservableObject {
     private var modelRevision: Int64 = -1
     private var modelName = ""
     private var geometryRequested = false
+
+    @Published var maps: [MapListItem] = []
+    @Published var mapScene = MapScene()
+    @Published var mapModels: [MapModelData] = []
+    @Published var mapModelTextures: [String: PreviewTexture] = [:]
+    @Published var mapState = "idle"
+    @Published var mapMessage = ""
+    @Published var mapWarnings: [String] = []
+    @Published var mapModelsLoaded = 0
+    @Published var mapModelCount = 0
+    @Published var selectedMapObject: Int64?
+    private var mapRevision: Int64 = -1
+    private var mapModelRevision: Int64 = -1
+    private var lastMapTexture: Int64 = 0
 
     private var reader: StoreReader?
     private var timer: Timer?
@@ -258,6 +407,52 @@ final class EditorModel: ObservableObject {
         _ = end_editor_send("model.animation\t" + name)
     }
 
+    func openMap(_ path: String) {
+        let result = String(cString: end_editor_send("map.open\t" + path))
+        if !result.isEmpty {
+            mapState = "error"
+            mapMessage = "map.open: \(result)"
+        }
+    }
+
+    func chooseMapFile() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose a .map file"
+        panel.allowedContentTypes = [.init(filenameExtension: "map") ?? .data]
+        if panel.runModal() == .OK, let url = panel.url { openMap(url.path) }
+    }
+
+    func mapObjectProperties(of id: Int64) -> [MapObjectProperty] {
+        reader?.mapObjectProperties(of: id) ?? []
+    }
+
+    /// Picks up map changes from the store: a new map, or more of its models.
+    private func readMap(_ reader: StoreReader) {
+        guard let header = reader.mapHeader() else { return }
+        if header.revision != mapRevision {
+            mapRevision = header.revision
+            mapState = header.state
+            mapMessage = header.message
+            mapModels = []
+            mapModelTextures = [:]
+            lastMapTexture = 0
+            mapModelRevision = -1
+            selectedMapObject = nil
+            mapScene = header.state == "ready" ? reader.mapScene() : MapScene()
+            mapWarnings = header.state == "ready" ? reader.mapWarnings() : []
+        }
+        mapModelCount = header.modelCount
+        if header.state == "ready" && header.modelRevision != mapModelRevision {
+            mapModelRevision = header.modelRevision
+            mapModelsLoaded = header.modelsLoaded
+            let (last, textures) = reader.mapModelTextures(after: lastMapTexture)
+            lastMapTexture = last
+            if !textures.isEmpty { mapModelTextures.merge(textures) { old, _ in old } }
+            let fresh = reader.mapModels(after: mapModels.last?.id ?? 0)
+            if !fresh.isEmpty { mapModels.append(contentsOf: fresh) }
+        }
+    }
+
     private func tick() {
         end_editor_update()
         guard let reader else { return }
@@ -266,11 +461,13 @@ final class EditorModel: ObservableObject {
             if fresh.state == "ready" || fresh.state == "error" {
                 objects = reader.objects()
                 warnings = reader.warnings()
+                maps = reader.maps()
                 modelName = ""
                 preview = PreviewModel()
                 animations = []
             }
         }
+        readMap(reader)
         if let header = reader.modelHeader(), header.revision != modelRevision {
             modelRevision = header.revision
             modelState = header.state
@@ -290,7 +487,50 @@ final class EditorModel: ObservableObject {
     }
 }
 
+/// Objects (step 1-2) or maps (step 3).
+enum EditorMode: String, CaseIterable, Identifiable {
+    case objects = "Objects", maps = "Maps"
+    var id: String { rawValue }
+}
+
 struct ContentView: View {
+    @EnvironmentObject var model: EditorModel
+    @AppStorage("editorMode") private var mode = EditorMode.objects
+
+    var body: some View {
+        Group {
+            switch mode {
+            case .objects: ObjectBrowser()
+            case .maps: MapBrowser()
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Menu {
+                    Button("Zero Hour Folder…") { model.chooseGameFolder() }
+                    Button("Base Generals Folder…") { model.chooseBaseGameFolder() }
+                    Divider()
+                    Button("Open Map File…") { mode = .maps; model.chooseMapFile() }
+                        .disabled(model.status.state != "ready")
+                } label: { Label("Game Folders", systemImage: "folder") }
+            }
+            ToolbarItem(placement: .principal) {
+                Picker("Mode", selection: $mode) {
+                    ForEach(EditorMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+            ToolbarItem(placement: .status) { StatusText() }
+        }
+        .alert("Editor core", isPresented: .constant(model.coreError != nil)) {
+            Button("OK") { model.coreError = nil }
+        } message: {
+            Text(model.coreError ?? "")
+        }
+    }
+}
+
+struct ObjectBrowser: View {
     @EnvironmentObject var model: EditorModel
     @State private var side: String? = Self.allSides
     @State private var search = ""
@@ -343,20 +583,6 @@ struct ContentView: View {
                 Text("Select an object").foregroundStyle(.secondary)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Menu {
-                    Button("Zero Hour Folder…") { model.chooseGameFolder() }
-                    Button("Base Generals Folder…") { model.chooseBaseGameFolder() }
-                } label: { Label("Game Folders", systemImage: "folder") }
-            }
-            ToolbarItem(placement: .status) { StatusText() }
-        }
-        .alert("Editor core", isPresented: .constant(model.coreError != nil)) {
-            Button("OK") { model.coreError = nil }
-        } message: {
-            Text(model.coreError ?? "")
-        }
     }
 }
 
@@ -403,7 +629,7 @@ struct ObjectDetail: View {
 /// renders one frame of a model to a PNG without opening a window, then exits.
 /// `END Editor --gif <Zero Hour folder> <base folder> <model> <animation> <square|wide> <out.gif>`
 /// writes the same GIF as the preview's "Export GIF" (default camera). Both check the preview
-/// without driving a screen.
+/// without driving a screen; `--map-snapshot` does the same for the map view.
 enum Snapshot {
     static func runIfRequested() {
         let arguments = CommandLine.arguments
@@ -421,6 +647,9 @@ enum Snapshot {
             CGImageDestinationAddImage(destination, image, nil)
             exit(CGImageDestinationFinalize(destination) ? 0 : 1)
         }
+        if let at = arguments.firstIndex(of: "--map-snapshot") {
+            mapSnapshot(Array(arguments[(at + 1)...]))
+        }
         if let at = arguments.firstIndex(of: "--gif") {
             let values = Array(arguments[(at + 1)...])
             guard values.count == 6, let format = GifFormat(rawValue: values[4]) else {
@@ -437,6 +666,93 @@ enum Snapshot {
             print("gif: \(preview.frameCount) frames at \(preview.frameRate) fps")
             exit(0)
         }
+    }
+
+    /// `--map-snapshot <zh> <base> <map path> <out.png> [--top] [--look <x> <y> <distance> <yaw°> <pitch°>]
+    /// [--size <w>x<h>] [--pick <x> <y>]`: opens the map, waits for all its models, renders the
+    /// default view (or top-down, or looking at a world point). --pick clicks at a point of the
+    /// image (origin top left), prints what it selects and draws the selection box.
+    private static func mapSnapshot(_ values: [String]) -> Never {
+        let usageText = "--map-snapshot <zh> <base> <map path> <out.png> [--top] "
+            + "[--look <x> <y> <distance> <yaw°> <pitch°>] [--size <w>x<h>] [--pick <x> <y>]"
+        guard values.count >= 4 else { usage(usageText) }
+        var width = 1280, height = 800
+        var top = false
+        var pick: CGPoint?
+        var look: [Float]?
+        var i = 4
+        while i < values.count {
+            switch values[i] {
+            case "--top": top = true
+            case "--size":
+                let parts = (i + 1 < values.count ? values[i + 1] : "").split(separator: "x").compactMap { Int($0) }
+                guard parts.count == 2 else { usage(usageText) }
+                (width, height) = (parts[0], parts[1])
+                i += 1
+            case "--look":
+                let numbers = values.dropFirst(i + 1).prefix(5).compactMap { Float($0) }
+                guard numbers.count == 5 else { usage(usageText) }
+                look = numbers
+                i += 5
+            case "--pick":
+                guard i + 2 < values.count, let x = Double(values[i + 1]), let y = Double(values[i + 2]) else { usage(usageText) }
+                pick = CGPoint(x: x, y: y)
+                i += 2
+            default: usage(usageText)
+            }
+            i += 1
+        }
+        let db = NSTemporaryDirectory() + "end-editor-map-snapshot.sqlite"
+        guard end_editor_initialize(db), let reader = StoreReader(path: String(cString: end_editor_db_path())) else { exit(1) }
+        let started = Date()
+        for command in ["game.open\t" + values[0] + "\t" + values[1], "map.open\t" + values[2]] {
+            let result = String(cString: end_editor_send(command))
+            guard result.isEmpty else { print("\(command): \(result)"); exit(1) }
+            end_editor_update()
+        }
+        let opened = Date()
+        while end_editor_pending_work() > 0 { end_editor_update() }
+        guard let header = reader.mapHeader(), header.state == "ready" else {
+            print("map: \(reader.mapHeader()?.state ?? "?") \(reader.mapHeader()?.message ?? "")")
+            exit(1)
+        }
+        let scene = reader.mapScene()
+        let models = reader.mapModels(after: 0)
+        let textures = reader.mapModelTextures(after: 0).1
+        print("map: \(header.name): \(header.message)")
+        print(String(format: "timing: game + map %.2f s, models %.2f s", opened.timeIntervalSince(started),
+                     Date().timeIntervalSince(opened)))
+        print("models: \(models.filter(\.ready).count) of \(models.count) ready, \(textures.count) textures")
+        for warning in reader.mapWarnings() { print("warning: \(warning)") }
+
+        let state = MapViewState()
+        guard let renderer = MapRenderer(state: state) else { print("no Metal"); exit(1) }
+        renderer.show(scene)
+        renderer.add(models: models, textures: textures)
+        if top { state.frame(scene, top: true) }
+        if let look {
+            state.target = SIMD3(look[0], look[1], scene.groundHeight(x: look[0], y: look[1]))
+            state.distance = look[2]
+            state.yaw = look[3] * .pi / 180
+            state.pitch = look[4] * .pi / 180
+        }
+        if let pick {
+            let size = CGSize(width: width, height: height)
+            if let id = renderer.pick(at: pick, size: size), let object = scene.objects.first(where: { $0.id == id }) {
+                renderer.selected = id
+                print("pick: #\(id) \(object.templateName) (\(object.kind)) at \(object.position)")
+                for property in reader.mapObjectProperties(of: id) {
+                    print("   \(property.key) (\(property.type)) = \(property.value)")
+                }
+            } else {
+                print("pick: nothing")
+            }
+        }
+        guard let image = renderer.renderImage(width: width, height: height),
+              let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: values[3]) as CFURL,
+                                                                "public.png" as CFString, 1, nil) else { exit(1) }
+        CGImageDestinationAddImage(destination, image, nil)
+        exit(CGImageDestinationFinalize(destination) ? 0 : 1)
     }
 
     private static func usage(_ text: String) -> Never {

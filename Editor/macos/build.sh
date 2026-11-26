@@ -18,8 +18,8 @@ mkdir -p "$APP/Contents/MacOS"
 swiftc -O -parse-as-library \
     -import-objc-header "$HERE/bridge.h" \
     -I "$HERE/../core/include" \
-    "$HERE/Main.swift" "$HERE/ModelPreview.swift" "$HERE/GifExport.swift" \
-    -L "$CORE_BUILD/lib" -lend_editor_core -lsqlite3 -lc++ \
+    "$HERE/Main.swift" "$HERE/ModelPreview.swift" "$HERE/GifExport.swift" "$HERE/MapView.swift" \
+    -L "$CORE_BUILD/lib" -lend_editor_core -lsqlite3 -lz -lc++ \
     -o "$APP/Contents/MacOS/END Editor"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
