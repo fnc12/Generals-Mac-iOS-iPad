@@ -3845,6 +3845,19 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
 
+	// While a pillarboxed frame is in flight, "the default target" is the offscreen
+	// game-resolution surface, not the swapchain backbuffer. Mid-frame RTT passes
+	// (water reflections, texture projectors) restore the default when done; sending
+	// them to the real backbuffer made everything drawn afterwards (terrain included)
+	// land outside the offscreen image and get wiped by the Pillarbox_End blit.
+	if (s_pillarboxActive && s_offscreenSurf && s_depthSurf &&
+		(render_target == nullptr || render_target == DefaultRenderTarget))
+	{
+		Set_Render_Target(s_offscreenSurf, s_depthSurf);
+		IsRenderToTexture = false;
+		return;
+	}
+
 	//
 	//	Should we restore the default render target set a new one?
 	//
@@ -3970,6 +3983,19 @@ void DX8Wrapper::Set_Render_Target
 {
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
+
+	// While a pillarboxed frame is in flight, "the default target" is the offscreen
+	// game-resolution surface, not the swapchain backbuffer. Mid-frame RTT passes
+	// (water reflections, texture projectors) restore the default when done; sending
+	// them to the real backbuffer made everything drawn afterwards (terrain included)
+	// land outside the offscreen image and get wiped by the Pillarbox_End blit.
+	if (s_pillarboxActive && s_offscreenSurf && s_depthSurf &&
+		(render_target == nullptr || render_target == DefaultRenderTarget))
+	{
+		Set_Render_Target(s_offscreenSurf, s_depthSurf);
+		IsRenderToTexture = false;
+		return;
+	}
 
 	//
 	//	Should we restore the default render target set a new one?
