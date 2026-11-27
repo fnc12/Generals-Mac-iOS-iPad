@@ -104,7 +104,9 @@ namespace {
         }
     }
 
-    // The first row of a select, if there is one.
+    // The one row a select asks for, if it exists. sqlite_orm's iterate() steps lazily, so this is a
+    // single sqlite3_step; still, every call states in the query itself that it wants one row: the
+    // primary key (the map and model tables hold one row, id 1), limit(1), or an aggregate.
     template<class Select>
     auto first(Select expression) {
         using Row = std::remove_cvref_t<decltype(*db->iterate(expression).begin())>;
@@ -115,15 +117,16 @@ namespace {
     }
 
     std::string savedPath() {
-        return first(select(&MapRow::savedPath)).value_or("");
+        return first(select(&MapRow::savedPath, where(c(&MapRow::id) == 1))).value_or("");
     }
     std::string editMessage() {
-        return first(select(&MapRow::editMessage)).value_or("");
+        return first(select(&MapRow::editMessage, where(c(&MapRow::id) == 1))).value_or("");
     }
     // The middle of the open map's playable area.
     std::pair<double, double> playableMiddle() {
         const auto area =
-            first(select(columns(&MapRow::playableX0, &MapRow::playableY0, &MapRow::playableX1, &MapRow::playableY1)));
+            first(select(columns(&MapRow::playableX0, &MapRow::playableY0, &MapRow::playableX1, &MapRow::playableY1),
+                         where(c(&MapRow::id) == 1)));
         if (!area) {
             return {0, 0};
         }
@@ -301,8 +304,9 @@ int main(int argc, char** argv) {
         int ready = 0, withAnimations = 0, untextured = 0;
         for (const auto& model: models) {
             send("model.open\t" + model);
-            const auto [state, message] = first(select(columns(&ModelRow::state, &ModelRow::message)))
-                                              .value_or(std::tuple<std::string, std::string>());
+            const auto [state, message] =
+                first(select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1)))
+                    .value_or(std::tuple<std::string, std::string>());
             if (state.rfind("ready", 0) == 0) {
                 ++ready;
                 withAnimations += db->count<ModelAnimationRow>() != 0;
@@ -395,8 +399,9 @@ int main(int argc, char** argv) {
         std::vector<std::string> failed;
         for (const auto& path: paths) {
             send("map.open\t" + path);
-            const auto [state, message] = first(select(columns(&MapRow::state, &MapRow::message)))
-                                              .value_or(std::tuple<std::string, std::string>());
+            const auto [state, message] =
+                first(select(columns(&MapRow::state, &MapRow::message), where(c(&MapRow::id) == 1)))
+                    .value_or(std::tuple<std::string, std::string>());
             if (state.rfind("ready", 0) == 0) {
                 ++ready;
                 for (const auto& [kind, objects]:
@@ -666,7 +671,7 @@ int main(int argc, char** argv) {
             while (end_editor_pending_work() > 0) {
                 end_editor_update();
             }
-            if (first(select(&MapRow::state)).value_or("") != "ready") {
+            if (first(select(&MapRow::state, where(c(&MapRow::id) == 1))).value_or("") != "ready") {
                 std::printf("PLAYMAP\t%d\t%s\t-\t-\t0\n", index, path.c_str());
                 continue;
             }
