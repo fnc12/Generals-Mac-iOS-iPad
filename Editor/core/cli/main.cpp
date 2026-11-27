@@ -104,29 +104,27 @@ namespace {
         }
     }
 
-    // The one row a select asks for, if it exists. sqlite_orm's iterate() steps lazily, so this is a
-    // single sqlite3_step; still, every call states in the query itself that it wants one row: the
-    // primary key (the map and model tables hold one row, id 1), limit(1), or an aggregate.
-    template<class Select>
-    auto first(Select expression) {
-        using Row = std::remove_cvref_t<decltype(*db->iterate(expression).begin())>;
-        for (auto&& row: db->iterate(std::move(expression))) {
-            return std::optional<Row>(std::move(row));
+    // The row of a select that asks for one (limit(1)), if there is one.
+    template<class T>
+    std::optional<T> front(std::vector<T> rows) {
+        if (rows.empty()) {
+            return std::nullopt;
         }
-        return std::optional<Row>();
+        return std::move(rows.front());
     }
 
     std::string savedPath() {
-        return first(select(&MapRow::savedPath, where(c(&MapRow::id) == 1))).value_or("");
+        return front(db->select(&MapRow::savedPath, where(c(&MapRow::id) == 1), limit(1))).value_or("");
     }
     std::string editMessage() {
-        return first(select(&MapRow::editMessage, where(c(&MapRow::id) == 1))).value_or("");
+        return front(db->select(&MapRow::editMessage, where(c(&MapRow::id) == 1), limit(1))).value_or("");
     }
     // The middle of the open map's playable area.
     std::pair<double, double> playableMiddle() {
-        const auto area =
-            first(select(columns(&MapRow::playableX0, &MapRow::playableY0, &MapRow::playableX1, &MapRow::playableY1),
-                         where(c(&MapRow::id) == 1)));
+        const auto area = front(
+            db->select(columns(&MapRow::playableX0, &MapRow::playableY0, &MapRow::playableX1, &MapRow::playableY1),
+                       where(c(&MapRow::id) == 1),
+                       limit(1)));
         if (!area) {
             return {0, 0};
         }
@@ -135,13 +133,15 @@ namespace {
     }
     // The team a placed object gets: the neutral player's, else the first player's.
     std::optional<std::string> firstTeam() {
-        return first(select(&MapPlayerRow::team,
-                            multi_order_by(order_by(&MapPlayerRow::neutral).desc(), order_by(&MapPlayerRow::id)),
-                            limit(1)));
+        return front(db->select(&MapPlayerRow::team,
+                                multi_order_by(order_by(&MapPlayerRow::neutral).desc(), order_by(&MapPlayerRow::id)),
+                                limit(1)));
     }
     std::optional<std::string> firstRoad() {
-        return first(
-            select(&RoadTypeRow::name, where(c(&RoadTypeRow::bridge) == false), order_by(&RoadTypeRow::id), limit(1)));
+        return front(db->select(&RoadTypeRow::name,
+                                where(c(&RoadTypeRow::bridge) == false),
+                                order_by(&RoadTypeRow::id),
+                                limit(1)));
     }
     // Map paths in path order, those with `only` in them (all when it is empty). Read into a list
     // before the maps are opened: a statement left open while the core writes would keep its
@@ -240,9 +240,9 @@ int main(int argc, char** argv) {
     std::string openCommand = modelName.empty() ? "" : "model.open\t" + modelName;
     if (!objectName.empty()) {
         const auto row =
-            first(select(columns(&ObjectRow::model, &ObjectRow::muzzleFlashes, &ObjectRow::hiddenSubObjects),
-                         where(c(&ObjectRow::name) == objectName),
-                         limit(1)));
+            front(db->select(columns(&ObjectRow::model, &ObjectRow::muzzleFlashes, &ObjectRow::hiddenSubObjects),
+                             where(c(&ObjectRow::name) == objectName),
+                             limit(1)));
         if (!row) {
             std::fprintf(stderr, "no object %s\n", objectName.c_str());
             return 1;
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
         for (const auto& model: models) {
             send("model.open\t" + model);
             const auto [state, message] =
-                first(select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1)))
+                front(db->select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1), limit(1)))
                     .value_or(std::tuple<std::string, std::string>());
             if (state.rfind("ready", 0) == 0) {
                 ++ready;
@@ -399,7 +399,7 @@ int main(int argc, char** argv) {
         for (const auto& path: paths) {
             send("map.open\t" + path);
             const auto [state, message] =
-                first(select(columns(&MapRow::state, &MapRow::message), where(c(&MapRow::id) == 1)))
+                front(db->select(columns(&MapRow::state, &MapRow::message), where(c(&MapRow::id) == 1), limit(1)))
                     .value_or(std::tuple<std::string, std::string>());
             if (state.rfind("ready", 0) == 0) {
                 ++ready;
@@ -407,13 +407,12 @@ int main(int argc, char** argv) {
                      db->iterate(select(columns(&MapObjectRow::kind, count()), group_by(&MapObjectRow::kind)))) {
                     kinds[kind] += objects;
                 }
-                // from<>() is needed: count<MapObjectRow>(where(...)) would put the subquery's table
-                // into the FROM clause too (sqlite_orm 1.9.1), counting a cross join.
-                unknownTemplates += first(select(count(),
-                                                 from<MapObjectRow>(),
-                                                 where(c(&MapObjectRow::kind) == "marker" and
-                                                       not_in(&MapObjectRow::templateName, select(&ObjectRow::name)))))
-                                        .value_or(0);
+                // from<>(): without it the FROM lists every table the query names, the subquery's too.
+                unknownTemplates += db->select(count(),
+                                               from<MapObjectRow>(),
+                                               where(c(&MapObjectRow::kind) == "marker" and
+                                                     not_in(&MapObjectRow::templateName, select(&ObjectRow::name))))
+                                        .front();
                 bool warned = false;
                 for (const auto& warning: db->iterate(select(&MapWarningRow::text))) {
                     warned = true;
@@ -485,10 +484,11 @@ int main(int argc, char** argv) {
     if (!editDir.empty()) {
         std::filesystem::create_directories(editDir);
         const auto out = (std::filesystem::path(editDir) / "edited.map").string();
-        const auto placed = first(select(&ObjectRow::name,
-                                         where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%")),
-                                         order_by(&ObjectRow::name),
-                                         limit(1)));
+        const auto placed =
+            front(db->select(&ObjectRow::name,
+                             where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%")),
+                             order_by(&ObjectRow::name),
+                             limit(1)));
         const auto paths = mapPaths(onlyMaps);
         int good = 0;
         const auto wait = [&]() {
@@ -530,16 +530,17 @@ int main(int argc, char** argv) {
             // road point goes; one object is placed in the middle of the map, a second one is
             // placed, undone and redone, a third is placed and undone.
             const auto position =
-                first(select(columns(&MapObjectRow::x, &MapObjectRow::y), where(c(&MapObjectRow::id) == 1)))
+                front(
+                    db->select(columns(&MapObjectRow::x, &MapObjectRow::y), where(c(&MapObjectRow::id) == 1), limit(1)))
                     .value_or(std::tuple<double, double>());
             const double x1 = std::get<0>(position) + 10;
             const double y1 = std::get<1>(position) + 20;
             const auto [cx, cy] = playableMiddle();
             // Not a road point: one of those takes the other end of its segment along.
             const auto removedId =
-                first(select(min(&MapObjectRow::id),
-                             where(c(&MapObjectRow::id) >= 3 and not_in(&MapObjectRow::kind, {"road", "bridge"}))));
-            const auto removed = removedId && *removedId ? std::to_string(**removedId) : std::string();
+                db->min(&MapObjectRow::id,
+                        where(c(&MapObjectRow::id) >= 3 and not_in(&MapObjectRow::kind, {"road", "bridge"})));
+            const auto removed = removedId ? std::to_string(*removedId) : std::string();
             const std::string owner = team.value_or("");
             for (const auto& command: std::vector<std::string>{
                      "map.move\t1\t" + at(x1) + "\t" + at(y1),
@@ -562,9 +563,9 @@ int main(int argc, char** argv) {
             const int edited = db->count<MapObjectRow>();
             const int healthBefore = health();  // a removed road point takes its partner along
             const auto middle =
-                first(select(&MapObjectRow::id,
-                             where(abs(c(&MapObjectRow::x) - cx) < 0.01 and abs(c(&MapObjectRow::y) - cy) < 0.01),
-                             limit(1)));
+                front(db->select(&MapObjectRow::id,
+                                 where(abs(c(&MapObjectRow::x) - cx) < 0.01 and abs(c(&MapObjectRow::y) - cy) < 0.01),
+                                 limit(1)));
             std::vector<std::string> commands{"selection.set\t" + (middle ? std::to_string(*middle) : std::string("0")),
                                               "selection.height\t15",
                                               "selection.property\tobjectInitialHealth\tint\t50",
@@ -645,12 +646,12 @@ int main(int argc, char** argv) {
             return std::to_string(v);
         };
         // A ground vehicle both games have, else the first one there is.
-        const auto vehicle = first(
-            select(&ObjectRow::name,
-                   where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%") and
-                         not like(&ObjectRow::kindOf, "%AIRCRAFT%")),
-                   multi_order_by(order_by(c(&ObjectRow::name) != "AmericaTankCrusader"), order_by(&ObjectRow::name)),
-                   limit(1)));
+        const auto vehicle = front(db->select(
+            &ObjectRow::name,
+            where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%") and
+                  not like(&ObjectRow::kindOf, "%AIRCRAFT%")),
+            multi_order_by(order_by(c(&ObjectRow::name) != "AmericaTankCrusader"), order_by(&ObjectRow::name)),
+            limit(1)));
         const auto paths = mapPaths(onlyMaps, where(c(&MapListRow::source) != "User maps"));
         int index = 0;
         for (const auto& path: paths) {
@@ -667,7 +668,7 @@ int main(int argc, char** argv) {
             while (end_editor_pending_work() > 0) {
                 end_editor_update();
             }
-            if (first(select(&MapRow::state, where(c(&MapRow::id) == 1))).value_or("") != "ready") {
+            if (front(db->select(&MapRow::state, where(c(&MapRow::id) == 1), limit(1))).value_or("") != "ready") {
                 std::printf("PLAYMAP\t%d\t%s\t-\t-\t0\n", index, path.c_str());
                 continue;
             }
@@ -676,8 +677,9 @@ int main(int argc, char** argv) {
             const auto team = firstTeam();
             const auto road = firstRoad();
             std::vector<std::string> commands;
-            const auto objectOne = first(select(columns(&MapObjectRow::x, &MapObjectRow::y, &MapObjectRow::kind),
-                                                where(c(&MapObjectRow::id) == 1)));
+            const auto objectOne = front(db->select(columns(&MapObjectRow::x, &MapObjectRow::y, &MapObjectRow::kind),
+                                                    where(c(&MapObjectRow::id) == 1),
+                                                    limit(1)));
             if (objectOne && std::get<2>(*objectOne) == "model") {
                 commands.push_back("map.move\t1\t" + at(std::get<0>(*objectOne) + 10) + "\t" +
                                    at(std::get<1>(*objectOne) + 10));
