@@ -22,45 +22,133 @@
 
 #include "compression.h"
 #include "game_files.h"
-
-#include <sqlite3.h>
+#include "storage.h"
 
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace {
-    sqlite3 *db = nullptr;
+    using namespace end_editor;
+    using namespace sqlite_orm;
 
-    void print(const char *sql) {
-        sqlite3_stmt *statement = nullptr;
-        sqlite3_prepare_v2(db, sql, -1, &statement, nullptr);
-        while(sqlite3_step(statement) == SQLITE_ROW) {
-            const int columns = sqlite3_column_count(statement);
-            for(int i = 0; i < columns; ++i) {
-                const auto *text = sqlite3_column_text(statement, i);
-                std::printf("%s%s", i ? " | " : "", text ? reinterpret_cast<const char *>(text) : "");
-            }
-            std::printf("\n");
+    // The store, read like a client reads it: its own connection, never written (sync_schema is
+    // not called; sqlite_orm 1.9.1 opens every connection read-write).
+    std::optional<Storage> db;
+
+    // Values printed the way SQLite turns them into text.
+    void put(const std::string &value) {
+        std::fputs(value.c_str(), stdout);
+    }
+    void put(bool value) {
+        std::fputs(value ? "1" : "0", stdout);
+    }
+    void put(double value) {
+        // SQLite's "%!.15g": a REAL always shows a decimal point.
+        char text[40];
+        std::snprintf(text, sizeof(text), "%.15g", value);
+        std::string_view view(text);
+        if(view.find_first_of(".ein") == std::string_view::npos) {
+            std::printf("%s.0", text);
+        } else if(const auto e = view.find('e'); e != std::string_view::npos && view.find('.') == std::string_view::npos) {
+            std::printf("%.*s.0%s", int(e), text, text + e);
+        } else {
+            std::fputs(text, stdout);
         }
-        sqlite3_finalize(statement);
+    }
+    template<class T, std::enable_if_t<std::is_integral_v<T>, bool> = true>
+    void put(T value) {
+        std::printf("%lld", static_cast<long long>(value));
+    }
+    template<class T>
+    void put(const std::unique_ptr<T> &value) {  // NULL prints nothing
+        if(value) {
+            put(*value);
+        }
     }
 
-    std::vector<std::string> column(const char *sql) {
-        std::vector<std::string> result;
-        sqlite3_stmt *statement = nullptr;
-        sqlite3_prepare_v2(db, sql, -1, &statement, nullptr);
-        while(sqlite3_step(statement) == SQLITE_ROW) {
-            const auto *text = sqlite3_column_text(statement, 0);
-            result.emplace_back(text ? reinterpret_cast<const char *>(text) : "");
+    template<class... T>
+    void printRow(const T &...values) {
+        bool first = true;
+        ((std::fputs(first ? "" : " | ", stdout), first = false, put(values)), ...);
+        std::fputs("\n", stdout);
+    }
+
+    template<class T>
+    struct IsTuple : std::false_type {};
+    template<class... T>
+    struct IsTuple<std::tuple<T...>> : std::true_type {};
+
+    // Prints every row of a select, one line per row, columns separated by " | ".
+    template<class Select>
+    void print(Select expression) {
+        for(auto &&row: db->iterate(std::move(expression))) {
+            if constexpr(IsTuple<std::remove_cvref_t<decltype(row)>>::value) {
+                std::apply([](const auto &...values) { printRow(values...); }, row);
+            } else {
+                printRow(row);
+            }
         }
-        sqlite3_finalize(statement);
-        return result;
+    }
+
+    // The first row of a select, if there is one.
+    template<class Select>
+    auto first(Select expression) {
+        using Row = std::remove_cvref_t<decltype(*db->iterate(expression).begin())>;
+        for(auto &&row: db->iterate(std::move(expression))) {
+            return std::optional<Row>(std::move(row));
+        }
+        return std::optional<Row>();
+    }
+
+    std::string savedPath() {
+        return first(select(&MapRow::savedPath)).value_or("");
+    }
+    std::string editMessage() {
+        return first(select(&MapRow::editMessage)).value_or("");
+    }
+    // The middle of the open map's playable area.
+    std::pair<double, double> playableMiddle() {
+        const auto area =
+            first(select(columns(&MapRow::playableX0, &MapRow::playableY0, &MapRow::playableX1, &MapRow::playableY1)));
+        if(!area) {
+            return {0, 0};
+        }
+        const auto &[x0, y0, x1, y1] = *area;
+        return {(x0 + x1) / 2, (y0 + y1) / 2};
+    }
+    // The team a placed object gets: the neutral player's, else the first player's.
+    std::optional<std::string> firstTeam() {
+        return first(select(&MapPlayerRow::team,
+                            multi_order_by(order_by(&MapPlayerRow::neutral).desc(), order_by(&MapPlayerRow::id)),
+                            limit(1)));
+    }
+    std::optional<std::string> firstRoad() {
+        return first(select(&RoadTypeRow::name,
+                            where(c(&RoadTypeRow::bridge) == false),
+                            order_by(&RoadTypeRow::id),
+                            limit(1)));
+    }
+    // Map paths in path order, those with `only` in them (all when it is empty). Read into a list
+    // before the maps are opened: a statement left open while the core writes would keep its
+    // connection on the old snapshot (and hold back the WAL checkpoint).
+    template<class... Conditions>
+    std::vector<std::string> mapPaths(const std::string &only, Conditions... conditions) {
+        std::vector<std::string> paths;
+        for(auto &&path: db->iterate(select(&MapListRow::path, conditions..., order_by(&MapListRow::path)))) {
+            if(path.find(only) != std::string::npos) {
+                paths.push_back(std::move(path));
+            }
+        }
+        return paths;
     }
 
     bool send(const std::string &command) {
@@ -120,8 +208,11 @@ int main(int argc, char **argv) {
     }
     const std::string dbPath = end_editor_db_path();
     // Read the store like a client would, with its own connection.
-    if(sqlite3_open_v2(dbPath.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
-        std::fprintf(stderr, "cannot read %s\n", dbPath.c_str());
+    try {
+        db.emplace(makeStorage(dbPath));
+        db->open_forever();
+    } catch(const std::system_error &error) {
+        std::fprintf(stderr, "cannot read %s: %s\n", dbPath.c_str(), error.what());
         return 1;
     }
 
@@ -129,24 +220,30 @@ int main(int argc, char **argv) {
         return 1;
     }
     std::printf("store: %s\n", dbPath.c_str());
-    print("SELECT state, message FROM status");
+    print(select(columns(&StatusRow::state, &StatusRow::message)));
     std::printf("-- objects per side\n");
-    print("SELECT side, COUNT(*) FROM objects GROUP BY side ORDER BY COUNT(*) DESC LIMIT 10");
+    print(select(columns(&ObjectRow::side, count()),
+                 group_by(&ObjectRow::side),
+                 order_by(count()).desc(),
+                 limit(10)));
     std::printf("-- playable factions (play.faction)\n");
-    print("SELECT name, side FROM factions ORDER BY id");
+    print(select(columns(&FactionRow::name, &FactionRow::side), order_by(&FactionRow::id)));
     std::printf("-- warnings (first 20)\n");
-    print("SELECT text FROM warnings LIMIT 20");
+    print(select(&WarningRow::text, limit(20)));
 
     std::string openCommand = modelName.empty() ? "" : "model.open\t" + modelName;
     if(!objectName.empty()) {
-        const auto row = column(("SELECT model || char(9) || muzzle_flashes || char(9) || hidden_sub_objects FROM objects "
-                                 "WHERE name = '" + objectName + "'").c_str());
-        if(row.empty()) {
+        const auto row = first(select(columns(&ObjectRow::model, &ObjectRow::muzzleFlashes, &ObjectRow::hiddenSubObjects),
+                                      where(c(&ObjectRow::name) == objectName),
+                                      limit(1)));
+        if(!row) {
             std::fprintf(stderr, "no object %s\n", objectName.c_str());
             return 1;
         }
-        openCommand = "model.open\t" + row.front();
-        std::printf("-- object %s: %s\n", objectName.c_str(), row.front().c_str());
+        const auto &[model, muzzleFlashes, hidden] = *row;
+        const auto request = model + "\t" + muzzleFlashes + "\t" + hidden;
+        openCommand = "model.open\t" + request;
+        std::printf("-- object %s: %s\n", objectName.c_str(), request.c_str());
     }
     if(!openCommand.empty()) {
         send(openCommand);
@@ -154,31 +251,59 @@ int main(int argc, char **argv) {
             send("model.animation\t" + animation);
         }
         std::printf("-- model\n");
-        print("SELECT name, state, message, bone_count, animation, frame_count, frame_rate, length(pose), "
-              "min_x, min_y, min_z, max_x, max_y, max_z FROM model");
+        print(select(columns(&ModelRow::name,
+                             &ModelRow::state,
+                             &ModelRow::message,
+                             &ModelRow::boneCount,
+                             &ModelRow::animation,
+                             &ModelRow::frameCount,
+                             &ModelRow::frameRate,
+                             length(&ModelRow::pose),
+                             &ModelRow::minX,
+                             &ModelRow::minY,
+                             &ModelRow::minZ,
+                             &ModelRow::maxX,
+                             &ModelRow::maxY,
+                             &ModelRow::maxZ)));
         std::printf("-- parts\n");
-        print("SELECT mesh, texture, bone, skinned, hidden, blend, house_color, length(vertices) / 36, length(indices) / 12 "
-              "FROM model_parts");
+        for(const auto &[mesh, texture, bone, skinned, hidden, blend, houseColor, vertexBytes, indexBytes]:
+            db->iterate(select(columns(&ModelPartRow::mesh,
+                                       &ModelPartRow::texture,
+                                       &ModelPartRow::bone,
+                                       &ModelPartRow::skinned,
+                                       &ModelPartRow::hidden,
+                                       &ModelPartRow::blend,
+                                       &ModelPartRow::houseColor,
+                                       length(&ModelPartRow::vertices),
+                                       length(&ModelPartRow::indices))))) {
+            printRow(mesh, texture, bone, skinned, hidden, blend, houseColor, vertexBytes / 36, indexBytes / 12);
+        }
         std::printf("-- textures\n");
-        print("SELECT name, width, height FROM model_textures");
+        print(select(columns(&ModelTextureRow::name, &ModelTextureRow::width, &ModelTextureRow::height)));
         std::printf("-- animations\n");
-        print("SELECT name, frame_count, frame_rate FROM model_animations");
+        print(select(columns(&ModelAnimationRow::name, &ModelAnimationRow::frameCount, &ModelAnimationRow::frameRate)));
     }
 
     if(allModels) {
-        const auto models = column("SELECT DISTINCT model FROM objects WHERE model <> '' ORDER BY model");
+        // Read into a list before the models are opened (see mapPaths()).
+        std::vector<std::string> models;
+        for(auto &&model: db->iterate(select(distinct(&ObjectRow::model),
+                                             where(c(&ObjectRow::model) != ""),
+                                             order_by(&ObjectRow::model)))) {
+            models.push_back(std::move(model));
+        }
         std::map<std::string, int> errors;
         std::vector<std::string> failed;
         int ready = 0, withAnimations = 0, untextured = 0;
         for(const auto &model: models) {
             send("model.open\t" + model);
-            const auto state = column("SELECT state || '|' || message FROM model").front();
+            const auto [state, message] =
+                first(select(columns(&ModelRow::state, &ModelRow::message))).value_or(std::tuple<std::string, std::string>());
             if(state.rfind("ready", 0) == 0) {
                 ++ready;
-                withAnimations += column("SELECT COUNT(*) FROM model_animations").front() != "0";
-                untextured += column("SELECT COUNT(*) FROM model_textures").front() == "0";
+                withAnimations += db->count<ModelAnimationRow>() != 0;
+                untextured += db->count<ModelTextureRow>() == 0;
             } else {
-                const auto message = state.substr(state.find('|') + 1);
                 ++errors[message.substr(0, message.find(' ', message.find(' ') + 1))];
                 failed.push_back(model);
             }
@@ -200,25 +325,53 @@ int main(int argc, char **argv) {
             end_editor_update();
         }
         std::printf("-- map\n");
-        print("SELECT name, state, message, width, height, border, playable_x1, playable_y1, time_of_day, "
-              "models_loaded || '/' || model_count FROM map");
+        for(const auto &[name, state, message, width, height, border, x1, y1, timeOfDay, loaded, models]:
+            db->iterate(select(columns(&MapRow::name,
+                                       &MapRow::state,
+                                       &MapRow::message,
+                                       &MapRow::width,
+                                       &MapRow::height,
+                                       &MapRow::border,
+                                       &MapRow::playableX1,
+                                       &MapRow::playableY1,
+                                       &MapRow::timeOfDay,
+                                       &MapRow::modelsLoaded,
+                                       &MapRow::modelCount)))) {
+            printRow(name, state, message, width, height, border, x1, y1, timeOfDay,
+                     std::to_string(loaded) + "/" + std::to_string(models));
+        }
         std::printf("-- map warnings\n");
-        print("SELECT text FROM map_warnings");
+        print(select(&MapWarningRow::text));
         std::printf("-- objects by kind\n");
-        print("SELECT kind, COUNT(*) FROM map_objects GROUP BY kind");
+        print(select(columns(&MapObjectRow::kind, count()), group_by(&MapObjectRow::kind)));
         std::printf("-- models: state, count\n");
-        print("SELECT state, COUNT(*) FROM map_models GROUP BY state");
-        print("SELECT 'failed: ' || name || ': ' || message FROM map_models WHERE state <> 'ready' LIMIT 20");
+        print(select(columns(&MapModelRow::state, count()), group_by(&MapModelRow::state)));
+        for(const auto &[name, message]: db->iterate(select(columns(&MapModelRow::name, &MapModelRow::message),
+                                                            where(c(&MapModelRow::state) != "ready"),
+                                                            limit(20)))) {
+            std::printf("failed: %s: %s\n", name.c_str(), message.c_str());
+        }
         std::printf("-- terrain chunks, vertices, textures\n");
-        print("SELECT COUNT(*), SUM(length(vertices)) / 56 FROM map_terrain");
-        print("SELECT name, width, height FROM map_textures");
-        print("SELECT COUNT(*), SUM(width * height * 4) FROM map_model_textures");
+        for(const auto &[chunks, vertexBytes]:
+            db->iterate(select(columns(count(), sum(length(&MapTerrainRow::vertices)))))) {
+            printRow(chunks, vertexBytes ? std::to_string(std::int64_t(*vertexBytes) / 56) : std::string());
+        }
+        print(select(columns(&MapTextureRow::name, &MapTextureRow::width, &MapTextureRow::height)));
+        for(const auto &[textures, bytes]: db->iterate(select(columns(
+                count(),
+                sum(c(&MapModelTextureRow::width) * &MapModelTextureRow::height * 4))))) {
+            printRow(textures, bytes ? std::to_string(std::int64_t(*bytes)) : std::string());
+        }
         std::printf("-- water\n");
-        print("SELECT name, river, height, length(indices) / 12 FROM map_water");
+        for(const auto &[name, river, height, indexBytes]:
+            db->iterate(select(columns(&MapWaterRow::name, &MapWaterRow::river, &MapWaterRow::height,
+                                       length(&MapWaterRow::indices))))) {
+            printRow(name, river, height, indexBytes / 12);
+        }
     }
 
     if(allMaps) {
-        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        const auto paths = mapPaths("");
         int ready = 0, clean = 0;
         std::map<std::string, int> warningKinds;
         std::map<std::string, long> kinds;
@@ -226,22 +379,30 @@ int main(int argc, char **argv) {
         std::vector<std::string> failed;
         for(const auto &path: paths) {
             send("map.open\t" + path);
-            const auto state = column("SELECT state || '|' || message FROM map").front();
+            const auto [state, message] =
+                first(select(columns(&MapRow::state, &MapRow::message))).value_or(std::tuple<std::string, std::string>());
             if(state.rfind("ready", 0) == 0) {
                 ++ready;
-                for(const auto &row: column("SELECT kind || '|' || COUNT(*) FROM map_objects GROUP BY kind")) {
-                    kinds[row.substr(0, row.find('|'))] += std::stol(row.substr(row.find('|') + 1));
+                for(const auto &[kind, objects]:
+                    db->iterate(select(columns(&MapObjectRow::kind, count()), group_by(&MapObjectRow::kind)))) {
+                    kinds[kind] += objects;
                 }
-                unknownTemplates += std::stol(column("SELECT COUNT(*) FROM map_objects WHERE kind = 'marker' AND "
-                                                     "template_name NOT IN (SELECT name FROM objects)").front());
-                const auto warnings = column("SELECT text FROM map_warnings");
-                clean += warnings.empty();
-                for(const auto &warning: warnings) {
+                // from<>() is needed: count<MapObjectRow>(where(...)) would put the subquery's table
+                // into the FROM clause too (sqlite_orm 1.9.1), counting a cross join.
+                unknownTemplates += first(select(count(),
+                                                 from<MapObjectRow>(),
+                                                 where(c(&MapObjectRow::kind) == "marker" and
+                                                       not_in(&MapObjectRow::templateName, select(&ObjectRow::name)))))
+                                        .value_or(0);
+                bool warned = false;
+                for(const auto &warning: db->iterate(select(&MapWarningRow::text))) {
+                    warned = true;
                     ++warningKinds[warning.substr(0, warning.find(':'))];
                     std::printf("   %s: %s\n", path.c_str(), warning.c_str());
                 }
+                clean += !warned;
             } else {
-                failed.push_back(path + ": " + state);
+                failed.push_back(path + ": " + state + "|" + message);
             }
         }
         std::printf("-- all maps: %zu, ready %d, without warnings %d\n", paths.size(), ready, clean);
@@ -267,23 +428,22 @@ int main(int argc, char **argv) {
         }
         files.mount(folders, warnings, error);
         std::filesystem::create_directories(roundTripDir);
-        const auto paths = column("SELECT path FROM maps ORDER BY path");
+        const auto paths = mapPaths("");
+        const auto out = (std::filesystem::path(roundTripDir) / "roundtrip.map").string();
         int identical = 0;
+        std::string packed, original, saved;
         for(const auto &path: paths) {
-            std::string packed, original;
             if(!files.read(path, packed) || !end_editor::decompressGameData(packed, original, error)) {
                 std::printf("   %s: cannot read the original\n", path.c_str());
                 continue;
             }
-            const auto out = (std::filesystem::path(roundTripDir) / "roundtrip.map").string();
             send("map.open\t" + path);
             send("map.save\t" + out);
-            while(column("SELECT saved_path FROM map").front() != out && end_editor_pending_work() > 0 &&
-                  column("SELECT edit_message FROM map").front().rfind("error", 0) != 0) {
+            while(savedPath() != out && end_editor_pending_work() > 0 && editMessage().rfind("error", 0) != 0) {
                 end_editor_update();
             }
             std::ifstream file(out, std::ios::binary);
-            const std::string saved((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            saved.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
             if(saved == original) {
                 ++identical;
                 continue;
@@ -293,7 +453,7 @@ int main(int argc, char **argv) {
                 ++at;
             }
             std::printf("   %s: differs at byte %zu (saved %zu bytes, original %zu): %s\n", path.c_str(), at,
-                        saved.size(), original.size(), column("SELECT edit_message FROM map").front().c_str());
+                        saved.size(), original.size(), editMessage().c_str());
         }
         std::printf("-- round trip: %d of %zu maps saved byte for byte as they were\n", identical, paths.size());
     }
@@ -301,54 +461,61 @@ int main(int argc, char **argv) {
     if(!editDir.empty()) {
         std::filesystem::create_directories(editDir);
         const auto out = (std::filesystem::path(editDir) / "edited.map").string();
-        const auto placed = column("SELECT name FROM objects WHERE model <> '' AND kind_of LIKE '%VEHICLE%' "
-                                   "ORDER BY name LIMIT 1");
-        auto paths = column("SELECT path FROM maps ORDER BY path");
-        if(!onlyMaps.empty()) {
-            std::erase_if(paths, [&](const std::string &path) { return path.find(onlyMaps) == std::string::npos; });
-        }
+        const auto placed = first(select(&ObjectRow::name,
+                                         where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%")),
+                                         order_by(&ObjectRow::name),
+                                         limit(1)));
+        const auto paths = mapPaths(onlyMaps);
         int good = 0;
-        const auto number = [&](const std::string &sql) {
-            const auto values = column(sql.c_str());
-            return values.empty() ? 0.0 : std::stod(values.front());
-        };
         const auto wait = [&]() {
-            while(end_editor_pending_work() > 0 && column("SELECT saved_path FROM map").front() != out &&
-                  column("SELECT edit_message FROM map").front().rfind("error", 0) != 0) {
+            while(end_editor_pending_work() > 0 && savedPath() != out && editMessage().rfind("error", 0) != 0) {
                 end_editor_update();
             }
         };
+        const auto at = [](double v) { return std::to_string(v); };
+        const auto waypointLinks = [] { return db->count<MapLinkRow>(where(c(&MapLinkRow::kind) == "waypoint")); };
+        const auto roadLinks = [] { return db->count<MapLinkRow>(where(c(&MapLinkRow::kind) == "road")); };
+        const auto health = [] {
+            return db->count<MapPropertyRow>(where(c(&MapPropertyRow::key) == "objectInitialHealth" and
+                                                   c(&MapPropertyRow::value) == "50"));
+        };
+        // Objects at (x, y): of the placed template, or any.
+        const auto near = [&](double x, double y) {
+            return db->count<MapObjectRow>(where(c(&MapObjectRow::templateName) == *placed and
+                                                 abs(c(&MapObjectRow::x) - x) < 0.01 and
+                                                 abs(c(&MapObjectRow::y) - y) < 0.01));
+        };
         for(const auto &path: paths) {
             send("map.open\t" + path);
-            const int before = int(number("SELECT COUNT(*) FROM map_objects"));
-            if(before < 3 || placed.empty()) {
+            const int before = db->count<MapObjectRow>();
+            if(before < 3 || !placed) {
                 ++good;  // nothing to edit
                 continue;
             }
-            const auto team = column("SELECT team FROM map_players ORDER BY neutral DESC, id LIMIT 1");
-            const auto road = column("SELECT name FROM road_types WHERE bridge = 0 ORDER BY id LIMIT 1");
-            const auto count = [&](const std::string &where) {
-                return int(number("SELECT COUNT(*) FROM " + where));
-            };
+            const auto team = firstTeam();
+            const auto road = firstRoad();
+            const auto &template_ = *placed;
 
             // Object 1 moves by (10, 20), object 2 turns to 1 radian, the next object that is no
             // road point goes; one object is placed in the middle of the map, a second one is
             // placed, undone and redone, a third is placed and undone.
-            const double x1 = number("SELECT x FROM map_objects WHERE id = 1") + 10;
-            const double y1 = number("SELECT y FROM map_objects WHERE id = 1") + 20;
-            const double cx = number("SELECT (playable_x0 + playable_x1) / 2 FROM map");
-            const double cy = number("SELECT (playable_y0 + playable_y1) / 2 FROM map");
-            const auto at = [](double v) { return std::to_string(v); };
+            const auto position = first(select(columns(&MapObjectRow::x, &MapObjectRow::y), where(c(&MapObjectRow::id) == 1)))
+                                      .value_or(std::tuple<double, double>());
+            const double x1 = std::get<0>(position) + 10;
+            const double y1 = std::get<1>(position) + 20;
+            const auto [cx, cy] = playableMiddle();
             // Not a road point: one of those takes the other end of its segment along.
-            const auto removed = column("SELECT MIN(id) FROM map_objects WHERE id >= 3 AND kind NOT IN ('road', 'bridge')")
-                                     .front();
-            const std::string owner = team.empty() ? "" : team.front();
+            const auto removedId = first(select(min(&MapObjectRow::id),
+                                                where(c(&MapObjectRow::id) >= 3 and
+                                                      not_in(&MapObjectRow::kind, {"road", "bridge"}))));
+            const auto removed = removedId && *removedId ? std::to_string(**removedId) : std::string();
+            const std::string owner = team.value_or("");
             for(const auto &command: std::vector<std::string>{
                     "map.move\t1\t" + at(x1) + "\t" + at(y1), "map.rotate\t2\t1", "map.delete\t" + removed,
-                    "map.place\t" + placed.front() + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
-                    "map.place\t" + placed.front() + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
+                    "map.place\t" + template_ + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
+                    "map.place\t" + template_ + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
                     "map.undo", "map.redo",
-                    "map.place\t" + placed.front() + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
+                    "map.place\t" + template_ + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
                     "map.undo"}) {
                 end_editor_send(command.c_str());
             }
@@ -356,21 +523,23 @@ int main(int argc, char **argv) {
             // properties, copied and pasted; two linked waypoints; a road segment.
             end_editor_update();
             // After the edits above: deleting a waypoint or a road point takes its links along.
-            const int waypointLinks = count("map_links WHERE kind = 'waypoint'");
-            const int roads = count("map_links WHERE kind = 'road'");
-            const int edited = count("map_objects");
-            const int health = count("map_object_properties WHERE key = 'objectInitialHealth' AND value = '50'");  // a removed road point takes its partner along
-            const auto middle = column(("SELECT id FROM map_objects WHERE abs(x - " + at(cx) + ") < 0.01 AND abs(y - " +
-                                        at(cy) + ") < 0.01 LIMIT 1").c_str());
+            const int waypointsBefore = waypointLinks();
+            const int roadsBefore = roadLinks();
+            const int edited = db->count<MapObjectRow>();
+            const int healthBefore = health();  // a removed road point takes its partner along
+            const auto middle = first(select(&MapObjectRow::id,
+                                             where(abs(c(&MapObjectRow::x) - cx) < 0.01 and
+                                                   abs(c(&MapObjectRow::y) - cy) < 0.01),
+                                             limit(1)));
             std::vector<std::string> commands{
-                "selection.set\t" + (middle.empty() ? std::string("0") : middle.front()), "selection.height\t15",
+                "selection.set\t" + (middle ? std::to_string(*middle) : std::string("0")), "selection.height\t15",
                 "selection.property\tobjectInitialHealth\tint\t50",
                 "selection.property\tobjectName\tstring\tEditCheck", "edit.copy",
                 "edit.paste\t" + at(cx) + "\t" + at(cy + 60), "placement.waypoint", "selection.set\t",
                 "map.click_right\t" + at(cx) + "\t" + at(cy - 60) + "\t",
                 "map.click_right\t" + at(cx + 30) + "\t" + at(cy - 60) + "\t"};
-            if(!road.empty()) {
-                commands.insert(commands.end(), {"placement.road\t" + road.front(),
+            if(road) {
+                commands.insert(commands.end(), {"placement.road\t" + *road,
                                                  "map.click_right\t" + at(cx - 60) + "\t" + at(cy) + "\t",
                                                  "map.click_right\t" + at(cx - 60) + "\t" + at(cy + 40) + "\t"});
             }
@@ -379,63 +548,55 @@ int main(int argc, char **argv) {
                 end_editor_send(command.c_str());
             }
             wait();
-            const auto saveMessage = column("SELECT edit_message FROM map").front();
+            const auto saveMessage = editMessage();
             send("map.open\t" + out);
-            const int after = int(number("SELECT COUNT(*) FROM map_objects"));
-            const auto near = [&](double x, double y) {
-                return "SELECT COUNT(*) FROM map_objects WHERE template_name = '" + placed.front() + "' AND abs(x - " +
-                       at(x) + ") < 0.01 AND abs(y - " + at(y) + ") < 0.01";
-            };
-            const int added = 1 + 2 + (road.empty() ? 0 : 2);  // paste, waypoints, road
+            const int after = db->count<MapObjectRow>();
+            const int added = 1 + 2 + (road ? 2 : 0);  // paste, waypoints, road
             auto preview = std::filesystem::path(out);
             std::error_code sizeError;
             preview.replace_extension(".tga");
-            const int checks[] = {
-                count("map_objects o JOIN map_object_properties p ON p.object_id = o.id WHERE o.height = 15 AND "
-                      "p.key = 'objectName' AND p.value = 'EditCheck'"),
-                count("map_object_properties WHERE key = 'objectInitialHealth' AND value = '50'") - health,
-                int(number(near(cx, cy + 60))), count("map_links WHERE kind = 'waypoint'") - waypointLinks,
-                count("map_links WHERE kind = 'road'") - roads};
-            const bool step5 =
-                count("map_objects o JOIN map_object_properties p ON p.object_id = o.id WHERE o.height = 15 AND "
-                      "p.key = 'objectName' AND p.value = 'EditCheck'") == 2 &&
-                checks[1] == 2 &&
-                number(near(cx, cy + 60)) == 1 && count("map_links WHERE kind = 'waypoint'") == waypointLinks + 1 &&
-                count("map_links WHERE kind = 'road'") == roads + (road.empty() ? 0 : 1) &&
-                std::filesystem::file_size(preview, sizeError) == 18 + 128 * 128 * 4 + 26;
-            const bool ok = step5 && after == edited + added && number(near(cx, cy)) == 1 && number(near(cx + 50, cy)) == 1 &&
-                            number(near(cx + 100, cy)) == 0 &&
-                            number("SELECT COUNT(*) FROM map_objects WHERE abs(x - " + at(x1) + ") < 0.01 AND abs(y - " +
-                                   at(y1) + ") < 0.01") >= 1 &&
-                            number("SELECT COUNT(*) FROM map_objects WHERE abs(angle - 1) < 0.0001") >= 1 &&
-                            number("SELECT COUNT(*) FROM map_object_properties p JOIN map_objects o ON o.id = "
-                                   "p.object_id WHERE p.key = 'originalOwner' AND p.value = '" + owner +
-                                   "' AND o.template_name = '" + placed.front() + "'") >= 2;
+            const int raised = db->count<MapObjectRow>(
+                join<MapPropertyRow>(on(c(&MapPropertyRow::objectId) == &MapObjectRow::id)),
+                where(c(&MapObjectRow::height) == 15 and c(&MapPropertyRow::key) == "objectName" and
+                      c(&MapPropertyRow::value) == "EditCheck"));
+            const int checks[] = {raised, health() - healthBefore, near(cx, cy + 60), waypointLinks() - waypointsBefore,
+                                  roadLinks() - roadsBefore};
+            const bool step5 = raised == 2 && checks[1] == 2 && checks[2] == 1 && checks[3] == 1 &&
+                               checks[4] == (road ? 1 : 0) &&
+                               std::filesystem::file_size(preview, sizeError) == 18 + 128 * 128 * 4 + 26;
+            const bool ok =
+                step5 && after == edited + added && near(cx, cy) == 1 && near(cx + 50, cy) == 1 &&
+                near(cx + 100, cy) == 0 &&
+                db->count<MapObjectRow>(where(abs(c(&MapObjectRow::x) - x1) < 0.01 and
+                                              abs(c(&MapObjectRow::y) - y1) < 0.01)) >= 1 &&
+                db->count<MapObjectRow>(where(abs(c(&MapObjectRow::angle) - 1) < 0.0001)) >= 1 &&
+                db->count<MapPropertyRow>(join<MapObjectRow>(on(c(&MapObjectRow::id) == &MapPropertyRow::objectId)),
+                                          where(c(&MapPropertyRow::key) == "originalOwner" and
+                                                c(&MapPropertyRow::value) == owner and
+                                                c(&MapObjectRow::templateName) == template_)) >= 2;
             good += ok;
             if(!ok) {
                 std::printf("   %s: %d objects before, %d after, step 5: %d raised, %d health, %d pasted, %+d links, "
-                            "%+d roads; %d after the first edits, expected %d; middle %d, cx+50 %d, cx+100 %d (%s)\n", path.c_str(),
-                            before, after, checks[0], checks[1], checks[2], checks[3], checks[4], edited, edited + added,
-                            int(number(near(cx, cy))), int(number(near(cx + 50, cy))), int(number(near(cx + 100, cy))),
-                            saveMessage.c_str());
+                            "%+d roads; %d after the first edits, expected %d; middle %d, cx+50 %d, cx+100 %d (%s)\n",
+                            path.c_str(), before, after, checks[0], checks[1], checks[2], checks[3], checks[4], edited,
+                            edited + added, near(cx, cy), near(cx + 50, cy), near(cx + 100, cy), saveMessage.c_str());
             }
         }
         std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n", good, paths.size(),
-                    placed.empty() ? "nothing" : placed.front().c_str());
+                    placed ? placed->c_str() : "nothing");
     }
     if(!playDir.empty()) {
-        const auto number = [&](const std::string &sql) {
-            const auto values = column(sql.c_str());
-            return values.empty() || values.front().empty() ? 0.0 : std::stod(values.front());
-        };
         const auto at = [](double v) { return std::to_string(v); };
-        // A ground vehicle both games have, else the first one there is.
-        const auto vehicle = column("SELECT name FROM objects WHERE model <> '' AND kind_of LIKE '%VEHICLE%' "
-                                    "AND kind_of NOT LIKE '%AIRCRAFT%' ORDER BY name <> 'AmericaTankCrusader', name LIMIT 1");
-        auto paths = column("SELECT path FROM maps WHERE source <> 'User maps' ORDER BY path");
-        if(!onlyMaps.empty()) {
-            std::erase_if(paths, [&](const std::string &path) { return path.find(onlyMaps) == std::string::npos; });
+        // A ground vehicle both games have, else the first one there is. Two selects: an ORDER BY
+        // with a bound value inside multi_order_by() binds it in the LIMIT's place (sqlite_orm 1.9.1).
+        const auto isGroundVehicle = c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%") and
+                                     not like(&ObjectRow::kindOf, "%AIRCRAFT%");
+        auto vehicle = first(
+            select(&ObjectRow::name, where(isGroundVehicle and c(&ObjectRow::name) == "AmericaTankCrusader"), limit(1)));
+        if(!vehicle) {
+            vehicle = first(select(&ObjectRow::name, where(isGroundVehicle), order_by(&ObjectRow::name), limit(1)));
         }
+        const auto paths = mapPaths(onlyMaps, where(c(&MapListRow::source) != "User maps"));
         int index = 0;
         for(const auto &path: paths) {
             ++index;
@@ -445,34 +606,35 @@ int main(int argc, char **argv) {
                 while(end_editor_pending_work() > 0) {
                     end_editor_update();
                 }
-                return column("SELECT saved_path FROM map").front() == file ? file : std::string("-");
+                return savedPath() == file ? file : std::string("-");
             };
             send("map.open\t" + path);
             while(end_editor_pending_work() > 0) {
                 end_editor_update();
             }
-            if(column("SELECT state FROM map").front() != "ready") {
+            if(first(select(&MapRow::state)).value_or("") != "ready") {
                 std::printf("PLAYMAP\t%d\t%s\t-\t-\t0\n", index, path.c_str());
                 continue;
             }
             const auto untouched = saveAs("EdU" + std::to_string(index));
-            const double cx = number("SELECT (playable_x0 + playable_x1) / 2 FROM map");
-            const double cy = number("SELECT (playable_y0 + playable_y1) / 2 FROM map");
-            const auto team = column("SELECT team FROM map_players ORDER BY neutral DESC, id LIMIT 1");
-            const auto road = column("SELECT name FROM road_types WHERE bridge = 0 ORDER BY id LIMIT 1");
+            const auto [cx, cy] = playableMiddle();
+            const auto team = firstTeam();
+            const auto road = firstRoad();
             std::vector<std::string> commands;
-            if(number("SELECT COUNT(*) FROM map_objects WHERE id = 1 AND kind = 'model'") == 1) {
-                commands.push_back("map.move\t1\t" + at(number("SELECT x FROM map_objects WHERE id = 1") + 10) + "\t" +
-                                   at(number("SELECT y FROM map_objects WHERE id = 1") + 10));
+            const auto objectOne = first(select(columns(&MapObjectRow::x, &MapObjectRow::y, &MapObjectRow::kind),
+                                                where(c(&MapObjectRow::id) == 1)));
+            if(objectOne && std::get<2>(*objectOne) == "model") {
+                commands.push_back("map.move\t1\t" + at(std::get<0>(*objectOne) + 10) + "\t" +
+                                   at(std::get<1>(*objectOne) + 10));
             }
-            if(number("SELECT COUNT(*) FROM map_objects WHERE id = 2") == 1) {
+            if(db->count<MapObjectRow>(where(c(&MapObjectRow::id) == 2)) == 1) {
                 commands.push_back("map.rotate\t2\t1");
             }
             int placed = 0;
-            if(!vehicle.empty()) {
-                commands.push_back("placement.template\t" + vehicle.front());
-                if(!team.empty()) {
-                    commands.push_back("placement.owner\t" + team.front());
+            if(vehicle) {
+                commands.push_back("placement.template\t" + *vehicle);
+                if(team) {
+                    commands.push_back("placement.owner\t" + *team);
                 }
                 for(int i = 0; i < 3; ++i) {
                     commands.push_back("map.click_right\t" + at(cx + 40 * i) + "\t" + at(cy) + "\t");
@@ -483,8 +645,8 @@ int main(int argc, char **argv) {
             for(int i = 0; i < 3; ++i) {
                 commands.push_back("map.click_right\t" + at(cx + 40 * i) + "\t" + at(cy - 80) + "\t");
             }
-            if(!road.empty()) {
-                commands.insert(commands.end(), {"placement.road\t" + road.front(),
+            if(road) {
+                commands.insert(commands.end(), {"placement.road\t" + *road,
                                                  "map.click_right\t" + at(cx - 80) + "\t" + at(cy) + "\t",
                                                  "map.click_right\t" + at(cx - 80) + "\t" + at(cy + 80) + "\t"});
             }
@@ -503,7 +665,7 @@ int main(int argc, char **argv) {
             std::fflush(stdout);
         }
     }
-    sqlite3_close(db);
+    db.reset();
     end_editor_shutdown();
     return 0;
 }

@@ -90,7 +90,7 @@ namespace {
         }
         std::vector<std::int64_t> selection() {
             std::vector<std::int64_t> ids;
-            for(const auto &row: this->reader->get_all<MapSelectionRow>(sqlite_orm::order_by(&MapSelectionRow::id))) {
+            for(const auto &row: this->reader->iterate<MapSelectionRow>(sqlite_orm::order_by(&MapSelectionRow::id))) {
                 ids.push_back(row.objectId);
             }
             return ids;
@@ -106,9 +106,11 @@ namespace {
         }
         std::string property(std::int64_t id, const std::string &key) {
             using namespace sqlite_orm;
-            const auto rows = this->reader->get_all<MapPropertyRow>(
-                where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key));
-            return rows.empty() ? "<none>" : rows.front().type + ":" + rows.front().value;
+            for(const auto &row: this->reader->iterate<MapPropertyRow>(
+                    where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key), limit(1))) {
+                return row.type + ":" + row.value;
+            }
+            return "<none>";
         }
         std::vector<MapLinkRow> links() {
             return this->reader->get_all<MapLinkRow>(sqlite_orm::order_by(&MapLinkRow::id));
@@ -660,7 +662,7 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(flow.reader->get<MapRow>(1).savedPath.empty());
     // It is not listed as one of the user's maps.
     flow.send("maps.user\t" + userMaps.string());
-    for(const auto &row: flow.reader->get_all<MapListRow>()) {
+    for(const auto &row: flow.reader->iterate<MapListRow>()) {
         CHECK(row.name != "__EditorTest");
     }
 
@@ -737,7 +739,7 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
 
     // The playable factions of PlayerTemplate.ini, what the faction menu offers.
     std::vector<std::string> factions;
-    for(const auto &row: flow.reader->get_all<FactionRow>(sqlite_orm::order_by(&FactionRow::id))) {
+    for(const auto &row: flow.reader->iterate<FactionRow>(sqlite_orm::order_by(&FactionRow::id))) {
         factions.push_back(row.name + "/" + row.side);
     }
     CHECK(factions == std::vector<std::string>{"FactionAmerica/America", "FactionChina/China"});
@@ -814,7 +816,7 @@ TEST_CASE("Flow: Save Map As a name: into the user Maps folder, asking before it
     CHECK(parsed(readFile(userMaps / "Other" / "Other.map")).objects.size() == flow.objects().size());
     // Both are listed as user maps.
     std::vector<std::string> names;
-    for(const auto &row: flow.reader->get_all<MapListRow>()) {
+    for(const auto &row: flow.reader->iterate<MapListRow>()) {
         if(row.source == "User maps") {
             names.push_back(row.name);
         }
