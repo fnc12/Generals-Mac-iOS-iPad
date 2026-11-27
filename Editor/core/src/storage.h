@@ -143,6 +143,8 @@ namespace end_editor {
         std::int64_t lastObject = 0;
         std::string editMessage;
         std::string savedPath;
+        // map.save_as found another map at its target: the path, until the next save or map change.
+        std::string saveConflict;
     };
 
     // Players of the open map's SidesList: what a placed object can be owned by (its team).
@@ -303,6 +305,35 @@ namespace end_editor {
         bool bridge = false;
     };
 
+    // Playable factions of PlayerTemplate.ini (PlayableSide = Yes), what play.faction takes.
+    struct FactionRow {
+        std::int64_t id = 0;
+        std::string name;  // e.g. "FactionAmerica"
+        std::string side;  // e.g. "America"
+    };
+
+    // The Play button (map.play): its settings, kept across launches of the editor, and the
+    // last test run. One row (id 1).
+    struct PlayRow {
+        int id = 1;
+        std::string app;          // the game app (or executable) as chosen; "" uses the default
+        std::string appResolved;  // what map.play starts: the chosen app or the default one
+        std::string faction = "FactionAmerica";  // the local player's faction, or "Random"
+        int aiCount = 1;          // AI opponents (the game caps it at the map's start positions - 1)
+        std::string aiDifficulty = "medium";  // "easy" | "medium" | "hard"
+        int startPosition = 1;    // 1-based, 0 random
+        // "idle" | "running" (the game started and runs) | "exited" (exit_code) | "error" (message)
+        std::string state = "idle";
+        std::string message;
+        std::string mapPath;      // the test copy of the map the game was started on
+        std::string command;      // what was started: the program and its arguments, tab separated
+        std::string logPath;      // the game's output
+        std::int64_t pid = 0;
+        int exitCode = 0;
+        std::int64_t runs = 0;    // grows with every map.play that started the game
+        std::int64_t revision = 0;
+    };
+
     inline auto makeStorage(const std::string &path) {
         using namespace sqlite_orm;
         return make_storage(
@@ -420,7 +451,8 @@ namespace end_editor {
                        make_column("edited", &MapRow::edited),
                        make_column("last_object", &MapRow::lastObject),
                        make_column("edit_message", &MapRow::editMessage),
-                       make_column("saved_path", &MapRow::savedPath)),
+                       make_column("saved_path", &MapRow::savedPath),
+                       make_column("save_conflict", &MapRow::saveConflict)),
             make_table("map_players",
                        make_column("id", &MapPlayerRow::id, primary_key().autoincrement()),
                        make_column("name", &MapPlayerRow::name),
@@ -530,7 +562,28 @@ namespace end_editor {
             make_table("road_types",
                        make_column("id", &RoadTypeRow::id, primary_key().autoincrement()),
                        make_column("name", &RoadTypeRow::name),
-                       make_column("bridge", &RoadTypeRow::bridge)));
+                       make_column("bridge", &RoadTypeRow::bridge)),
+            make_table("factions",
+                       make_column("id", &FactionRow::id, primary_key().autoincrement()),
+                       make_column("name", &FactionRow::name),
+                       make_column("side", &FactionRow::side)),
+            make_table("play",
+                       make_column("id", &PlayRow::id, primary_key()),
+                       make_column("app", &PlayRow::app),
+                       make_column("app_resolved", &PlayRow::appResolved),
+                       make_column("faction", &PlayRow::faction),
+                       make_column("ai_count", &PlayRow::aiCount),
+                       make_column("ai_difficulty", &PlayRow::aiDifficulty),
+                       make_column("start_position", &PlayRow::startPosition),
+                       make_column("state", &PlayRow::state),
+                       make_column("message", &PlayRow::message),
+                       make_column("map_path", &PlayRow::mapPath),
+                       make_column("command", &PlayRow::command),
+                       make_column("log_path", &PlayRow::logPath),
+                       make_column("pid", &PlayRow::pid),
+                       make_column("exit_code", &PlayRow::exitCode),
+                       make_column("runs", &PlayRow::runs),
+                       make_column("revision", &PlayRow::revision)));
     }
 
     using Storage = decltype(makeStorage(""));

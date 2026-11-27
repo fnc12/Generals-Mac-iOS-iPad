@@ -12,10 +12,16 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cmath>
+#include <csignal>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <thread>
+
+#include <signal.h>
 
 using namespace end_editor;
 using namespace end_editor_tests;
@@ -45,7 +51,11 @@ namespace {
             writeBig(this->folder / "INIZH.big",
                      {{"Data\\INI\\Object\\Rocks.ini", "Object TestRock\nEnd\nObject TestTree\nEnd\nObject TestTank\nEnd\n"},
                       {"Data\\INI\\Roads.ini", "Road TwoLane\n  Texture = TRTwoLane.tga\n  RoadWidth = 35\nEnd\n"
-                                               "Bridge WoodBridge\n  BridgeScale = 1.0\nEnd\n"}});
+                                               "Bridge WoodBridge\n  BridgeScale = 1.0\nEnd\n"},
+                      {"Data\\INI\\PlayerTemplate.ini",
+                       "PlayerTemplate FactionCivilian\n  Side = Civilian\n  PlayableSide = No\nEnd\n"
+                       "PlayerTemplate FactionAmerica\n  Side = America\n  PlayableSide = Yes\nEnd\n"
+                       "; a comment\nPlayerTemplate FactionChina\n  Side = China\n  PlayableSide = Yes\nEnd\n"}});
             this->dbPath = (this->folder / "store.sqlite").string();
             REQUIRE(end_editor_initialize(this->dbPath.c_str()));
             this->reader.emplace(makeStorage(this->dbPath));
@@ -570,4 +580,217 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
     const auto tga = encodeTga(128, 128, rgba);
     CHECK(std::uint8_t(tga[18]) == pixel(0, 0)[2]);  // BGRA, bottom row first
     CHECK(std::uint8_t(tga[20]) == pixel(0, 0)[0]);
+}
+
+namespace {
+    // A stand-in for the game app: Fake.app/Contents/MacOS/run.sh writes the arguments it got (one
+    // per line), CNC_GENERALS_ZH_PATH and CNC_GENERALS_PATH to files next to the app, then waits
+    // `seconds` and exits with `code`.
+    std::filesystem::path makeFakeGame(const std::filesystem::path &folder, int seconds = 0, int code = 0) {
+        const auto app = folder / "Fake.app";
+        std::filesystem::create_directories(app / "Contents" / "MacOS");
+        const auto script = app / "Contents" / "MacOS" / "run.sh";
+        std::ofstream(script) << "#!/bin/sh\n"
+                              << "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" << (folder / "args.txt").string() << "'\n"
+                              << "printf '%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" > '"
+                              << (folder / "env.txt").string() << "'\n"
+                              << "echo started $$ >> '" << (folder / "runs.txt").string() << "'\n"
+                              << "sleep " << seconds << "\nexit " << code << "\n";
+        std::filesystem::permissions(script, std::filesystem::perms::owner_all);
+        return app;
+    }
+
+    std::vector<std::string> lines(const std::string &text) {
+        std::vector<std::string> result;
+        std::size_t start = 0;
+        while(start < text.size()) {
+            const auto end = text.find('\n', start);
+            result.push_back(text.substr(start, end - start));
+            start = end == std::string::npos ? text.size() : end + 1;
+        }
+        return result;
+    }
+
+    // Runs the core's updates (which watch the started game) until the play row leaves "running".
+    PlayRow waitForGame(Flow &flow, double seconds = 10) {
+        const auto start = std::chrono::steady_clock::now();
+        while(flow.reader->get<PlayRow>(1).state == "running" &&
+              std::chrono::steady_clock::now() - start < std::chrono::duration<double>(seconds)) {
+            end_editor_update();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return flow.reader->get<PlayRow>(1);
+    }
+}
+
+TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and starts the game on it") {
+    Flow flow("flow-play");
+    const auto userMaps = flow.saved / "Maps";
+    flow.send("maps.user\t" + userMaps.string());
+    const auto app = makeFakeGame(flow.saved);
+    flow.send("play.app\t" + app.string());
+    flow.send("play.faction\tFactionChina");
+    flow.send("play.ai\t2");
+    flow.send("play.difficulty\thard");
+    flow.send("play.start\t2");
+    flow.send("placement.template\tTestTank");
+    flow.send("map.click_right\t20\t30\t");
+    const auto placed = flow.objects().size();
+    REQUIRE(flow.reader->get<MapRow>(1).edited);
+
+    flow.send("map.play");
+    auto play = flow.reader->get<PlayRow>(1);
+    const auto testCopy = userMaps / "__EditorTest" / "__EditorTest.map";
+    CHECK(play.state == "running");
+    CHECK(play.pid > 0);
+    CHECK(play.runs == 1);
+    CHECK(play.mapPath == testCopy.string());
+    const auto program = (app / "Contents" / "MacOS" / "run.sh").string();
+    CHECK(play.command == program + "\t-testMap\t" + testCopy.string() +
+                             "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2");
+    CHECK(flow.editor().note.rfind("Playing Test Map in Fake.app", 0) == 0);
+    // The test copy has the unsaved edit; the user's map stays unsaved and edited.
+    const auto copy = parsed(readFile(testCopy));
+    CHECK(copy.objects.size() == placed);
+    CHECK(copy.objects.back().templateName == "TestTank");
+    CHECK(readFile(userMaps / "__EditorTest" / "__EditorTest.tga").size() == 18 + 128 * 128 * 4 + 26);
+    CHECK(flow.reader->get<MapRow>(1).edited);
+    CHECK(flow.reader->get<MapRow>(1).savedPath.empty());
+    // It is not listed as one of the user's maps.
+    flow.send("maps.user\t" + userMaps.string());
+    for(const auto &row: flow.reader->get_all<MapListRow>()) {
+        CHECK(row.name != "__EditorTest");
+    }
+
+    play = waitForGame(flow);
+    CHECK(play.state == "exited");
+    CHECK(play.exitCode == 0);
+    CHECK(play.pid == 0);
+    // What the game got: exactly the command line, and the editor's game folder as its data.
+    CHECK(lines(readFile(flow.saved / "args.txt")) ==
+          std::vector<std::string>{"-testMap", testCopy.string(), "-testMapFaction", "FactionChina", "-testMapAI", "2",
+                                   "-testMapAIDifficulty", "hard", "-testMapStart", "2"});
+    CHECK(lines(readFile(flow.saved / "env.txt")).front() == flow.folder.string());
+}
+
+TEST_CASE("Flow: Play again closes the game the last Play started; play.stop closes it") {
+    Flow flow("flow-play-again");
+    flow.send("maps.user\t" + (flow.saved / "Maps").string());
+    flow.send("play.app\t" + makeFakeGame(flow.saved, 30).string());
+    flow.send("map.play");
+    const auto first = flow.reader->get<PlayRow>(1);
+    REQUIRE(first.state == "running");
+    flow.send("map.play");
+    const auto second = flow.reader->get<PlayRow>(1);
+    CHECK(second.state == "running");
+    CHECK(second.runs == 2);
+    CHECK(second.pid != first.pid);
+    CHECK(::kill(pid_t(first.pid), 0) != 0);  // the first one is gone
+    flow.send("play.stop");
+    const auto stopped = waitForGame(flow);
+    CHECK(stopped.state == "exited");
+    CHECK(stopped.exitCode == 128 + SIGTERM);
+}
+
+TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions") {
+    Flow flow("flow-play-settings");
+    auto play = flow.reader->get<PlayRow>(1);
+    CHECK(play.app.empty());
+    CHECK(play.faction == "FactionAmerica");
+    CHECK(play.aiCount == 1);
+    CHECK(play.aiDifficulty == "medium");
+    CHECK(play.startPosition == 1);
+    CHECK(play.state == "idle");
+    const char *home = std::getenv("HOME");
+    REQUIRE(home);
+    CHECK(play.appResolved == (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsXZH.app").string());
+    // The base game's user Maps folder means the base game's app.
+    flow.send("maps.user\t" + (flow.saved / "GeneralsX" / "Generals" / "Maps").string());
+    CHECK(flow.reader->get<PlayRow>(1).appResolved == (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsX.app").string());
+
+    // The playable factions of PlayerTemplate.ini, what the faction menu offers.
+    std::vector<std::string> factions;
+    for(const auto &row: flow.reader->get_all<FactionRow>(sqlite_orm::order_by(&FactionRow::id))) {
+        factions.push_back(row.name + "/" + row.side);
+    }
+    CHECK(factions == std::vector<std::string>{"FactionAmerica/America", "FactionChina/China"});
+    CHECK(flow.refused("play.faction\tFactionCivilian") == "error:unknown_faction");
+    CHECK(flow.editor().noteKind == "error");
+    CHECK(flow.refused("play.ai\t9") == "error:bad_argument");
+    CHECK(flow.refused("play.start\tx") == "error:bad_argument");
+    CHECK(flow.refused("play.difficulty\tinsane") == "error:bad_argument");
+    flow.send("play.faction\tRandom");
+    flow.send("play.ai\t0");
+    flow.send("play.start\t0");
+    flow.send("play.difficulty\teasy");
+    flow.send("play.app\t/nowhere/Game.app");
+
+    // Without a game app there: the map is still written, the store says what is missing.
+    flow.send("maps.user\t" + (flow.saved / "Maps").string());
+    flow.send("map.play");
+    play = flow.reader->get<PlayRow>(1);
+    CHECK(play.state == "error");
+    CHECK(play.message == "error: no game app at /nowhere/Game.app (choose it in the Play settings)");
+    CHECK(flow.editor().note == play.message);
+
+    // The settings stay for the next session; the state does not.
+    end_editor_shutdown();
+    REQUIRE(end_editor_initialize(flow.dbPath.c_str()));
+    play = flow.reader->get<PlayRow>(1);
+    CHECK(play.app == "/nowhere/Game.app");
+    CHECK(play.faction == "Random");
+    CHECK(play.aiCount == 0);
+    CHECK(play.startPosition == 0);
+    CHECK(play.aiDifficulty == "easy");
+    CHECK(play.state == "idle");
+    CHECK(flow.refused("map.play") == "error:no_map");
+}
+
+TEST_CASE("Flow: Save Map As a name: into the user Maps folder, asking before it replaces another map") {
+    Flow flow("flow-save-as");
+    const auto userMaps = flow.saved / "Maps";
+    CHECK(flow.refused("map.save_as\tMine") == "error:no_user_maps");
+    flow.send("maps.user\t" + userMaps.string());
+    CHECK(flow.refused("map.save_as\t") == "error:missing_argument");
+    CHECK(flow.refused("map.save_as\ta/b") == "error:bad_argument");
+    CHECK(flow.editor().noteKind == "error");
+
+    flow.send("placement.template\tTestRock");
+    flow.send("map.click_right\t10\t10\t");
+    flow.send("map.save_as\tMine");
+    const auto mine = userMaps / "Mine" / "Mine.map";
+    auto map = flow.reader->get<MapRow>(1);
+    CHECK(map.savedPath == mine.string());
+    CHECK_FALSE(map.edited);
+    CHECK(map.saveConflict.empty());
+    CHECK(readFile(userMaps / "Mine" / "Mine.tga").size() == 18 + 128 * 128 * 4 + 26);
+    const auto saved = readFile(mine);
+    // Its own file again: no question.
+    flow.send("map.click_right\t30\t10\t");
+    flow.send("map.save_as\tMine");
+    CHECK(flow.reader->get<MapRow>(1).saveConflict.empty());
+    CHECK(readFile(mine) != saved);
+
+    // Another map's name: not replaced until asked.
+    std::filesystem::create_directories(userMaps / "Other");
+    std::ofstream(userMaps / "Other" / "Other.map") << "someone else's map";
+    flow.send("map.save_as\tOther");
+    map = flow.reader->get<MapRow>(1);
+    CHECK(map.saveConflict == (userMaps / "Other" / "Other.map").string());
+    CHECK(map.savedPath == mine.string());
+    CHECK(flow.editor().noteKind == "error");
+    CHECK(readFile(userMaps / "Other" / "Other.map") == "someone else's map");
+    flow.send("map.save_as\tOther\treplace");
+    map = flow.reader->get<MapRow>(1);
+    CHECK(map.saveConflict.empty());
+    CHECK(map.savedPath == (userMaps / "Other" / "Other.map").string());
+    CHECK(parsed(readFile(userMaps / "Other" / "Other.map")).objects.size() == flow.objects().size());
+    // Both are listed as user maps.
+    std::vector<std::string> names;
+    for(const auto &row: flow.reader->get_all<MapListRow>()) {
+        if(row.source == "User maps") {
+            names.push_back(row.name);
+        }
+    }
+    CHECK(names == std::vector<std::string>{"Mine", "Other"});
 }

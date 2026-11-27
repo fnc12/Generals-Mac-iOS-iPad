@@ -111,6 +111,28 @@ namespace end_editor {
         return result;
     }
 
+    std::vector<Faction> parsePlayableFactions(std::string_view text) {
+        std::vector<Faction> result;
+        for(const auto &block: readBlocks(text)) {
+            if(block.keyword != "playertemplate" || block.name.empty()) {
+                continue;
+            }
+            Faction faction{block.name, ""};
+            bool playable = false;
+            for(const auto &[key, value]: block.fields) {
+                if(key == "playableside") {
+                    playable = lower(value) == "yes";
+                } else if(key == "side") {
+                    faction.side = value;
+                }
+            }
+            if(playable) {
+                result.push_back(std::move(faction));
+            }
+        }
+        return result;
+    }
+
     WaterLook parseWaterLook(std::string_view text, int timeOfDay) {
         static const char *const times[] = {"morning", "afternoon", "evening", "night"};
         const std::string wanted = timeOfDay >= 1 && timeOfDay <= 4 ? times[timeOfDay - 1] : "afternoon";

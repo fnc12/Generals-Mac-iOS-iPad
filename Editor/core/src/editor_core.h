@@ -31,6 +31,10 @@ namespace end_editor {
             return this->path;
         }
 
+        // The map name of the test copy map.play writes into the user Maps folder (the user's own
+        // map file is not touched by Play).
+        static constexpr const char *testMapName = "__EditorTest";
+
         // Returns "" when the command is accepted, "error:<code>" otherwise.
         std::string send(std::string_view command);
 
@@ -46,7 +50,7 @@ namespace end_editor {
 
       private:
         struct Job {
-            enum Kind { openGame, openModel, playAnimation, openMap, loadMapModels, editMap, saveMap, listMaps } kind = openGame;
+            enum Kind { openGame, openModel, playAnimation, openMap, loadMapModels, editMap, saveMap, listMaps, playMap } kind = openGame;
             std::vector<std::string> arguments;
         };
 
@@ -63,7 +67,21 @@ namespace end_editor {
         void runLoadMapModels();
         void queueBeforeModelLoading(Job job);
         void runEditMap(const std::vector<std::string> &arguments);
-        void runSaveMap(const std::string &path);
+        // map.save (any file) and map.save_as (a name in the user Maps folder; arguments: path,
+        // "as", optional "replace").
+        void runSaveMap(const std::vector<std::string> &arguments);
+        // Writes the open document and its preview to `target`; "" when written, else what failed
+        // (a failed preview sets only `previewError`).
+        std::string writeMapFiles(const std::filesystem::path &target, std::string &previewError);
+        // map.play: the open map with its edits to the test copy, then the game started on it.
+        void runPlayMap();
+        // play.*: a setting of the Play button; "" or an error code (the note says why).
+        std::string setPlaySetting(std::string_view name, const std::vector<std::string> &arguments);
+        // The default game app for the opened game (GeneralsXZH or GeneralsX in ~/GeneralsX/Apps).
+        std::string defaultGameApp() const;
+        void writePlay();
+        // The started game ended: the play row says so.
+        void pollPlay();
         void relistMaps();
         // Writes one object of the open document to map_objects / map_object_properties (and
         // queues its model when the map has not used it yet); removes the rows when it is gone.
@@ -108,5 +126,7 @@ namespace end_editor {
         std::string userMapsFolder;  // the game's user Maps folder, listed with the game's maps
         std::int64_t mapListRevision = 0;
         std::vector<std::filesystem::path> gameFolders;  // map.save never writes inside them
+        std::vector<std::string> factionNames;  // PlayerTemplate.ini's playable factions
+        PlayRow play;  // the Play button's settings and its last run (the store's play row)
     };
 }
