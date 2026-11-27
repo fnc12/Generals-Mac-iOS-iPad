@@ -64,6 +64,7 @@
 #include "GameClient/SelectionInfo.h"
 #include "GameClient/Shell.h"
 #include "GameClient/TerrainVisual.h"
+#include "GameClient/TrackpadGesture.h"
 #include "GameClient/Water.h"
 
 #include "GameLogic/AI.h"			///< For AI debug (yes, I'm cheating for now)
@@ -842,6 +843,20 @@ void W3DView::updateCameraTransform()
 
 	Vector3 sourcePos;
 	Vector3 targetPos;
+	buildClippedCameraPosition(sourcePos, targetPos);
+
+	Matrix3D cameraTransform;
+	buildCameraTransform(&cameraTransform, sourcePos, targetPos);
+
+	setCameraTransform(cameraTransform);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @refactor fnc12 27/11/2026 The camera position of updateCameraTransform, kept above the
+// terrain; split out so the pinch anchoring (zoomAt) builds the very same camera.
+//-------------------------------------------------------------------------------------------------
+void W3DView::buildClippedCameraPosition( Vector3& sourcePos, Vector3& targetPos )
+{
 	buildCameraPosition(sourcePos, targetPos);
 
 #if PRESERVE_RETAIL_SCRIPTED_CAMERA
@@ -861,11 +876,6 @@ void W3DView::updateCameraTransform()
 			targetPos.Z += repositionZ;
 		}
 	}
-
-	Matrix3D cameraTransform;
-	buildCameraTransform(&cameraTransform, sourcePos, targetPos);
-
-	setCameraTransform(cameraTransform);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -2292,6 +2302,107 @@ void W3DView::scrollByWorld( const Coord2D *worldDelta )
 
 		removeScriptedState(Scripted_Rotate);
 		m_recalcCamera = true;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature fnc12 27/11/2026 Trackpad pinch: point the 3D camera at the current camera
+// state right away, only for picking (screenToTerrain, getPickRay). Unlike updateCameraTransform it
+// leaves the camera shaker clock, the terrain, the clip planes and the radar alone; the next
+// update() rebuilds the camera fully (m_recalcCamera). Same shaker angles as the last frame.
+//-------------------------------------------------------------------------------------------------
+void W3DView::setPickCameraTransform()
+{
+	Vector3 sourcePos;
+	Vector3 targetPos;
+	buildClippedCameraPosition(sourcePos, targetPos);
+
+	Matrix3D transform;
+	transform.Make_Identity();
+	transform.Look_At(sourcePos, targetPos, 0);
+	transform.Rotate_X(m_shakerAngles.X);
+	transform.Rotate_Y(m_shakerAngles.Y);
+	transform.Rotate_Z(m_shakerAngles.Z);
+
+	m_3DCamera->Set_Transform(transform);
+	m_lastScreenToTerrainValid = false;
+	m_recalcCamera = true;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @feature fnc12 27/11/2026 Trackpad pinch zoom anchored at the cursor: the terrain point
+// under the anchor pixel stays under it, like maps in every Mac app. See TrackpadGesture.h.
+//
+// A user zoom only sets the desired height; update() then eases the real zoom (m_zoom) towards it
+// over several frames (zoomCameraToDesiredHeight). A pinch is a stream of small updates already, so
+// here the zoom takes the desired height at once, and the camera moves sideways in the same step.
+// Falls back to the plain (eased, centred) zoom when anchoring cannot work: no anchor, the cursor
+// sees no terrain (sky), the camera follows a unit, is slaved to a bone or uses the real-zoom camera.
+// Client-side camera only.
+//-------------------------------------------------------------------------------------------------
+void W3DView::zoomAt( Real height, const ICoord2D *anchor )
+{
+	const Real heightBefore = m_heightAboveGround;
+	const Coord3D posBefore = m_pos;
+
+	const Bool canAnchor = anchor != nullptr && !TheGlobalData->m_headless && TheTerrainRenderObject != nullptr
+		&& m_3DCamera != nullptr && !m_isCameraSlaved && !m_useRealZoomCam
+		&& m_cameraLock == INVALID_ID && m_cameraLockDrawable == nullptr;
+
+	// The terrain point under the cursor with the camera as it is now (an earlier gesture update of
+	// this frame may have moved it without a redraw yet).
+	Coord3D before;
+	Bool haveAnchor = FALSE;
+	if (canAnchor)
+	{
+		setPickCameraTransform();
+		haveAnchor = screenToTerrain(anchor, &before);
+	}
+
+	View::zoom(height);
+
+	if (!haveAnchor)
+		return;
+
+	// Clamped at the minimum or maximum height: nothing changed, so nothing may move.
+	if (!TrackpadGesture::pinchChangedHeight(heightBefore, m_heightAboveGround))
+		return;
+
+	// Take the new height now instead of easing towards it.
+	m_zoom = getDesiredZoom(m_pos.x, m_pos.y);
+
+	const TrackpadGesture::Vec2 anchorWorld = { before.x, before.y };
+	TrackpadGesture::Vec2 residual = { 0.0f, 0.0f };
+	// The second pass only removes what the keep-above-terrain clip of the camera changed.
+	for (Int pass = 0; pass < 2; ++pass)
+	{
+		setPickCameraTransform();
+		Vector3 rayStart, rayEnd;
+		getPickRay(anchor, &rayStart, &rayEnd);
+		const TrackpadGesture::Vec3 start = { rayStart.X, rayStart.Y, rayStart.Z };
+		const TrackpadGesture::Vec3 end = { rayEnd.X, rayEnd.Y, rayEnd.Z };
+		TrackpadGesture::Vec2 hit;
+		if (!TrackpadGesture::segmentAtHeight(start, end, before.z, hit))
+			break;
+		residual = TrackpadGesture::pinchAnchorCameraDelta(anchorWorld, hit);
+		if (pass > 0 && fabs(residual.x) < 0.01f && fabs(residual.y) < 0.01f)
+			break;
+		Coord2D move = { residual.x, residual.y };
+		scrollByWorld(&move);
+	}
+
+	if (TrackpadGesture::logEnabled())
+	{
+		setPickCameraTransform();
+		Coord3D after;
+		if (screenToTerrain(anchor, &after))
+			fprintf(stderr, "[trackpad] pinch anchor px=(%d, %d) pivot=(%.2f, %.2f, %.2f) zoom=%.4f before=(%.2f, %.2f) after=(%.2f, %.2f) drift=%.3f height %.2f -> %.2f\n",
+				anchor->x, anchor->y, posBefore.x, posBefore.y, posBefore.z, m_zoom, before.x, before.y, after.x, after.y,
+				sqrtf((after.x - before.x) * (after.x - before.x) + (after.y - before.y) * (after.y - before.y)),
+				heightBefore, m_heightAboveGround);
+		else
+			fprintf(stderr, "[trackpad] pinch anchor px=(%d, %d) before=(%.2f, %.2f) after=<no terrain>\n",
+				anchor->x, anchor->y, before.x, before.y);
 	}
 }
 

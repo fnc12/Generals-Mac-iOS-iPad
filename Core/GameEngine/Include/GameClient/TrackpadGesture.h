@@ -163,6 +163,59 @@ inline float pinchZoomHeightDelta(float currentHeight, float scale)
 	return currentHeight * (1.0f / scale - 1.0f);
 }
 
+// GeneralsX @feature fnc12 27/11/2026 Pinch zoom anchored at the cursor.
+//
+// A pinch zooms about the point under the cursor, like maps in every Mac app: the terrain point
+// under the cursor stays under it. The view does it in three steps (W3DView::zoomAt):
+//   1. pick the terrain point A under the cursor with the camera as it is;
+//   2. zoom (the new height takes effect at once for a pinch, no easing), rebuild the camera;
+//   3. cast the cursor's pick ray again and cross it with the horizontal plane at A's height:
+//      that is where A would have to be to sit under the cursor now. The camera only translates in
+//      x/y, which moves that crossing by the same offset, so moving it by A - crossing puts A
+//      exactly back under the cursor, on hills too (it is a plane through A, not the terrain).
+
+struct Vec3
+{
+	float x;
+	float y;
+	float z;
+};
+
+/// Where the segment start -> end (a pick ray) crosses the horizontal plane at height z. FALSE when
+/// it runs parallel to the plane or does not reach it (the plane is behind the start or past the end),
+/// e.g. the cursor looks at the sky.
+inline bool segmentAtHeight(Vec3 start, Vec3 end, float z, Vec2 &out)
+{
+	const float dz = end.z - start.z;
+	if (dz > -1e-6f && dz < 1e-6f)
+		return false;
+	const float t = (z - start.z) / dz;
+	if (!(t >= 0.0f && t <= 1.0f))
+		return false;
+	out.x = start.x + (end.x - start.x) * t;
+	out.y = start.y + (end.y - start.y) * t;
+	return true;
+}
+
+/// Camera move that brings the anchor back under the cursor after a zoom. anchorWorld = the point
+/// that was under the cursor before; rayAtAnchorHeight = where the cursor's ray crosses the anchor's
+/// height after the zoom (segmentAtHeight).
+inline Vec2 pinchAnchorCameraDelta(Vec2 anchorWorld, Vec2 rayAtAnchorHeight)
+{
+	Vec2 d;
+	d.x = anchorWorld.x - rayAtAnchorHeight.x;
+	d.y = anchorWorld.y - rayAtAnchorHeight.y;
+	return d;
+}
+
+/// The camera is moved sideways only when the zoom really changed the height. At the minimum or
+/// maximum height the clamp swallows the pinch; moving the camera then would make it drift.
+inline bool pinchChangedHeight(float heightBefore, float heightAfter)
+{
+	const float d = heightAfter - heightBefore;
+	return d > 1e-3f || d < -1e-3f;
+}
+
 /// Debug log of gestures and camera moves on stderr, off by default. Enable with the environment
 /// variable GENERALSX_TRACKPAD_LOG=1.
 inline bool logEnabled()
@@ -172,6 +225,48 @@ inline bool logEnabled()
 		return value != nullptr && value[0] != '\0' && value[0] != '0';
 	}();
 	return enabled;
+}
+
+/// Testing aid: a pinch cannot be synthesized from outside the game, so the environment variable
+/// GENERALSX_TRACKPAD_TEST_PINCH="scale,frames[,x,y]" makes the game pinch by itself once it is in
+/// a match: one pinch update of `scale` per frame for `frames` frames, then the same back with
+/// 1/scale, at game pixel (x, y) (default: the cursor). Off (and never parsed) without the variable.
+struct TestPinch
+{
+	float scale;
+	int frames;
+	int x;
+	int y;
+	bool atCursor;
+};
+
+inline bool parseTestPinch(const char *value, TestPinch &out)
+{
+	if (value == nullptr || value[0] == '\0')
+		return false;
+	char *end = nullptr;
+	out.scale = std::strtof(value, &end);
+	if (end == value || !(out.scale > 0.0f) || *end != ',')
+		return false;
+	const char *p = end + 1;
+	out.frames = (int)std::strtol(p, &end, 10);
+	if (end == p || out.frames <= 0)
+		return false;
+	out.atCursor = true;
+	out.x = out.y = 0;
+	if (*end == ',')
+	{
+		p = end + 1;
+		out.x = (int)std::strtol(p, &end, 10);
+		if (end == p || *end != ',')
+			return false;
+		p = end + 1;
+		out.y = (int)std::strtol(p, &end, 10);
+		if (end == p)
+			return false;
+		out.atCursor = false;
+	}
+	return *end == '\0';
 }
 
 /// Converts a delta in OS window points into game pixels (the game renders at its own internal

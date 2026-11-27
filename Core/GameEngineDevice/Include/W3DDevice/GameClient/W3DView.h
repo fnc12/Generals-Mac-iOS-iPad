@@ -167,6 +167,7 @@ public:
 
 	virtual void scrollBy( const Coord2D *delta ) override;  ///< Shift the view by the given delta
 	virtual void scrollByWorld( const Coord2D *worldDelta ) override;  ///< GeneralsX @feature fnc12 27/11/2026 Shift by a world delta (trackpad pan)
+	virtual void zoomAt( Real height, const ICoord2D *anchor ) override;  ///< GeneralsX @feature fnc12 27/11/2026 Zoom anchored at a screen pixel (trackpad pinch)
 
 	virtual void forceRedraw() override;
 	virtual void onHeightMapChanged() override { m_lastScreenToTerrainValid = false; }
@@ -313,6 +314,8 @@ private:
 	Real getMaxHeight(Real x, Real y) const;
 	Real getMaxZoom(Real x, Real y) const;
 	void updateCameraTransform(); ///< update the transform matrix of m_3DCamera, based on m_pos & m_angle
+	void buildClippedCameraPosition( Vector3& sourcePos, Vector3& targetPos ); ///< GeneralsX @refactor fnc12 27/11/2026 camera position of updateCameraTransform
+	void setPickCameraTransform(); ///< GeneralsX @feature fnc12 27/11/2026 point m_3DCamera at the current state for picking only (pinch anchor)
 	void updateCameraClipPlanes(const Matrix3D &transform);
 
 	// GeneralsX @feature ClaudeCode 22/11/2026 Single place that builds the 3D camera view plane (Hor+ widescreen).

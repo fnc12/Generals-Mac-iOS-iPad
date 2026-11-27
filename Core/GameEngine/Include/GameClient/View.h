@@ -217,6 +217,7 @@ public:
 	virtual Real getHeightAboveGround() { return m_heightAboveGround; }
 	virtual void setHeightAboveGround(Real z);
 	virtual void zoom( Real height ); ///< Zoom in/out, closer to the ground, limit to min, or farther away from the ground, limit to max
+	virtual void zoomAt( Real height, const ICoord2D *anchor ) { zoom( height ); } ///< GeneralsX @feature fnc12 27/11/2026 Zoom so the terrain under screen pixel anchor stays under it (trackpad pinch)
 	virtual void setZoomToMax();
 	virtual void setZoomToDefault() { m_zoom  = 1.0f; } ///< Set zoom to default value
 	virtual void setOkToAdjustHeight( Bool val ) { m_okToAdjustHeight = val; }	///< Set this to adjust camera height
@@ -229,6 +230,7 @@ public:
 	Bool userSetDefaultPitch(Real radians)               { return doUserAction(&View::setDefaultPitch, radians); }
 	Bool userSetPitchToDefault()                         { return doUserAction(&View::setPitchToDefault); }
 	Bool userZoom(Real height)                           { return doUserAction(&View::zoom, height); }
+	Bool userZoomAt(Real height, const ICoord2D *anchor) { return doUserAction(&View::zoomAt, height, anchor); } ///< GeneralsX @feature fnc12 27/11/2026
 	Bool userSetZoom(Real z)                             { return doUserAction(&View::setZoom, z); }
 	Bool userSetZoomToDefault()                          { return doUserAction(&View::setZoomToDefault); }
 	Bool userSetFieldOfView(Real angle)                  { return doUserAction(&View::setFieldOfView, angle); }
@@ -320,6 +322,18 @@ private:
 		stopDoingScriptedCamera();
 		setUserControlled(true);
 		(this->*function)(arg1);
+		return true;
+	}
+
+	// GeneralsX @feature fnc12 27/11/2026 Two-argument user action (zoomAt).
+	template<typename Function, typename Arg1, typename Arg2>
+	Bool doUserAction(Function function, Arg1 arg1, Arg2 arg2)
+	{
+		if (isUserControlLocked())
+			return false;
+		stopDoingScriptedCamera();
+		setUserControlled(true);
+		(this->*function)(arg1, arg2);
 		return true;
 	}
 
