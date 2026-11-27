@@ -26,18 +26,18 @@ namespace end_editor {
     W3dBlend blendOfShader(std::string_view shader);
 
     struct W3dMesh {
-        std::string name;       // "TURRET"
+        std::string name;  // "TURRET"
         std::string container;  // "AVTANK" (the model it belongs to)
         std::uint32_t attributes = 0;
-        std::vector<float> positions;        // 3 per vertex; in the space of the bone it is attached to
-        std::vector<float> normals;          // 3 per vertex
-        std::vector<float> uvs;              // 2 per vertex, empty when untextured
+        std::vector<float> positions;  // 3 per vertex; in the space of the bone it is attached to
+        std::vector<float> normals;  // 3 per vertex
+        std::vector<float> uvs;  // 2 per vertex, empty when untextured
         std::vector<std::uint16_t> boneIds;  // 1 per vertex, skins only
         std::vector<std::uint32_t> indices;  // 3 per triangle
-        std::vector<std::string> textures;   // texture file names ("avtank.tga")
+        std::vector<std::string> textures;  // texture file names ("avtank.tga")
         std::vector<std::uint32_t> triangleTextures;  // per triangle index into `textures`; empty = all 0
-        std::vector<W3dBlend> shaders;                // of every pass; the drawn pass picks them
-        std::vector<std::uint32_t> triangleShaders;   // per triangle index into `shaders`; empty = all 0
+        std::vector<W3dBlend> shaders;  // of every pass; the drawn pass picks them
+        std::vector<std::uint32_t> triangleShaders;  // per triangle index into `shaders`; empty = all 0
 
         std::string fullName() const {
             return this->container.empty() ? this->name : this->container + "." + this->name;
@@ -113,6 +113,8 @@ namespace end_editor {
     // World transform of every pivot at `frame` (bind pose when `animation` is null), as the
     // engine computes it: world = parent world * base pose * translation * rotation.
     // `visible` (optional) receives one 0/1 byte per pivot.
-    std::vector<Matrix4> poseHierarchy(const W3dHierarchy &hierarchy, const W3dAnimation *animation,
-                                       std::uint32_t frame, std::vector<std::uint8_t> *visible = nullptr);
+    std::vector<Matrix4> poseHierarchy(const W3dHierarchy& hierarchy,
+                                       const W3dAnimation* animation,
+                                       std::uint32_t frame,
+                                       std::vector<std::uint8_t>* visible = nullptr);
 }

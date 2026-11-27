@@ -11,7 +11,7 @@
 
 namespace end_editor_tests {
 
-    inline void appendBigEndian32(std::string &out, std::uint32_t value) {
+    inline void appendBigEndian32(std::string& out, std::uint32_t value) {
         out.push_back(char(value >> 24));
         out.push_back(char(value >> 16));
         out.push_back(char(value >> 8));
@@ -19,10 +19,10 @@ namespace end_editor_tests {
     }
 
     // files: (path inside the archive, contents)
-    inline void writeBig(const std::filesystem::path &path,
-                         const std::vector<std::pair<std::string, std::string>> &files) {
+    inline void writeBig(const std::filesystem::path& path,
+                         const std::vector<std::pair<std::string, std::string>>& files) {
         std::uint32_t indexEnd = 16;
-        for(const auto &[name, body]: files) {
+        for (const auto& [name, body]: files) {
             indexEnd += 8 + std::uint32_t(name.size()) + 1;
         }
         std::string header = "BIGF";
@@ -31,7 +31,7 @@ namespace end_editor_tests {
         appendBigEndian32(header, indexEnd);
         std::uint32_t offset = indexEnd;
         std::string bodies;
-        for(const auto &[name, body]: files) {
+        for (const auto& [name, body]: files) {
             appendBigEndian32(header, offset);
             appendBigEndian32(header, std::uint32_t(body.size()));
             header += name;
@@ -44,7 +44,7 @@ namespace end_editor_tests {
     }
 
     // A fresh empty folder under the temp directory.
-    inline std::filesystem::path makeTempFolder(const std::string &name) {
+    inline std::filesystem::path makeTempFolder(const std::string& name) {
         const auto path = std::filesystem::temp_directory_path() / ("end-editor-tests-" + name);
         std::filesystem::remove_all(path);
         std::filesystem::create_directories(path);

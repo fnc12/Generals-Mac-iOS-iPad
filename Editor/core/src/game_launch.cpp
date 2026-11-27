@@ -13,15 +13,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern char **environ;
+extern char** environ;
 #endif
 
 namespace end_editor {
 
     namespace {
-        bool isExecutable(const std::filesystem::path &path) {
+        bool isExecutable(const std::filesystem::path& path) {
             std::error_code error;
-            if(!std::filesystem::is_regular_file(path, error)) {
+            if (!std::filesystem::is_regular_file(path, error)) {
                 return false;
             }
 #ifdef _WIN32
@@ -32,11 +32,11 @@ namespace end_editor {
         }
 
         // <key>CFBundleExecutable</key> <string>name</string> of a bundle's Info.plist (XML).
-        std::string bundleExecutable(const std::filesystem::path &plist) {
+        std::string bundleExecutable(const std::filesystem::path& plist) {
             std::ifstream file(plist, std::ios::binary);
             const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
             const auto key = text.find("<key>CFBundleExecutable</key>");
-            if(key == std::string::npos) {
+            if (key == std::string::npos) {
                 return "";
             }
             const auto open = text.find("<string>", key);
@@ -45,19 +45,19 @@ namespace end_editor {
         }
     }
 
-    std::string programForApp(const std::string &app) {
-        if(app.empty()) {
+    std::string programForApp(const std::string& app) {
+        if (app.empty()) {
             return "";
         }
         const std::filesystem::path path(app);
         std::error_code error;
-        if(std::filesystem::is_directory(path, error)) {
+        if (std::filesystem::is_directory(path, error)) {
             const auto macOS = path / "Contents" / "MacOS";
-            if(isExecutable(macOS / "run.sh")) {
+            if (isExecutable(macOS / "run.sh")) {
                 return (macOS / "run.sh").string();
             }
             const auto name = bundleExecutable(path / "Contents" / "Info.plist");
-            if(!name.empty() && isExecutable(macOS / name)) {
+            if (!name.empty() && isExecutable(macOS / name)) {
                 return (macOS / name).string();
             }
             return "";
@@ -66,7 +66,7 @@ namespace end_editor {
     }
 
 #ifdef _WIN32
-    Launched launchProcess(const LaunchRequest &) {
+    Launched launchProcess(const LaunchRequest&) {
         return Launched{0, "starting the game is not supported on Windows yet"};
     }
     std::optional<int> pollProcess(std::int64_t) {
@@ -74,32 +74,32 @@ namespace end_editor {
     }
     void stopProcess(std::int64_t, bool) {}
 #else
-    Launched launchProcess(const LaunchRequest &request) {
+    Launched launchProcess(const LaunchRequest& request) {
         std::vector<std::string> environment;
-        for(char **entry = environ; entry && *entry; ++entry) {
+        for (char** entry = environ; entry && *entry; ++entry) {
             const std::string text(*entry);
             const auto name = text.substr(0, text.find('='));
             bool replaced = false;
-            for(const auto &[key, value]: request.environment) {
+            for (const auto& [key, value]: request.environment) {
                 replaced = replaced || key == name;
             }
-            if(!replaced) {
+            if (!replaced) {
                 environment.push_back(text);
             }
         }
-        for(const auto &[key, value]: request.environment) {
+        for (const auto& [key, value]: request.environment) {
             environment.push_back(key + "=" + value);
         }
-        std::vector<char *> envp;
-        for(auto &entry: environment) {
+        std::vector<char*> envp;
+        for (auto& entry: environment) {
             envp.push_back(entry.data());
         }
         envp.push_back(nullptr);
 
         std::vector<std::string> arguments{request.program};
         arguments.insert(arguments.end(), request.arguments.begin(), request.arguments.end());
-        std::vector<char *> argv;
-        for(auto &argument: arguments) {
+        std::vector<char*> argv;
+        for (auto& argument: arguments) {
             argv.push_back(argument.data());
         }
         argv.push_back(nullptr);
@@ -118,36 +118,36 @@ namespace end_editor {
         const int result = posix_spawn(&pid, request.program.c_str(), &actions, &attributes, argv.data(), envp.data());
         posix_spawnattr_destroy(&attributes);
         posix_spawn_file_actions_destroy(&actions);
-        if(result != 0) {
+        if (result != 0) {
             return Launched{0, "cannot start " + request.program + ": " + std::strerror(result)};
         }
         return Launched{pid, ""};
     }
 
     std::optional<int> pollProcess(std::int64_t pid) {
-        if(pid <= 0) {
+        if (pid <= 0) {
             return 0;
         }
         int status = 0;
         const auto done = ::waitpid(pid_t(pid), &status, WNOHANG);
-        if(done == 0) {
+        if (done == 0) {
             return std::nullopt;
         }
-        if(done < 0) {
+        if (done < 0) {
             return errno == ECHILD ? 0 : -1;
         }
-        if(WIFEXITED(status)) {
+        if (WIFEXITED(status)) {
             return WEXITSTATUS(status);
         }
         return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
     }
 
     void stopProcess(std::int64_t pid, bool force) {
-        if(pid > 0) {
+        if (pid > 0) {
             // The whole process group: it is the leader of its own session (POSIX_SPAWN_SETSID), and
             // a launcher script may run the game as its child (GeneralsX's run.sh pipes its output).
             const int signal = force ? SIGKILL : SIGTERM;
-            if(::kill(-pid_t(pid), signal) != 0) {
+            if (::kill(-pid_t(pid), signal) != 0) {
                 ::kill(pid_t(pid), signal);
             }
         }

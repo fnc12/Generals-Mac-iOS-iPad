@@ -4,24 +4,46 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <string_view>
 
 namespace end_editor {
 
     namespace {
         std::string lower(std::string text) {
-            for(auto &c: text) {
-                if(c >= 'A' && c <= 'Z') {
+            for (auto& c: text) {
+                if (c >= 'A' && c <= 'Z') {
                     c = char(c - 'A' + 'a');
                 }
             }
             return text;
         }
 
-        bool sameName(const std::string &a, const std::string &b) {
-            return lower(a) == lower(b);
+        char lowerChar(char c) {
+            return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
         }
 
-        bool isW3dPath(const std::string &path) {
+        // Equal without case (ASCII), without making lower-case copies.
+        bool sameName(std::string_view a, std::string_view b) {
+            return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                       return lowerChar(x) == lowerChar(y);
+                   });
+        }
+
+        bool startsWithNoCase(std::string_view text, std::string_view prefix) {
+            return text.size() >= prefix.size() && sameName(text.substr(0, prefix.size()), prefix);
+        }
+
+        // sameName(mesh.fullName(), name) without building the full name.
+        bool isMeshNamed(const W3dMesh& mesh, std::string_view name) {
+            if (mesh.container.empty()) {
+                return sameName(mesh.name, name);
+            }
+            return name.size() == mesh.container.size() + 1 + mesh.name.size() && name[mesh.container.size()] == '.' &&
+                   sameName(name.substr(0, mesh.container.size()), mesh.container) &&
+                   sameName(name.substr(mesh.container.size() + 1), mesh.name);
+        }
+
+        bool isW3dPath(const std::string& path) {
             return path.rfind("art/w3d/", 0) == 0 && path.size() > 4 && path.compare(path.size() - 4, 4, ".w3d") == 0;
         }
 
@@ -32,43 +54,47 @@ namespace end_editor {
             return hierarchy;
         }
 
-        void transformPoint(const Matrix4 &m, const float *p, float *out) {
-            for(int row = 0; row < 3; ++row) {
+        void transformPoint(const Matrix4& m, const float* p, float* out) {
+            for (int row = 0; row < 3; ++row) {
                 out[row] = m[0 * 4 + row] * p[0] + m[1 * 4 + row] * p[1] + m[2 * 4 + row] * p[2] + m[12 + row];
             }
         }
 
         // Splits a mesh into parts by texture.
-        void addMeshParts(const W3dMesh &mesh, std::uint32_t bone, std::uint32_t boneCount, std::vector<ModelPart> &parts,
-                          std::vector<std::string> &warnings) {
-            if(mesh.indices.empty()) {
+        void addMeshParts(const W3dMesh& mesh,
+                          std::uint32_t bone,
+                          std::uint32_t boneCount,
+                          std::vector<ModelPart>& parts,
+                          std::vector<std::string>& warnings) {
+            if (mesh.indices.empty()) {
                 return;
             }
             const bool skinned = mesh.isSkin() && !mesh.boneIds.empty();
-            if(mesh.isSkin() && mesh.boneIds.empty()) {
+            if (mesh.isSkin() && mesh.boneIds.empty()) {
                 warnings.push_back("skin " + mesh.fullName() + " has no bone links");
             }
             // (texture index, shader index) -> triangles
             std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<std::uint32_t>> trianglesByMaterial;
+            std::vector<std::uint32_t> remap;  // one for every part of the mesh
             const std::size_t triangleCount = mesh.indices.size() / 3;
-            for(std::size_t t = 0; t < triangleCount; ++t) {
+            for (std::size_t t = 0; t < triangleCount; ++t) {
                 const std::uint32_t texture = mesh.triangleTextures.empty() ? 0 : mesh.triangleTextures[t];
                 const std::uint32_t shader = mesh.triangleShaders.empty() ? 0 : mesh.triangleShaders[t];
                 trianglesByMaterial[{texture, shader}].push_back(std::uint32_t(t));
             }
-            for(const auto &[material, triangles]: trianglesByMaterial) {
+            for (const auto& [material, triangles]: trianglesByMaterial) {
                 const auto [textureIndex, shaderIndex] = material;
                 ModelPart part;
                 part.mesh = mesh.fullName();
-                if(!mesh.uvs.empty() && textureIndex < mesh.textures.size()) {
+                if (!mesh.uvs.empty() && textureIndex < mesh.textures.size()) {
                     part.texture = lower(mesh.textures[textureIndex]);
                 }
-                if(shaderIndex < mesh.shaders.size()) {
+                if (shaderIndex < mesh.shaders.size()) {
                     part.blend = mesh.shaders[shaderIndex];
                 }
-                if(part.texture.rfind("zhc", 0) == 0) {
+                if (part.texture.rfind("zhc", 0) == 0) {
                     part.houseColor = 1;
-                } else if(lower(mesh.name).rfind("housecolor", 0) == 0) {
+                } else if (startsWithNoCase(mesh.name, "housecolor")) {
                     part.houseColor = 2;
                 }
                 part.bone = bone;
@@ -76,27 +102,30 @@ namespace end_editor {
                 part.twoSided = (mesh.attributes & w3d::meshFlagTwoSided) != 0;
                 part.hidden = (mesh.attributes & w3d::meshFlagHidden) != 0;
 
-                // Keep only the vertices this part uses.
-                std::map<std::uint32_t, std::uint32_t> remap;
-                for(const auto triangle: triangles) {
-                    for(int k = 0; k < 3; ++k) {
+                // Keep only the vertices this part uses: remap[source] is the part's vertex.
+                constexpr auto unused = std::numeric_limits<std::uint32_t>::max();
+                remap.assign(mesh.vertexCount(), unused);
+                part.indices.reserve(triangles.size() * 3);
+                for (const auto triangle: triangles) {
+                    for (int k = 0; k < 3; ++k) {
                         const std::uint32_t source = mesh.indices[triangle * 3 + std::size_t(k)];
-                        auto [it, added] = remap.emplace(source, std::uint32_t(part.vertices.size()));
-                        if(added) {
+                        auto& target = remap[source];
+                        if (target == unused) {
+                            target = std::uint32_t(part.vertices.size());
                             ModelVertex vertex{};
                             std::copy_n(&mesh.positions[source * 3], 3, vertex.position);
                             std::copy_n(&mesh.normals[source * 3], 3, vertex.normal);
-                            if(!mesh.uvs.empty()) {
+                            if (!mesh.uvs.empty()) {
                                 vertex.uv[0] = mesh.uvs[source * 2];
                                 vertex.uv[1] = 1.0f - mesh.uvs[source * 2 + 1];  // as the engine does
                             }
                             vertex.bone = skinned ? mesh.boneIds[source] : bone;
-                            if(vertex.bone >= boneCount) {
+                            if (vertex.bone >= boneCount) {
                                 vertex.bone = 0;
                             }
                             part.vertices.push_back(vertex);
                         }
-                        part.indices.push_back(it->second);
+                        part.indices.push_back(target);
                     }
                 }
                 parts.push_back(std::move(part));
@@ -104,16 +133,16 @@ namespace end_editor {
         }
     }
 
-    std::string ModelLoader::modelPath(const std::string &name) {
+    std::string ModelLoader::modelPath(const std::string& name) {
         return "art/w3d/" + lower(name) + ".w3d";
     }
 
-    const W3dFile *ModelLoader::parsedFile(const std::string &path) {
+    const W3dFile* ModelLoader::parsedFile(const std::string& path) {
         auto found = this->cache.find(path);
-        if(found == this->cache.end()) {
+        if (found == this->cache.end()) {
             std::unique_ptr<W3dFile> parsed;
             std::string bytes;
-            if(this->files.read(path, bytes)) {
+            if (this->files.read(path, bytes)) {
                 parsed = std::make_unique<W3dFile>(parseW3d(bytes));
             }
             found = this->cache.emplace(path, std::move(parsed)).first;
@@ -122,30 +151,31 @@ namespace end_editor {
     }
 
     void ModelLoader::indexAnimationFiles() {
-        if(this->animationsIndexed) {
+        if (this->animationsIndexed) {
             return;
         }
         this->animationsIndexed = true;
         // Stand-alone animation files start with the animation chunk; reading their first
         // bytes is enough to learn which skeleton they move.
-        for(const auto &path: this->files.list(isW3dPath)) {
-            std::string head;
-            if(!this->files.readPrefix(path, w3dHeaderPeekSize, head)) {
-                continue;
+        std::string head;  // one buffer for every file
+        this->files.forEachPath([&](const std::string& path) {
+            if (!isW3dPath(path) || !this->files.readPrefix(path, w3dHeaderPeekSize, head)) {
+                return;
             }
             const auto kind = peekW3dKind(head);
-            if(kind.kind == W3dFileKind::animationFile && !kind.hierarchy.empty()) {
+            if (kind.kind == W3dFileKind::animationFile && !kind.hierarchy.empty()) {
                 this->animationFilesByHierarchy.emplace(lower(kind.hierarchy), path);
             }
-        }
+        });
     }
 
-    std::string ModelLoader::findTexture(const std::string &textureName) const {
+    std::string ModelLoader::findTexture(const std::string& textureName) const {
         const auto dot = textureName.rfind('.');
-        const std::string base = "art/textures/" + (dot == std::string::npos ? textureName : textureName.substr(0, dot));
+        const std::string base =
+            "art/textures/" + (dot == std::string::npos ? textureName : textureName.substr(0, dot));
         // The game prefers a .dds with the same name over the .tga the model names.
-        for(const char *extension: {".dds", ".tga"}) {
-            if(this->files.exists(base + extension)) {
+        for (const char* extension: {".dds", ".tga"}) {
+            if (this->files.exists(base + extension)) {
                 return base + extension;
             }
         }
@@ -153,16 +183,16 @@ namespace end_editor {
     }
 
     namespace {
-        std::vector<std::string> words(const std::string &text) {
+        std::vector<std::string> words(const std::string& text) {
             std::vector<std::string> result;
             std::size_t start = 0;
-            while(start < text.size()) {
+            while (start < text.size()) {
                 const auto end = text.find(' ', start);
                 const auto word = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
-                if(!word.empty()) {
+                if (!word.empty()) {
                     result.push_back(lower(word));
                 }
-                if(end == std::string::npos) {
+                if (end == std::string::npos) {
                     break;
                 }
                 start = end + 1;
@@ -172,28 +202,29 @@ namespace end_editor {
 
         // "turretfx" matches "TURRETFX", "TURRETFX01", "TURRETFX02"... (the engine tries the
         // name itself and "<name>01" to "<name>99").
-        bool isNumberedName(const std::string &candidate, const std::string &prefix) {
+        bool isNumberedName(const std::string& candidate, const std::string& prefix) {
             const auto name = lower(candidate);
-            if(name.size() < prefix.size() || name.compare(0, prefix.size(), prefix) != 0) {
+            if (name.size() < prefix.size() || name.compare(0, prefix.size(), prefix) != 0) {
                 return false;
             }
             const auto digits = name.size() - prefix.size();
             return (digits == 0 || digits == 2) &&
-                   std::all_of(name.begin() + std::ptrdiff_t(prefix.size()), name.end(),
-                               [](char c) { return c >= '0' && c <= '9'; });
+                   std::all_of(name.begin() + std::ptrdiff_t(prefix.size()), name.end(), [](char c) {
+                       return c >= '0' && c <= '9';
+                   });
         }
 
-        std::string shortMeshName(const std::string &mesh) {
+        std::string shortMeshName(const std::string& mesh) {
             const auto dot = mesh.find('.');
             return lower(dot == std::string::npos ? mesh : mesh.substr(dot + 1));
         }
 
-        bool isBoneOrChild(const W3dHierarchy &hierarchy, std::uint32_t bone, std::uint32_t ancestor) {
-            for(int current = int(bone), depth = 0; current >= 0 && depth < 256; ++depth) {
-                if(std::uint32_t(current) == ancestor) {
+        bool isBoneOrChild(const W3dHierarchy& hierarchy, std::uint32_t bone, std::uint32_t ancestor) {
+            for (int current = int(bone), depth = 0; current >= 0 && depth < 256; ++depth) {
+                if (std::uint32_t(current) == ancestor) {
                     return true;
                 }
-                if(std::size_t(current) >= hierarchy.pivots.size()) {
+                if (std::size_t(current) >= hierarchy.pivots.size()) {
                     return false;
                 }
                 current = hierarchy.pivots[std::size_t(current)].parent;
@@ -205,35 +236,36 @@ namespace end_editor {
         // name is looked up as bones first, then as sub-objects (ModelConditionInfo's bone
         // cache), and what hangs on the bone found is hidden. HideSubObject hides the named
         // sub-object and everything on its bone and the bones below.
-        void applyHiding(LoadedModel &model, const ModelLoader::Hiding &hiding) {
-            const auto &pivots = model.hierarchy.pivots;
-            for(const auto &prefix: words(hiding.muzzleFlashes)) {
+        void applyHiding(LoadedModel& model, const ModelLoader::Hiding& hiding) {
+            const auto& pivots = model.hierarchy.pivots;
+            for (const auto& prefix: words(hiding.muzzleFlashes)) {
                 std::set<std::uint32_t> bones;
-                for(std::size_t b = 0; b < pivots.size(); ++b) {
-                    if(isNumberedName(pivots[b].name, prefix)) {
+                for (std::size_t b = 0; b < pivots.size(); ++b) {
+                    if (isNumberedName(pivots[b].name, prefix)) {
                         bones.insert(std::uint32_t(b));
                     }
                 }
-                if(bones.empty()) {
-                    for(const auto &part: model.parts) {
-                        if(!part.skinned && isNumberedName(shortMeshName(part.mesh), prefix)) {
+                if (bones.empty()) {
+                    for (const auto& part: model.parts) {
+                        if (!part.skinned && isNumberedName(shortMeshName(part.mesh), prefix)) {
                             bones.insert(part.bone);
                         }
                     }
                 }
-                for(auto &part: model.parts) {
-                    if(!part.skinned && bones.count(part.bone) != 0) {
+                for (auto& part: model.parts) {
+                    if (!part.skinned && bones.count(part.bone) != 0) {
                         part.hidden = true;
                     }
                 }
             }
-            for(const auto &name: words(hiding.subObjects)) {
-                for(const auto &named: model.parts) {
-                    if(shortMeshName(named.mesh) != name && lower(named.mesh) != name) {
+            for (const auto& name: words(hiding.subObjects)) {
+                for (const auto& named: model.parts) {
+                    if (shortMeshName(named.mesh) != name && lower(named.mesh) != name) {
                         continue;
                     }
-                    for(auto &part: model.parts) {
-                        if(&part == &named || (!part.skinned && isBoneOrChild(model.hierarchy, part.bone, named.bone))) {
+                    for (auto& part: model.parts) {
+                        if (&part == &named ||
+                            (!part.skinned && isBoneOrChild(model.hierarchy, part.bone, named.bone))) {
                             part.hidden = true;
                         }
                     }
@@ -242,85 +274,85 @@ namespace end_editor {
         }
     }
 
-    LoadedModel ModelLoader::load(const std::string &modelName, const Hiding &hiding, bool listAnimations) {
+    LoadedModel ModelLoader::load(const std::string& modelName, const Hiding& hiding, bool listAnimations) {
         this->cache.clear();
         LoadedModel model;
         model.name = modelName;
         const std::string path = modelPath(modelName);
-        const W3dFile *file = this->parsedFile(path);
-        if(!file) {
+        const W3dFile* file = this->parsedFile(path);
+        if (!file) {
             model.error = "no model file " + path;
             return model;
         }
         model.warnings = file->warnings;
 
-        const W3dHlod *hlod = nullptr;
-        for(const auto &candidate: file->hlods) {
-            if(!hlod || sameName(candidate.name, modelName)) {
+        const W3dHlod* hlod = nullptr;
+        for (const auto& candidate: file->hlods) {
+            if (!hlod || sameName(candidate.name, modelName)) {
                 hlod = &candidate;
             }
         }
 
-        if(hlod && !hlod->hierarchy.empty()) {
-            const W3dHierarchy *hierarchy = nullptr;
-            for(const auto &candidate: file->hierarchies) {
-                if(sameName(candidate.name, hlod->hierarchy)) {
+        if (hlod && !hlod->hierarchy.empty()) {
+            const W3dHierarchy* hierarchy = nullptr;
+            for (const auto& candidate: file->hierarchies) {
+                if (sameName(candidate.name, hlod->hierarchy)) {
                     hierarchy = &candidate;
                 }
             }
-            if(!hierarchy) {
-                if(const auto *other = this->parsedFile(modelPath(hlod->hierarchy))) {
-                    for(const auto &candidate: other->hierarchies) {
-                        if(sameName(candidate.name, hlod->hierarchy)) {
+            if (!hierarchy) {
+                if (const auto* other = this->parsedFile(modelPath(hlod->hierarchy))) {
+                    for (const auto& candidate: other->hierarchies) {
+                        if (sameName(candidate.name, hlod->hierarchy)) {
                             hierarchy = &candidate;
                         }
                     }
                 }
             }
-            if(hierarchy) {
+            if (hierarchy) {
                 model.hierarchy = *hierarchy;
             } else {
                 model.warnings.push_back("skeleton " + hlod->hierarchy + " not found");
             }
         }
-        if(model.hierarchy.pivots.empty()) {
+        if (model.hierarchy.pivots.empty()) {
             model.hierarchy = rootOnly();
         }
         const auto boneCount = std::uint32_t(model.hierarchy.pivots.size());
 
-        if(hlod) {
+        if (hlod) {
             int missing = 0;
-            for(const auto &sub: hlod->subObjects) {
-                const W3dMesh *mesh = nullptr;
-                const auto findIn = [&](const W3dFile &in) {
-                    for(const auto &candidate: in.meshes) {
-                        if(sameName(candidate.fullName(), sub.name)) {
+            for (const auto& sub: hlod->subObjects) {
+                const W3dMesh* mesh = nullptr;
+                const auto findIn = [&](const W3dFile& in) {
+                    for (const auto& candidate: in.meshes) {
+                        if (isMeshNamed(candidate, sub.name)) {
                             mesh = &candidate;
                         }
                     }
                 };
                 findIn(*file);
                 const auto dot = sub.name.find('.');
-                if(!mesh && dot != std::string::npos) {
-                    if(const auto *other = this->parsedFile(modelPath(sub.name.substr(0, dot)))) {
+                if (!mesh && dot != std::string::npos) {
+                    if (const auto* other = this->parsedFile(modelPath(sub.name.substr(0, dot)))) {
                         findIn(*other);
                     }
                 }
-                if(!mesh) {
+                if (!mesh) {
                     ++missing;  // boxes, emitters and other non-mesh objects end up here too
                     continue;
                 }
                 addMeshParts(*mesh, sub.bone < boneCount ? sub.bone : 0, boneCount, model.parts, model.warnings);
             }
-            if(missing > 0) {
+            if (missing > 0) {
                 model.warnings.push_back(std::to_string(missing) + " sub-objects are not meshes or were not found");
             }
         } else {
-            for(const auto &mesh: file->meshes) {
+            for (const auto& mesh: file->meshes) {
                 addMeshParts(mesh, 0, boneCount, model.parts, model.warnings);
             }
         }
-        if(model.parts.empty()) {
+        if (model.parts.empty()) {
             model.error = "the model has no meshes to show";
             return model;
         }
@@ -330,38 +362,38 @@ namespace end_editor {
         const auto bind = poseHierarchy(model.hierarchy, nullptr, 0);
         model.boundsMin.fill(std::numeric_limits<float>::max());
         model.boundsMax.fill(std::numeric_limits<float>::lowest());
-        for(const auto &part: model.parts) {
-            if(part.hidden) {
+        for (const auto& part: model.parts) {
+            if (part.hidden) {
                 continue;
             }
-            for(const auto &vertex: part.vertices) {
+            for (const auto& vertex: part.vertices) {
                 float p[3];
                 transformPoint(bind[vertex.bone], vertex.position, p);
-                for(int k = 0; k < 3; ++k) {
+                for (int k = 0; k < 3; ++k) {
                     model.boundsMin[std::size_t(k)] = std::min(model.boundsMin[std::size_t(k)], p[k]);
                     model.boundsMax[std::size_t(k)] = std::max(model.boundsMax[std::size_t(k)], p[k]);
                 }
             }
         }
-        if(model.boundsMin[0] > model.boundsMax[0]) {
+        if (model.boundsMin[0] > model.boundsMax[0]) {
             model.boundsMin.fill(-1.0f);
             model.boundsMax.fill(1.0f);
         }
 
         std::set<std::string> textureNames;
-        for(const auto &part: model.parts) {
-            if(!part.texture.empty()) {
+        for (const auto& part: model.parts) {
+            if (!part.texture.empty()) {
                 textureNames.insert(part.texture);
             }
         }
-        for(const auto &name: textureNames) {
+        for (const auto& name: textureNames) {
             const auto texturePath = this->findTexture(name);
             std::string bytes, error;
             Image image;
             const bool isDds = texturePath.size() > 4 && texturePath.compare(texturePath.size() - 4, 4, ".dds") == 0;
-            if(texturePath.empty() || !this->files.read(texturePath, bytes)) {
+            if (texturePath.empty() || !this->files.read(texturePath, bytes)) {
                 model.warnings.push_back("texture " + name + " not found");
-            } else if(!(isDds ? decodeDds(bytes, image, error) : decodeTga(bytes, image, error))) {
+            } else if (!(isDds ? decodeDds(bytes, image, error) : decodeTga(bytes, image, error))) {
                 model.warnings.push_back("texture " + name + ": " + error);
             } else {
                 model.textures.emplace(name, std::move(image));
@@ -369,25 +401,26 @@ namespace end_editor {
         }
 
         // Animations: those in the model's own file, then stand-alone files for its skeleton.
-        const auto addAnimations = [&](const W3dFile &in, const std::string &inPath) {
-            for(const auto &animation: in.animations) {
-                if(!sameName(animation.hierarchy, model.hierarchy.name) || animation.frameCount == 0) {
+        const auto addAnimations = [&](const W3dFile& in, const std::string& inPath) {
+            for (const auto& animation: in.animations) {
+                if (!sameName(animation.hierarchy, model.hierarchy.name) || animation.frameCount == 0) {
                     continue;
                 }
-                const bool known = std::any_of(model.animations.begin(), model.animations.end(),
-                                               [&](const auto &item) { return sameName(item.name, animation.name); });
-                if(!known) {
+                const bool known = std::any_of(model.animations.begin(), model.animations.end(), [&](const auto& item) {
+                    return sameName(item.name, animation.name);
+                });
+                if (!known) {
                     model.animations.push_back(
                         ModelAnimationInfo{animation.name, inPath, animation.frameCount, animation.frameRate});
                 }
             }
         };
-        if(listAnimations && !model.hierarchy.name.empty()) {
+        if (listAnimations && !model.hierarchy.name.empty()) {
             addAnimations(*file, path);
             this->indexAnimationFiles();
             const auto range = this->animationFilesByHierarchy.equal_range(lower(model.hierarchy.name));
-            for(auto it = range.first; it != range.second; ++it) {
-                if(const auto *other = this->parsedFile(it->second)) {
+            for (auto it = range.first; it != range.second; ++it) {
+                if (const auto* other = this->parsedFile(it->second)) {
                     addAnimations(*other, it->second);
                 }
             }
@@ -395,23 +428,24 @@ namespace end_editor {
         return model;
     }
 
-    ModelPose ModelLoader::pose(const LoadedModel &model, const std::string &animationName, std::string &error) {
+    ModelPose ModelLoader::pose(const LoadedModel& model, const std::string& animationName, std::string& error) {
         ModelPose result;
-        const W3dAnimation *animation = nullptr;
-        if(!animationName.empty()) {
-            const auto info = std::find_if(model.animations.begin(), model.animations.end(),
-                                           [&](const auto &item) { return sameName(item.name, animationName); });
-            if(info == model.animations.end()) {
+        const W3dAnimation* animation = nullptr;
+        if (!animationName.empty()) {
+            const auto info = std::find_if(model.animations.begin(), model.animations.end(), [&](const auto& item) {
+                return sameName(item.name, animationName);
+            });
+            if (info == model.animations.end()) {
                 error = "unknown animation " + animationName;
-            } else if(const auto *file = this->parsedFile(info->file)) {
-                for(const auto &candidate: file->animations) {
-                    if(sameName(candidate.name, animationName)) {
+            } else if (const auto* file = this->parsedFile(info->file)) {
+                for (const auto& candidate: file->animations) {
+                    if (sameName(candidate.name, animationName)) {
                         animation = &candidate;
                     }
                 }
             }
         }
-        if(animation) {
+        if (animation) {
             result.frameCount = animation->frameCount;
             result.frameRate = animation->frameRate;
         }
@@ -419,7 +453,7 @@ namespace end_editor {
         result.matrices.reserve(result.frameCount * bones);
         result.visible.reserve(result.frameCount * bones);
         std::vector<std::uint8_t> visible;
-        for(std::uint32_t frame = 0; frame < result.frameCount; ++frame) {
+        for (std::uint32_t frame = 0; frame < result.frameCount; ++frame) {
             const auto matrices = poseHierarchy(model.hierarchy, animation, frame, &visible);
             result.matrices.insert(result.matrices.end(), matrices.begin(), matrices.end());
             result.visible.insert(result.visible.end(), visible.begin(), visible.end());

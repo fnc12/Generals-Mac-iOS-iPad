@@ -87,6 +87,7 @@ if(END_EDITOR_BUILD_CLI)
     target_link_libraries(end-editor-cli PRIVATE end_editor_core)
     # The round-trip check reads the original map bytes with the core's own file and unpacking code.
     target_include_directories(end-editor-cli PRIVATE src)
+    target_include_directories(end-editor-cli BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
 endif()
 
 if(END_EDITOR_BUILD_TESTS)

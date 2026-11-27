@@ -16,7 +16,7 @@ using namespace end_editor_tests;
 using Catch::Approx;
 
 namespace {
-    MapFile parsed(const std::string &bytes) {
+    MapFile parsed(const std::string& bytes) {
         MapFile map;
         std::string error;
         REQUIRE(parseMap(bytes, map, error));
@@ -24,7 +24,7 @@ namespace {
         return map;
     }
 
-    std::string readFile(const std::filesystem::path &path) {
+    std::string readFile(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary);
         return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
     }
@@ -100,14 +100,14 @@ TEST_CASE("MapDocument edits: move, turn, remove, place, undo, redo") {
     // Saved and read again.
     auto saved = parsed(document.save());
     REQUIRE(saved.objects.size() == 2);
-    const auto &tree = saved.objects[0];
+    const auto& tree = saved.objects[0];
     CHECK(tree.templateName == "TestTree");
     CHECK(tree.x == 12);
     CHECK(tree.y == 7);
     CHECK(tree.z == 2);  // height above the ground stays
     CHECK(tree.angle == Approx(0.25f));
     CHECK(tree.properties.size() == 5);  // its properties are untouched
-    const auto &rock = saved.objects[1];
+    const auto& rock = saved.objects[1];
     CHECK(rock.templateName == "TestRock");
     CHECK(rock.x == 20);
     CHECK(rock.y == 10);
@@ -126,8 +126,8 @@ TEST_CASE("MapDocument edits: move, turn, remove, place, undo, redo") {
     CHECK(saved.heights == original.heights);
     CHECK(saved.teams.size() == original.teams.size());
     CHECK(saved.polygons.size() == original.polygons.size());
-    for(std::size_t i = 0; i < saved.chunks.size(); ++i) {
-        if(saved.chunks[i].name == "ObjectsList") {
+    for (std::size_t i = 0; i < saved.chunks.size(); ++i) {
+        if (saved.chunks[i].name == "ObjectsList") {
             continue;
         }
         const auto &a = saved.chunks[i], &b = original.chunks[i];
@@ -211,15 +211,17 @@ TEST_CASE("Map players: the SidesList players with a default team") {
 TEST_CASE("EditorCore edits and saves the open map") {
     const auto folder = makeTempFolder("map-edit");
     writeBig(folder / "MapsZH.big", {{"Maps\\Test Map\\Test Map.map", refPack(testMap())}});
-    writeBig(folder / "INIZH.big", {{"Data\\INI\\Object\\Rocks.ini", "Object TestRock\n  EditorSorting = MISC_NATURAL\nEnd\n"
-                                                                     "Object TestTree\nEnd\n"}});
+    writeBig(folder / "INIZH.big",
+             {{"Data\\INI\\Object\\Rocks.ini",
+               "Object TestRock\n  EditorSorting = MISC_NATURAL\nEnd\n"
+               "Object TestTree\nEnd\n"}});
     const auto userMaps = makeTempFolder("map-edit-user") / "Maps";
     std::filesystem::create_directories(userMaps);
     const auto dbPath = (folder / "store.sqlite").string();
     EditorCore core(dbPath);
     auto reader = makeStorage(dbPath);
     const auto run = [&] {
-        while(core.hasPendingWork()) {
+        while (core.hasPendingWork()) {
             core.update();
         }
     };
@@ -324,7 +326,7 @@ TEST_CASE("MapDocument groups, heights of old objects, properties and existing w
     w.ascii("OldRock");
     w.dict({{"originalOwner", 3, 0, 0, "team"}});
     w.close();
-    for(int i = 1; i <= 2; ++i) {
+    for (int i = 1; i <= 2; ++i) {
         w.open("Object", 3);
         w.body.floats({float(i * 5), 10, 0, 0}).u32(0);
         w.ascii("*Waypoints/Waypoint");

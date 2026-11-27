@@ -28,12 +28,12 @@ using namespace end_editor_tests;
 using Catch::Approx;
 
 namespace {
-    std::string readFile(const std::filesystem::path &path) {
+    std::string readFile(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary);
         return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
     }
 
-    MapFile parsed(const std::string &bytes) {
+    MapFile parsed(const std::string& bytes) {
         MapFile map;
         std::string error;
         REQUIRE(parseMap(bytes, map, error));
@@ -44,18 +44,20 @@ namespace {
     // opened on it through the C ABI.
     class Flow {
       public:
-        explicit Flow(const std::string &name) {
+        explicit Flow(const std::string& name) {
             this->folder = makeTempFolder(name);
             this->saved = makeTempFolder(name + "-saved");  // never inside the game folder
             writeBig(this->folder / "MapsZH.big", {{"Maps\\Test Map\\Test Map.map", refPack(testMap())}});
-            writeBig(this->folder / "INIZH.big",
-                     {{"Data\\INI\\Object\\Rocks.ini", "Object TestRock\nEnd\nObject TestTree\nEnd\nObject TestTank\nEnd\n"},
-                      {"Data\\INI\\Roads.ini", "Road TwoLane\n  Texture = TRTwoLane.tga\n  RoadWidth = 35\nEnd\n"
-                                               "Bridge WoodBridge\n  BridgeScale = 1.0\nEnd\n"},
-                      {"Data\\INI\\PlayerTemplate.ini",
-                       "PlayerTemplate FactionCivilian\n  Side = Civilian\n  PlayableSide = No\nEnd\n"
-                       "PlayerTemplate FactionAmerica\n  Side = America\n  PlayableSide = Yes\nEnd\n"
-                       "; a comment\nPlayerTemplate FactionChina\n  Side = China\n  PlayableSide = Yes\nEnd\n"}});
+            writeBig(
+                this->folder / "INIZH.big",
+                {{"Data\\INI\\Object\\Rocks.ini", "Object TestRock\nEnd\nObject TestTree\nEnd\nObject TestTank\nEnd\n"},
+                 {"Data\\INI\\Roads.ini",
+                  "Road TwoLane\n  Texture = TRTwoLane.tga\n  RoadWidth = 35\nEnd\n"
+                  "Bridge WoodBridge\n  BridgeScale = 1.0\nEnd\n"},
+                 {"Data\\INI\\PlayerTemplate.ini",
+                  "PlayerTemplate FactionCivilian\n  Side = Civilian\n  PlayableSide = No\nEnd\n"
+                  "PlayerTemplate FactionAmerica\n  Side = America\n  PlayableSide = Yes\nEnd\n"
+                  "; a comment\nPlayerTemplate FactionChina\n  Side = China\n  PlayableSide = Yes\nEnd\n"}});
             this->dbPath = (this->folder / "store.sqlite").string();
             REQUIRE(end_editor_initialize(this->dbPath.c_str()));
             this->reader.emplace(makeStorage(this->dbPath));
@@ -68,19 +70,19 @@ namespace {
         }
 
         // Sends a command the client would send and runs the work it queued.
-        void send(const std::string &command) {
+        void send(const std::string& command) {
             const std::string result = end_editor_send(command.c_str());
             INFO(command);
             REQUIRE(result.empty());
             this->run();
         }
-        std::string refused(const std::string &command) {
+        std::string refused(const std::string& command) {
             const std::string result = end_editor_send(command.c_str());
             this->run();
             return result;
         }
         void run() {
-            while(end_editor_pending_work() > 0) {
+            while (end_editor_pending_work() > 0) {
                 end_editor_update();
             }
         }
@@ -90,7 +92,7 @@ namespace {
         }
         std::vector<std::int64_t> selection() {
             std::vector<std::int64_t> ids;
-            for(const auto &row: this->reader->get_all<MapSelectionRow>(sqlite_orm::order_by(&MapSelectionRow::id))) {
+            for (const auto& row: this->reader->iterate<MapSelectionRow>(sqlite_orm::order_by(&MapSelectionRow::id))) {
                 ids.push_back(row.objectId);
             }
             return ids;
@@ -99,21 +101,24 @@ namespace {
             return this->reader->get_all<MapObjectRow>(sqlite_orm::order_by(&MapObjectRow::id));
         }
         std::optional<MapObjectRow> object(std::int64_t id) {
-            if(auto row = this->reader->get_pointer<MapObjectRow>(id)) {
+            if (auto row = this->reader->get_pointer<MapObjectRow>(id)) {
                 return *row;
             }
             return std::nullopt;
         }
-        std::string property(std::int64_t id, const std::string &key) {
+        std::string property(std::int64_t id, const std::string& key) {
             using namespace sqlite_orm;
-            const auto rows = this->reader->get_all<MapPropertyRow>(
-                where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key));
-            return rows.empty() ? "<none>" : rows.front().type + ":" + rows.front().value;
+            for (const auto& row: this->reader->iterate<MapPropertyRow>(
+                     where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key),
+                     limit(1))) {
+                return row.type + ":" + row.value;
+            }
+            return "<none>";
         }
         std::vector<MapLinkRow> links() {
             return this->reader->get_all<MapLinkRow>(sqlite_orm::order_by(&MapLinkRow::id));
         }
-        MapFile save(const std::string &name) {
+        MapFile save(const std::string& name) {
             const auto path = this->saved / (name + ".map");
             this->send("map.save\t" + path.string());
             REQUIRE(this->reader->get<MapRow>(1).savedPath == path.string());
@@ -155,7 +160,7 @@ TEST_CASE("Flow: a right click with no object chosen asks for one and places it 
     CHECK(editor.note.empty());  // placing ended the hint
     const auto objects = flow.objects();
     REQUIRE(objects.size() == before + 1);
-    const auto &placed = objects.back();
+    const auto& placed = objects.back();
     CHECK(placed.templateName == "TestRock");
     CHECK(placed.x == 12);
     CHECK(placed.y == 8);
@@ -385,7 +390,7 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     CHECK(flow.object(1)->height == 25);
     auto file = flow.save("inspected");
     REQUIRE(file.objects.size() == 2);
-    const auto &tree = file.objects[0];
+    const auto& tree = file.objects[0];
     CHECK(tree.x == 17);
     CHECK(tree.z == 25);
     CHECK(findDictValue(tree.properties, "objectInitialHealth")->intValue == 40);
@@ -395,24 +400,27 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     CHECK_FALSE(findDictValue(tree.properties, "objectScale"));
     // The waypoint and every chunk but ObjectsList are the original bytes.
     const auto original = parsed(testMap());
-    CHECK(file.data.substr(file.objectChunks[1].header + 4, file.objectChunks[1].end - file.objectChunks[1].header - 4) ==
-          original.data.substr(original.objectChunks[1].header + 4,
-                               original.objectChunks[1].end - original.objectChunks[1].header - 4));
-    for(std::size_t i = 0; i < file.chunks.size(); ++i) {
-        if(file.chunks[i].name != "ObjectsList") {
+    CHECK(
+        file.data.substr(file.objectChunks[1].header + 4, file.objectChunks[1].end - file.objectChunks[1].header - 4) ==
+        original.data.substr(original.objectChunks[1].header + 4,
+                             original.objectChunks[1].end - original.objectChunks[1].header - 4));
+    for (std::size_t i = 0; i < file.chunks.size(); ++i) {
+        if (file.chunks[i].name != "ObjectsList") {
             CHECK(file.data.substr(file.chunks[i].header + 4, file.chunks[i].end - file.chunks[i].header - 4) ==
-                  original.data.substr(original.chunks[i].header + 4, original.chunks[i].end - original.chunks[i].header - 4));
+                  original.data.substr(original.chunks[i].header + 4,
+                                       original.chunks[i].end - original.chunks[i].header - 4));
         }
     }
 
     // Undoing every step gives the original objects back, byte for byte.
-    while(flow.reader->get<MapRow>(1).undoCount > 0) {
+    while (flow.reader->get<MapRow>(1).undoCount > 0) {
         flow.send("map.undo");
     }
     file = flow.save("undone");
-    CHECK(file.data.substr(file.objectChunks[0].header + 4, file.objectChunks[0].end - file.objectChunks[0].header - 4) ==
-          original.data.substr(original.objectChunks[0].header + 4,
-                               original.objectChunks[0].end - original.objectChunks[0].header - 4));
+    CHECK(
+        file.data.substr(file.objectChunks[0].header + 4, file.objectChunks[0].end - file.objectChunks[0].header - 4) ==
+        original.data.substr(original.objectChunks[0].header + 4,
+                             original.objectChunks[0].end - original.objectChunks[0].header - 4));
 
     // Owner: a team of the map; the object takes its player's color.
     flow.send("placement.template\tTestRock");
@@ -427,9 +435,9 @@ TEST_CASE("Flow: waypoints are placed as linked paths") {
     flow.send("placement.waypoint");
     CHECK(flow.editor().tool == "waypoint");
     flow.send("selection.set\t");
-    flow.send("map.click_right\t5\t5\t");    // 3: a new path
-    flow.send("map.click_right\t10\t5\t");   // 4, linked from 3
-    flow.send("map.click_right\t15\t5\t");   // 5, linked from 4
+    flow.send("map.click_right\t5\t5\t");  // 3: a new path
+    flow.send("map.click_right\t10\t5\t");  // 4, linked from 3
+    flow.send("map.click_right\t15\t5\t");  // 5, linked from 4
     auto objects = flow.objects();
     REQUIRE(objects.size() == 5);
     CHECK(objects[2].kind == "waypoint");
@@ -466,7 +474,7 @@ TEST_CASE("Flow: waypoints are placed as linked paths") {
     CHECK(file.waypointLinks == std::vector<std::array<std::int32_t, 2>>{{2, 3}, {3, 4}});
     CHECK(file.chunkNames.back() == "WaypointsList");  // the test map had none
     std::size_t waypoints = 0;
-    for(const auto &object: file.objects) {
+    for (const auto& object: file.objects) {
         waypoints += findDictValue(object.properties, "waypointID") ? 1 : 0;
     }
     CHECK(waypoints == 4);
@@ -555,7 +563,7 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
     ChunkWriter w;
     w.open("HeightMapData", 4);
     w.body.u32(9).u32(9).u32(0).u32(1).u32(8).u32(8).u32(81);
-    for(int i = 0; i < 81; ++i) {
+    for (int i = 0; i < 81; ++i) {
         w.body.u8(std::uint8_t(i % 9 < 5 ? 0 : 40));  // the east is higher
     }
     w.close();
@@ -564,7 +572,7 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
     w.ascii("Lake");
     w.ascii("");
     w.body.u32(1).u8(1).u8(0).u32(0).u32(4);
-    for(const auto &point: std::vector<std::array<int, 2>>{{0, 0}, {35, 0}, {35, 80}, {0, 80}}) {
+    for (const auto& point: std::vector<std::array<int, 2>>{{0, 0}, {35, 0}, {35, 80}, {0, 80}}) {
         w.body.u32(std::uint32_t(point[0])).u32(std::uint32_t(point[1])).u32(10);
     }
     w.close();
@@ -573,7 +581,9 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
     const std::vector<std::array<float, 3>> colors(1, {0.5f, 0.4f, 0.3f});
     const auto rgba = renderMapPreview(map, colors);
     REQUIRE(rgba.size() == 128 * 128 * 4);
-    const auto pixel = [&](int x, int y) { return &rgba[(std::size_t(y) * 128 + std::size_t(x)) * 4]; };
+    const auto pixel = [&](int x, int y) {
+        return &rgba[(std::size_t(y) * 128 + std::size_t(x)) * 4];
+    };
     CHECK(pixel(10, 64)[2] > pixel(10, 64)[0]);  // west: water, blue
     CHECK(pixel(120, 64)[0] > pixel(120, 64)[2]);  // east: the tile's warm color
     CHECK(pixel(120, 64)[3] == 255);
@@ -586,14 +596,17 @@ namespace {
     // A stand-in for the game app: Fake.app/Contents/MacOS/run.sh writes the arguments it got (one
     // per line), CNC_GENERALS_ZH_PATH, CNC_GENERALS_PATH and GENERALSX_USER_DATA_DIR to files next to the app, then waits
     // `seconds` in a child process (like run.sh, which runs the game as its child) and exits with `code`.
-    std::filesystem::path makeFakeGame(const std::filesystem::path &folder, int seconds = 0, int code = 0,
-                                       bool ignoreTerm = false) {
+    std::filesystem::path
+    makeFakeGame(const std::filesystem::path& folder, int seconds = 0, int code = 0, bool ignoreTerm = false) {
         const auto app = folder / "Fake.app";
         std::filesystem::create_directories(app / "Contents" / "MacOS");
         const auto script = app / "Contents" / "MacOS" / "run.sh";
-        std::ofstream(script) << "#!/bin/sh\n" << (ignoreTerm ? "trap '' TERM\n" : "")
-                              << "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" << (folder / "args.txt").string() << "'\n"
-                              << "printf '%s\\n%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" \"$GENERALSX_USER_DATA_DIR\" > '"
+        std::ofstream(script) << "#!/bin/sh\n"
+                              << (ignoreTerm ? "trap '' TERM\n" : "")
+                              << "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" << (folder / "args.txt").string()
+                              << "'\n"
+                              << "printf '%s\\n%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" "
+                                 "\"$GENERALSX_USER_DATA_DIR\" > '"
                               << (folder / "env.txt").string() << "'\n"
                               << "echo started $$ >> '" << (folder / "runs.txt").string() << "'\n"
                               << "sleep " << seconds << " &\necho $! > '" << (folder / "child.txt").string()
@@ -602,10 +615,10 @@ namespace {
         return app;
     }
 
-    std::vector<std::string> lines(const std::string &text) {
+    std::vector<std::string> lines(const std::string& text) {
         std::vector<std::string> result;
         std::size_t start = 0;
-        while(start < text.size()) {
+        while (start < text.size()) {
             const auto end = text.find('\n', start);
             result.push_back(text.substr(start, end - start));
             start = end == std::string::npos ? text.size() : end + 1;
@@ -614,10 +627,10 @@ namespace {
     }
 
     // Runs the core's updates (which watch the started game) until the play row leaves "running".
-    PlayRow waitForGame(Flow &flow, double seconds = 10) {
+    PlayRow waitForGame(Flow& flow, double seconds = 10) {
         const auto start = std::chrono::steady_clock::now();
-        while(flow.reader->get<PlayRow>(1).state == "running" &&
-              std::chrono::steady_clock::now() - start < std::chrono::duration<double>(seconds)) {
+        while (flow.reader->get<PlayRow>(1).state == "running" &&
+               std::chrono::steady_clock::now() - start < std::chrono::duration<double>(seconds)) {
             end_editor_update();
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
@@ -648,8 +661,9 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(play.runs == 1);
     CHECK(play.mapPath == testCopy.string());
     const auto program = (app / "Contents" / "MacOS" / "run.sh").string();
-    CHECK(play.command == program + "\t-testMap\t" + testCopy.string() +
-                             "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2");
+    CHECK(play.command ==
+          program + "\t-testMap\t" + testCopy.string() +
+              "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2");
     CHECK(flow.editor().note.rfind("Playing Test Map in Fake.app", 0) == 0);
     // The test copy has the unsaved edit; the user's map stays unsaved and edited.
     const auto copy = parsed(readFile(testCopy));
@@ -660,7 +674,7 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(flow.reader->get<MapRow>(1).savedPath.empty());
     // It is not listed as one of the user's maps.
     flow.send("maps.user\t" + userMaps.string());
-    for(const auto &row: flow.reader->get_all<MapListRow>()) {
+    for (const auto& row: flow.reader->iterate<MapListRow>()) {
         CHECK(row.name != "__EditorTest");
     }
 
@@ -669,9 +683,16 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(play.exitCode == 0);
     CHECK(play.pid == 0);
     // What the game got: exactly the command line, and the editor's game folder as its data.
-    CHECK(lines(readFile(flow.saved / "args.txt")) ==
-          std::vector<std::string>{"-testMap", testCopy.string(), "-testMapFaction", "FactionChina", "-testMapAI", "2",
-                                   "-testMapAIDifficulty", "hard", "-testMapStart", "2"});
+    CHECK(lines(readFile(flow.saved / "args.txt")) == std::vector<std::string>{"-testMap",
+                                                                               testCopy.string(),
+                                                                               "-testMapFaction",
+                                                                               "FactionChina",
+                                                                               "-testMapAI",
+                                                                               "2",
+                                                                               "-testMapAIDifficulty",
+                                                                               "hard",
+                                                                               "-testMapStart",
+                                                                               "2"});
     const auto environment = lines(readFile(flow.saved / "env.txt"));
     REQUIRE(environment.size() == 3);
     CHECK(environment[0] == flow.folder.string());
@@ -728,16 +749,17 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
     CHECK(play.aiDifficulty == "medium");
     CHECK(play.startPosition == 1);
     CHECK(play.state == "idle");
-    const char *home = std::getenv("HOME");
+    const char* home = std::getenv("HOME");
     REQUIRE(home);
     CHECK(play.appResolved == (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsXZH.app").string());
     // The base game's user Maps folder means the base game's app.
     flow.send("maps.user\t" + (flow.saved / "GeneralsX" / "Generals" / "Maps").string());
-    CHECK(flow.reader->get<PlayRow>(1).appResolved == (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsX.app").string());
+    CHECK(flow.reader->get<PlayRow>(1).appResolved ==
+          (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsX.app").string());
 
     // The playable factions of PlayerTemplate.ini, what the faction menu offers.
     std::vector<std::string> factions;
-    for(const auto &row: flow.reader->get_all<FactionRow>(sqlite_orm::order_by(&FactionRow::id))) {
+    for (const auto& row: flow.reader->iterate<FactionRow>(sqlite_orm::order_by(&FactionRow::id))) {
         factions.push_back(row.name + "/" + row.side);
     }
     CHECK(factions == std::vector<std::string>{"FactionAmerica/America", "FactionChina/China"});
@@ -814,8 +836,8 @@ TEST_CASE("Flow: Save Map As a name: into the user Maps folder, asking before it
     CHECK(parsed(readFile(userMaps / "Other" / "Other.map")).objects.size() == flow.objects().size());
     // Both are listed as user maps.
     std::vector<std::string> names;
-    for(const auto &row: flow.reader->get_all<MapListRow>()) {
-        if(row.source == "User maps") {
+    for (const auto& row: flow.reader->iterate<MapListRow>()) {
+        if (row.source == "User maps") {
             names.push_back(row.name);
         }
     }

@@ -29,11 +29,11 @@ namespace end_editor {
 
     // What Data/INI/Water.ini says about standing water for one time of day.
     struct WaterLook {
-        std::string texture;                        // WaterSet's WaterTexture
-        std::array<float, 4> diffuse{1, 1, 1, 1};   // DiffuseColor, 0..1
+        std::string texture;  // WaterSet's WaterTexture
+        std::array<float, 4> diffuse{1, 1, 1, 1};  // DiffuseColor, 0..1
         std::array<float, 4> transparentDiffuse{1, 1, 1, 0.5f};  // TransparentDiffuseColor (alpha = opacity)
-        float repeatCount = 32;                     // WaterRepeatCount
-        std::string standingTexture;                // WaterTransparency's StandingWaterTexture
+        float repeatCount = 32;  // WaterRepeatCount
+        std::string standingTexture;  // WaterTransparency's StandingWaterTexture
         std::array<float, 3> standingColor{1, 1, 1};  // StandingWaterColor
     };
 

@@ -78,21 +78,21 @@ extern "C" {
 #include <stdbool.h>
 
 /* Library version (static string). */
-const char *end_editor_get_version(void);
+const char* end_editor_get_version(void);
 
 /* Opens (creates) the SQLite store at db_path. NULL or "" uses a file in the temp folder.
  * Returns false if the core is already initialized or the store cannot be opened. */
-bool end_editor_initialize(const char *db_path);
+bool end_editor_initialize(const char* db_path);
 
 /* Closes the store. */
 void end_editor_shutdown(void);
 
 /* Path of the SQLite file the client reads. Valid until end_editor_shutdown(). */
-const char *end_editor_db_path(void);
+const char* end_editor_db_path(void);
 
 /* Queues a command. Returns "" when accepted or "error:<code>"; the string stays valid until the
  * next call. */
-const char *end_editor_send(const char *command);
+const char* end_editor_send(const char* command);
 
 /* Runs queued work. Call once per client tick. */
 void end_editor_update(void);

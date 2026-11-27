@@ -12,7 +12,7 @@ using namespace end_editor;
 using namespace end_editor_tests;
 
 namespace {
-    void makeGameFolder(const std::filesystem::path &folder) {
+    void makeGameFolder(const std::filesystem::path& folder) {
         // "!" sorts first, so this archive wins over Base.big for the same path.
         writeBig(folder / "!Patch.big", {{"Data\\INI\\Object\\Ships.ini", "Object Ship\n  Side = Patched\nEnd\n"}});
         writeBig(folder / "Base.big",
@@ -41,7 +41,7 @@ TEST_CASE("Game folder scan: loose files win, then archives in name order") {
     CHECK(scan.iniFileCount == 3);  // ships (patch), tanks (loose), default object
 
     std::map<std::string, std::string> sides;
-    for(const auto &object: scan.objects) {
+    for (const auto& object: scan.objects) {
         sides[object.name] = object.side;
     }
     CHECK(sides.size() == 3);

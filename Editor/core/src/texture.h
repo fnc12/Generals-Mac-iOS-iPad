@@ -17,6 +17,6 @@ namespace end_editor {
     // The texture formats the game ships: DDS with DXT1/DXT3/DXT5 (the first mip level is
     // decoded) and uncompressed or RLE TGA, 24 or 32 bit. Returns false and sets `error`
     // for anything else.
-    bool decodeDds(std::string_view bytes, Image &out, std::string &error);
-    bool decodeTga(std::string_view bytes, Image &out, std::string &error);
+    bool decodeDds(std::string_view bytes, Image& out, std::string& error);
+    bool decodeTga(std::string_view bytes, Image& out, std::string& error);
 }

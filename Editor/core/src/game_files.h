@@ -3,9 +3,10 @@
 #include "big_archive.h"
 
 #include <filesystem>
-#include <functional>
+#include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace end_editor {
@@ -21,40 +22,63 @@ namespace end_editor {
       public:
         // Replaces what was mounted. Unreadable archives become warnings. Returns false when
         // the first folder does not exist.
-        bool mount(const std::vector<std::filesystem::path> &folders, std::vector<std::string> &warnings,
-                   std::string &error);
+        bool mount(const std::vector<std::filesystem::path>& folders,
+                   std::vector<std::string>& warnings,
+                   std::string& error);
 
         int archiveCount() const {
             return int(this->archives.size());
         }
-        bool exists(const std::string &path) const {
+        bool exists(const std::string& path) const {
             return this->sources.count(path) != 0;
         }
-        bool read(const std::string &path, std::string &out) const;
-        // Every copy of a path, the winning one first (for files the game merges, like a mod's
-        // Terrain.ini over the base game's).
-        std::vector<std::string> readAll(const std::string &path) const;
-        bool readPrefix(const std::string &path, std::uint32_t maxBytes, std::string &out) const;
+        bool read(const std::string& path, std::string& out) const;
+        // Calls `visit` with the bytes of every copy of a path, the winning one first (for files
+        // the game merges, like a mod's Terrain.ini over the base game's); one buffer is reused.
+        // Returns the number of copies read.
+        template<class F>
+        std::size_t readEach(const std::string& path, F&& visit) const {
+            std::size_t copies = 0;
+            std::string bytes;
+            if (this->read(path, bytes)) {
+                ++copies;
+                visit(std::as_const(bytes));
+            }
+            const auto range = this->shadowed.equal_range(path);
+            for (auto it = range.first; it != range.second; ++it) {
+                if (this->readSource(it->second, UINT32_MAX, bytes)) {
+                    ++copies;
+                    visit(std::as_const(bytes));
+                }
+            }
+            return copies;
+        }
+        bool readPrefix(const std::string& path, std::uint32_t maxBytes, std::string& out) const;
 
         // The path with its original case and '/' separators ("Maps/Alpine Assault/Alpine Assault.map").
-        std::string originalPath(const std::string &path) const;
+        std::string originalPath(const std::string& path) const;
         // Where the winning copy is: the archive's file name, or the loose file's full path.
-        std::string sourceOf(const std::string &path) const;
+        std::string sourceOf(const std::string& path) const;
 
-        // All known paths for which `keep` returns true, in path order.
-        std::vector<std::string> list(const std::function<bool(const std::string &)> &keep) const;
+        // Calls `visit` with every known path, in path order.
+        template<class F>
+        void forEachPath(F&& visit) const {
+            for (const auto& item: this->sources) {
+                visit(item.first);
+            }
+        }
 
       private:
         struct Source {
             int archive = -1;  // index in `archives`, or -1 for a loose file
-            BigEntry entry;
+            std::size_t entry = 0;  // index in the archive's entries (not a copy of its strings)
             std::filesystem::path looseFile;
             std::string relativeName;  // loose files: path under the folder, original case
         };
 
         std::vector<BigArchive> archives;
-        void add(const std::string &path, Source source);
-        bool readSource(const Source &source, std::uint32_t maxBytes, std::string &out) const;
+        void add(const std::string& path, Source source);
+        bool readSource(const Source& source, std::uint32_t maxBytes, std::string& out) const;
 
         std::map<std::string, Source> sources;
         std::multimap<std::string, Source> shadowed;  // copies that lost, in mount order

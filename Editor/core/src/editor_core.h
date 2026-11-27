@@ -29,13 +29,13 @@ namespace end_editor {
         // Opens (creates) the store and sets status to "idle". Throws std::system_error on failure.
         explicit EditorCore(std::string dbPath);
 
-        const std::string &dbPath() const {
+        const std::string& dbPath() const {
             return this->path;
         }
 
         // The map name of the test copy map.play writes into the user Maps folder (the user's own
         // map file is not touched by Play).
-        static constexpr const char *testMapName = "__EditorTest";
+        static constexpr const char* testMapName = "__EditorTest";
 
         // Returns "" when the command is accepted, "error:<code>" otherwise.
         std::string send(std::string_view command);
@@ -52,33 +52,45 @@ namespace end_editor {
 
       private:
         struct Job {
-            enum Kind { openGame, openModel, playAnimation, openMap, loadMapModels, editMap, saveMap, listMaps, playMap } kind = openGame;
+            enum Kind {
+                openGame,
+                openModel,
+                playAnimation,
+                openMap,
+                loadMapModels,
+                editMap,
+                saveMap,
+                listMaps,
+                playMap
+            } kind = openGame;
             std::vector<std::string> arguments;
         };
 
-        void setStatus(const std::string &state, const std::string &message, const std::string &gameDir,
+        void setStatus(const std::string& state,
+                       const std::string& message,
+                       const std::string& gameDir,
                        std::int64_t objectCount);
-        void setModelState(const std::string &name, const std::string &state, const std::string &message);
-        void runOpenGame(const Job &job);
-        void runOpenModel(const std::vector<std::string> &arguments);
-        void runPlayAnimation(const std::string &name);
-        void setMapState(const std::string &path, const std::string &state, const std::string &message);
+        void setModelState(const std::string& name, const std::string& state, const std::string& message);
+        void runOpenGame(const Job& job);
+        void runOpenModel(const std::vector<std::string>& arguments);
+        void runPlayAnimation(const std::string& name);
+        void setMapState(const std::string& path, const std::string& state, const std::string& message);
         void clearMap();
         void listMaps();
-        void runOpenMap(const std::string &path);
+        void runOpenMap(const std::string& path);
         void runLoadMapModels();
         void queueBeforeModelLoading(Job job);
-        void runEditMap(const std::vector<std::string> &arguments);
+        void runEditMap(const std::vector<std::string>& arguments);
         // map.save (any file) and map.save_as (a name in the user Maps folder; arguments: path,
         // "as", optional "replace").
-        void runSaveMap(const std::vector<std::string> &arguments);
+        void runSaveMap(const std::vector<std::string>& arguments);
         // Writes the open document and its preview to `target`; "" when written, else what failed
         // (a failed preview sets only `previewError`).
-        std::string writeMapFiles(const std::filesystem::path &target, std::string &previewError);
+        std::string writeMapFiles(const std::filesystem::path& target, std::string& previewError);
         // map.play: the open map with its edits to the test copy, then the game started on it.
         void runPlayMap();
         // play.*: a setting of the Play button; "" or an error code (the note says why).
-        std::string setPlaySetting(std::string_view name, const std::vector<std::string> &arguments);
+        std::string setPlaySetting(std::string_view name, const std::vector<std::string>& arguments);
         // The default game app for the opened game (GeneralsXZH or GeneralsX in ~/GeneralsX/Apps).
         std::string defaultGameApp() const;
         void writePlay();
@@ -88,16 +100,16 @@ namespace end_editor {
         // Writes one object of the open document to map_objects / map_object_properties (and
         // queues its model when the map has not used it yet); removes the rows when it is gone.
         void writeMapObject(std::int64_t id);
-        void updateMapEditState(const std::string &message);
+        void updateMapEditState(const std::string& message);
         // map_links from the document's waypoint links and road segments.
         void writeMapLinks();
         // The map_editor row and map_selection, when they changed.
         void publishEditor();
         // A refused command: the note right away (send() returns the error code too).
-        std::string refuse(const std::string &error, const std::string &note);
-        std::string checkEditCommand(std::string_view name, const std::vector<std::string> &arguments);
-        int roadKind(const std::string &name) const;
-        const ObjectInfo *findObject(const std::string &templateName) const;
+        std::string refuse(const std::string& error, const std::string& note);
+        std::string checkEditCommand(std::string_view name, const std::vector<std::string>& arguments);
+        int roadKind(const std::string& name) const;
+        const ObjectInfo* findObject(const std::string& templateName) const;
 
         std::string path;
         std::unique_ptr<Storage> storage;
@@ -107,8 +119,14 @@ namespace end_editor {
         std::unique_ptr<ModelLoader> loader;
         LoadedModel model;
 
+        // Template names compared without case (ASCII); looked up by a view, without a copy.
+        struct NoCaseLess {
+            using is_transparent = void;
+            bool operator()(std::string_view a, std::string_view b) const;
+        };
         std::vector<ObjectInfo> objectInfos;
-        std::map<std::string, std::size_t> objectsByName;  // lower-case template name -> objectInfos
+        // Template name (a view of objectInfos' name) -> objectInfos.
+        std::map<std::string_view, std::size_t, NoCaseLess> objectsByName;
         // Models of the open map still to load, in map_models id order.
         struct PendingMapModel {
             std::int64_t id = 0;

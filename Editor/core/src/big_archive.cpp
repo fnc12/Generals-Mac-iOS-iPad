@@ -6,19 +6,19 @@
 namespace end_editor {
 
     namespace {
-        std::uint32_t readBigEndian32(const unsigned char *bytes) {
-            return (std::uint32_t(bytes[0]) << 24) | (std::uint32_t(bytes[1]) << 16) |
-                   (std::uint32_t(bytes[2]) << 8) | std::uint32_t(bytes[3]);
+        std::uint32_t readBigEndian32(const unsigned char* bytes) {
+            return (std::uint32_t(bytes[0]) << 24) | (std::uint32_t(bytes[1]) << 16) | (std::uint32_t(bytes[2]) << 8) |
+                   std::uint32_t(bytes[3]);
         }
     }
 
     std::string normalizeArchivePath(std::string_view path) {
         std::string result;
         result.reserve(path.size());
-        for(char c: path) {
-            if(c == '\\') {
+        for (char c: path) {
+            if (c == '\\') {
                 c = '/';
-            } else if(c >= 'A' && c <= 'Z') {
+            } else if (c >= 'A' && c <= 'Z') {
                 c = char(c - 'A' + 'a');
             }
             result.push_back(c);
@@ -26,9 +26,9 @@ namespace end_editor {
         return result;
     }
 
-    std::optional<BigArchive> BigArchive::open(const std::filesystem::path &path, std::string &error) {
+    std::optional<BigArchive> BigArchive::open(const std::filesystem::path& path, std::string& error) {
         std::ifstream file(path, std::ios::binary);
-        if(!file) {
+        if (!file) {
             error = "cannot open";
             return std::nullopt;
         }
@@ -39,24 +39,24 @@ namespace end_editor {
         // Header: magic[4], archive size (little endian, not used), entry count, index end
         // (both big endian).
         unsigned char header[16];
-        if(!file.read(reinterpret_cast<char *>(header), sizeof(header))) {
+        if (!file.read(reinterpret_cast<char*>(header), sizeof(header))) {
             error = "too short";
             return std::nullopt;
         }
-        const std::string_view magic(reinterpret_cast<const char *>(header), 4);
-        if(magic != "BIGF" && magic != "BIG4") {
+        const std::string_view magic(reinterpret_cast<const char*>(header), 4);
+        if (magic != "BIGF" && magic != "BIG4") {
             error = "not a BIG archive";
             return std::nullopt;
         }
         const std::uint32_t count = readBigEndian32(header + 8);
         const std::uint32_t indexEnd = readBigEndian32(header + 12);
-        if(indexEnd > fileSize || indexEnd < sizeof(header)) {
+        if (indexEnd > fileSize || indexEnd < sizeof(header)) {
             error = "bad index size";
             return std::nullopt;
         }
 
         std::string index(indexEnd - sizeof(header), '\0');
-        if(!file.read(index.data(), std::streamsize(index.size()))) {
+        if (!file.read(index.data(), std::streamsize(index.size()))) {
             error = "cannot read index";
             return std::nullopt;
         }
@@ -65,25 +65,25 @@ namespace end_editor {
         archive.filePath = path;
         archive.fileEntries.reserve(count);
         std::size_t position = 0;
-        for(std::uint32_t i = 0; i < count; ++i) {
-            if(position + 8 > index.size()) {
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (position + 8 > index.size()) {
                 error = "index ends early";
                 return std::nullopt;
             }
-            const auto *bytes = reinterpret_cast<const unsigned char *>(index.data() + position);
+            const auto* bytes = reinterpret_cast<const unsigned char*>(index.data() + position);
             BigEntry entry;
             entry.offset = readBigEndian32(bytes);
             entry.size = readBigEndian32(bytes + 4);
             position += 8;
             const auto nameEnd = index.find('\0', position);
-            if(nameEnd == std::string::npos) {
+            if (nameEnd == std::string::npos) {
                 error = "unterminated file name";
                 return std::nullopt;
             }
             entry.name = index.substr(position, nameEnd - position);
             entry.path = normalizeArchivePath(entry.name);
             position = nameEnd + 1;
-            if(std::uint64_t(entry.offset) + entry.size > fileSize) {
+            if (std::uint64_t(entry.offset) + entry.size > fileSize) {
                 error = "entry outside the archive: " + entry.path;
                 return std::nullopt;
             }
@@ -92,13 +92,13 @@ namespace end_editor {
         return archive;
     }
 
-    bool BigArchive::read(const BigEntry &entry, std::string &out) const {
+    bool BigArchive::read(const BigEntry& entry, std::string& out) const {
         return this->readPrefix(entry, entry.size, out);
     }
 
-    bool BigArchive::readPrefix(const BigEntry &entry, std::uint32_t maxBytes, std::string &out) const {
+    bool BigArchive::readPrefix(const BigEntry& entry, std::uint32_t maxBytes, std::string& out) const {
         std::ifstream file(this->filePath, std::ios::binary);
-        if(!file) {
+        if (!file) {
             return false;
         }
         file.seekg(entry.offset);

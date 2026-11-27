@@ -38,5 +38,5 @@ namespace end_editor {
     ObjectParseResult parseObjects(std::string_view text, std::string_view sourceFile);
 
     // Fills empty fields of ObjectReskin / ChildObject entries from their parents.
-    void resolveInheritance(std::vector<ObjectInfo> &objects);
+    void resolveInheritance(std::vector<ObjectInfo>& objects);
 }

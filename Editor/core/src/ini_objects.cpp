@@ -20,10 +20,10 @@ namespace end_editor {
             const auto isSpace = [](char c) {
                 return c == ' ' || c == '\t' || c == '\r' || c == '\n';
             };
-            while(!s.empty() && isSpace(s.front())) {
+            while (!s.empty() && isSpace(s.front())) {
                 s.remove_prefix(1);
             }
-            while(!s.empty() && isSpace(s.back())) {
+            while (!s.empty() && isSpace(s.back())) {
                 s.remove_suffix(1);
             }
             return s;
@@ -80,14 +80,14 @@ namespace end_editor {
         }
 
         // Splits "Key = value" or "Key value words" into key and the rest.
-        void splitLine(std::string_view line, std::string_view &key, std::string_view &rest) {
+        void splitLine(std::string_view line, std::string_view& key, std::string_view& rest) {
             std::size_t end = 0;
-            while(end < line.size() && line[end] != ' ' && line[end] != '\t' && line[end] != '=') {
+            while (end < line.size() && line[end] != ' ' && line[end] != '\t' && line[end] != '=') {
                 ++end;
             }
             key = line.substr(0, end);
             rest = trim(line.substr(end));
-            if(!rest.empty() && rest.front() == '=') {
+            if (!rest.empty() && rest.front() == '=') {
                 rest = trim(rest.substr(1));
             }
         }
@@ -97,11 +97,11 @@ namespace end_editor {
             return s.substr(0, end);
         }
 
-        void appendWord(std::string &list, std::string_view word) {
-            if(word.empty()) {
+        void appendWord(std::string& list, std::string_view word) {
+            if (word.empty()) {
                 return;
             }
-            if(!list.empty()) {
+            if (!list.empty()) {
                 list += ' ';
             }
             list += word;
@@ -116,28 +116,28 @@ namespace end_editor {
         bool drawDone = false;  // the Draw module that gave the model is finished
         int lineNumber = 0;
 
-        auto warn = [&](const std::string &message) {
+        auto warn = [&](const std::string& message) {
             result.warnings.push_back(std::string(sourceFile) + ":" + std::to_string(lineNumber) + ": " + message);
         };
 
         std::size_t position = 0;
-        while(position <= text.size()) {
+        while (position <= text.size()) {
             auto lineEnd = text.find('\n', position);
-            if(lineEnd == std::string_view::npos) {
+            if (lineEnd == std::string_view::npos) {
                 lineEnd = text.size();
             }
             const auto line = trim(stripComment(text.substr(position, lineEnd - position)));
             position = lineEnd + 1;
             ++lineNumber;
-            if(line.empty()) {
+            if (line.empty()) {
                 continue;
             }
 
             std::string_view key, rest;
             splitLine(line, key, rest);
 
-            if(blocks.empty()) {
-                if(!isObjectDefinition(key)) {
+            if (blocks.empty()) {
+                if (!isObjectDefinition(key)) {
                     warn("unexpected line outside an object: " + std::string(key));
                     continue;
                 }
@@ -154,82 +154,83 @@ namespace end_editor {
                 continue;
             }
 
-            if(equalsNoCase(key, "End")) {
-                if(blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") && !current.model.empty()) {
+            if (equalsNoCase(key, "End")) {
+                if (blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") && !current.model.empty()) {
                     drawDone = true;  // later Draw modules (e.g. the tread or upgrade draws) are not read
                 }
                 blocks.pop_back();
-                if(blocks.empty()) {
+                if (blocks.empty()) {
                     result.objects.push_back(std::move(current));
                 }
                 continue;
             }
-            if(opensBlock(key) || (rest.empty() && opensBlockWithoutValue(key))) {
+            if (opensBlock(key) || (rest.empty() && opensBlockWithoutValue(key))) {
                 blocks.push_back(key);
                 continue;
             }
 
-            if(blocks.size() == 1) {
-                const std::string value(rest);
-                if(equalsNoCase(key, "Side")) {
-                    current.side = value;
-                } else if(equalsNoCase(key, "KindOf")) {
-                    current.kindOf = value;
-                } else if(equalsNoCase(key, "Buildable")) {
-                    current.buildable = value;
-                } else if(equalsNoCase(key, "EditorSorting")) {
-                    current.editorSorting = value;
-                } else if(equalsNoCase(key, "DisplayName")) {
-                    current.displayName = value;
+            if (blocks.size() == 1) {
+                if (equalsNoCase(key, "Side")) {
+                    current.side = rest;
+                } else if (equalsNoCase(key, "KindOf")) {
+                    current.kindOf = rest;
+                } else if (equalsNoCase(key, "Buildable")) {
+                    current.buildable = rest;
+                } else if (equalsNoCase(key, "EditorSorting")) {
+                    current.editorSorting = rest;
+                } else if (equalsNoCase(key, "DisplayName")) {
+                    current.displayName = rest;
                 }
-            } else if(equalsNoCase(key, "WeaponMuzzleFlash") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
+            } else if (equalsNoCase(key, "WeaponMuzzleFlash") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
                 // "WeaponMuzzleFlash = PRIMARY TurretFX": slot, then the bone name prefix
                 const auto afterSlot = trim(rest.substr(std::min(rest.size(), firstWord(rest).size())));
                 appendWord(current.muzzleFlashes, firstWord(afterSlot));
-            } else if(equalsNoCase(key, "HideSubObject") && equalsNoCase(blocks[1], "Draw") && !drawDone &&
-                      (blocks.size() == 2 || equalsNoCase(blocks.back(), "DefaultConditionState"))) {
-                for(auto names = rest; !names.empty();) {
+            } else if (equalsNoCase(key, "HideSubObject") && equalsNoCase(blocks[1], "Draw") && !drawDone &&
+                       (blocks.size() == 2 || equalsNoCase(blocks.back(), "DefaultConditionState"))) {
+                for (auto names = rest; !names.empty();) {
                     const auto name = firstWord(names);
                     appendWord(current.hiddenSubObjects, name);
                     names = trim(names.substr(name.size()));
                 }
-            } else if(equalsNoCase(key, "ModelName") && blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") &&
-                      !drawDone && current.model.empty()) {
+            } else if (equalsNoCase(key, "ModelName") && blocks.size() == 2 && equalsNoCase(blocks[1], "Draw") &&
+                       !drawDone && current.model.empty()) {
                 // W3DTreeDraw (trees, bushes) names its model directly, without condition states.
                 current.model = std::string(firstWord(rest));
-            } else if(equalsNoCase(key, "Model") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
+            } else if (equalsNoCase(key, "Model") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
                 const bool inDefaultState = equalsNoCase(blocks.back(), "DefaultConditionState");
-                if(current.model.empty() || (inDefaultState && !modelFromDefaultState)) {
+                if (current.model.empty() || (inDefaultState && !modelFromDefaultState)) {
                     current.model = std::string(firstWord(rest));
                     modelFromDefaultState = inDefaultState;
                 }
             }
         }
 
-        if(!blocks.empty()) {
+        if (!blocks.empty()) {
             ++lineNumber;
             warn("file ends inside object " + current.name);
         }
         return result;
     }
 
-    void resolveInheritance(std::vector<ObjectInfo> &objects) {
-        std::unordered_map<std::string, std::size_t> byName;
-        for(std::size_t i = 0; i < objects.size(); ++i) {
+    void resolveInheritance(std::vector<ObjectInfo>& objects) {
+        // Views of the names: `objects` is not resized below.
+        std::unordered_map<std::string_view, std::size_t> byName;
+        byName.reserve(objects.size());
+        for (std::size_t i = 0; i < objects.size(); ++i) {
             byName.emplace(objects[i].name, i);
         }
         // Parents can be children themselves; resolve each chain from its root. Depth is capped so
         // a cycle in broken data cannot loop forever.
-        for(auto &object: objects) {
-            const ObjectInfo *parent = &object;
-            for(int depth = 0; depth < 16 && !parent->parent.empty(); ++depth) {
+        for (auto& object: objects) {
+            const ObjectInfo* parent = &object;
+            for (int depth = 0; depth < 16 && !parent->parent.empty(); ++depth) {
                 const auto found = byName.find(parent->parent);
-                if(found == byName.end()) {
+                if (found == byName.end()) {
                     break;
                 }
                 parent = &objects[found->second];
-                auto inherit = [](std::string &field, const std::string &from) {
-                    if(field.empty()) {
+                auto inherit = [](std::string& field, const std::string& from) {
+                    if (field.empty()) {
                         field = from;
                     }
                 };
