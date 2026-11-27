@@ -125,6 +125,9 @@ namespace end_editor {
         std::string setPlaySetting(const commands::PlaySetting& setting);
         // The default game app for the opened game (GeneralsXZH or GeneralsX in ~/GeneralsX/Apps).
         std::string defaultGameApp() const;
+        // The game's index of a Multiplayer.ini color (its first entry of that name); none for
+        // "Random" and names it does not have.
+        std::optional<int> colorIndex(std::string_view name) const;
         void writePlay();
         // The started game ended: the play row says so.
         void pollPlay();
@@ -183,6 +186,8 @@ namespace end_editor {
         std::int64_t mapListRevision = 0;
         std::vector<std::filesystem::path> gameFolders;  // map.save never writes inside them
         std::vector<std::string> factionNames;  // PlayerTemplate.ini's playable factions
+        // Multiplayer.ini's player colors; the position is the game's color index.
+        std::vector<std::string> colorNames;
         PlayRow play;  // the Play button's settings and its last run (the store's play row)
         // play.stop asked the game to quit at this time; it is ended for good 3 s later.
         std::optional<std::chrono::steady_clock::time_point> playStopAsked;

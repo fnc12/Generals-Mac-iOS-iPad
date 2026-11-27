@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -26,6 +27,14 @@ namespace end_editor {
         std::string side;  // e.g. "America"
     };
     std::vector<Faction> parsePlayableFactions(std::string_view text);
+
+    // Data/INI/Multiplayer.ini: the player colors (MultiplayerColor), in file order. The game
+    // numbers them in the order it reads them, duplicates too (MultiplayerSettings.cpp).
+    struct PlayerColor {
+        std::string name;  // e.g. "ColorBlue"
+        std::uint32_t rgb = 0xFFFFFF;  // RGBColor, 0xRRGGBB
+    };
+    std::vector<PlayerColor> parsePlayerColors(std::string_view text);
 
     // What Data/INI/Water.ini says about standing water for one time of day.
     struct WaterLook {

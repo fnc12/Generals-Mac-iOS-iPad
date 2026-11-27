@@ -97,9 +97,13 @@ struct MapPlayer: Hashable, Identifiable {
     let team: String
     let color: UInt32
     let neutral: Bool
+    /// A start position of a multiplayer map (1..: whoever starts there in the game owns the
+    /// object), 0 a player of the map's SidesList.
+    var start = 0
     var id: String { team }
     var label: String {
         if neutral { return "Neutral" }
+        if start > 0 { return "Start \(start)" }
         return displayName.isEmpty || displayName == name ? name : "\(displayName) (\(name))"
     }
 }
@@ -1465,6 +1469,8 @@ struct TemplatePicker: View {
 }
 
 /// A text field that sends its value when Return is pressed and shows the store's value otherwise.
+/// Its title is only its accessibility label: the row it sits in (a LabeledContent) shows the label,
+/// and a Form would draw the title again, squeezed next to the value ("Heigh t").
 struct CommitField: View {
     let title: String
     let value: String
@@ -1474,6 +1480,8 @@ struct CommitField: View {
 
     var body: some View {
         TextField(title, text: $text)
+            .labelsHidden()
+            .accessibilityLabel(title)
             .multilineTextAlignment(.trailing)
             .onAppear { text = value }
             .onChange(of: value) { _, fresh in text = fresh }

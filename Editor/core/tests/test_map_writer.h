@@ -161,8 +161,9 @@ namespace end_editor_tests {
 
     // A 5 x 4 vertex map with a border of 1: two texture classes, a blended and a cliff cell, a
     // tree, a waypoint, a water area, one player with a team, lighting, and a chunk the editor
-    // does not know.
-    inline std::string testMap() {
+    // does not know. `startWaypoints` > 1 adds the waypoints "Player_2_Start".. after the first
+    // one: a multiplayer map.
+    inline std::string testMap(int startWaypoints = 1) {
         ChunkWriter w;
         w.open("HeightMapData", 4);
         w.body.u32(5).u32(4).u32(1);  // width, height, border
@@ -231,6 +232,14 @@ namespace end_editor_tests {
         w.ascii("*Waypoints/Waypoint");
         w.dict({{"waypointID", 1, 1}, {"waypointName", 3, 0, 0, "Player_1_Start"}});
         w.close();
+        for (int n = 2; n <= startWaypoints; ++n) {
+            w.open("Object", 3);
+            w.body.floats({5.0f + float(n), 15, 0, 0}).u32(0);
+            w.ascii("*Waypoints/Waypoint");
+            w.dict({{"waypointID", 1, std::int32_t(n)},
+                    {"waypointName", 3, 0, 0, "Player_" + std::to_string(n) + "_Start"}});
+            w.close();
+        }
         w.close();
 
         w.open("PolygonTriggers", 4);

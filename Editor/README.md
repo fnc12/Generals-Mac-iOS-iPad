@@ -14,7 +14,7 @@ idea 13). macOS first; Windows (C#) and Linux (gtkmm) clients later. No Qt.
     `map_object_properties`, `map_models`, `map_model_parts`, `map_model_textures`,
     `map_players`, `map_warnings`, and the user's editing state `map_editor`, `map_selection`,
     `map_links`, `road_types`, and the Play button's `play` (its settings, kept across
-    sessions, and the last run) and `factions` (`core/src/storage.h`).
+    sessions, and the last run), `factions` and `player_colors` (`core/src/storage.h`).
   - Client → core: tab separated commands through the C ABI
     (`core/include/end_editor/editor_core_c.h`): `game.open`, `model.open`, `model.animation`,
     `map.open`, `maps.user`, `map.place`, `map.move`, `map.rotate`, `map.delete`, `map.undo`,
@@ -170,7 +170,11 @@ are not read.
 - Placing objects: a right click (or ⌃-click) on the terrain places the chosen object template
   at that ground point, on the terrain, with the placement bar's angle (Stepper, 15° steps) and
   owner (a player of the map's SidesList; its default team becomes `originalOwner`; neutral
-  first). The template comes from the bar's searchable list or the object selected in the
+  first). On a multiplayer map (two or more `Player_<N>_Start` waypoints) the owner can also be a
+  start position, "Start 1", "Start 2"…: `originalOwner` is `teamStart<N>`, and GeneralsX's engine
+  gives the object to whoever starts at start position N, or leaves it out when nobody starts
+  there (`Core/GameEngine/Include/Common/StartPositionOwner.h`; the original game does not know
+  these owners). The template comes from the bar's searchable list or the object selected in the
   Objects mode. Placed objects show at once with their model (loaded like the map's) and are
   selected; they get MapObject's default properties and a uniqueID like WorldBuilder's.
 - Editing: a press on the selected object drags it over the ground (one move when released,
@@ -259,7 +263,9 @@ game here.
   the last Play started (its whole process group: `run.sh` runs the game as its child; killed when it
   does not quit within 3 s); Map > Stop Game closes it.
 - **Play Settings** (toolbar ⚙): faction (`PlayerTemplate.ini`'s playable factions, or Random),
-  start position (1–8 or random), AI opponents (0–7) and difficulty, the game app (Choose…,
+  color (`Multiplayer.ini`'s `MultiplayerColor` entries, or Random; `-testMapColor` gets the
+  game's index, their order in the file: Zero Hour has Gold, Red, Blue, Green, Orange, SkyBlue,
+  Purple, Pink = 0..7), start position (1–8 or random), AI opponents (0–7) and difficulty, the game app (Choose…,
   Default = `~/GeneralsX/Apps/GeneralsXZH.app`, `GeneralsX.app` for the base game). The defaults
   (FactionAmerica at position 1 against one medium AI) need no setup; the settings are stored by the
   core and kept across sessions.
@@ -348,6 +354,7 @@ Every user-facing feature and what checks it. Keep this table when adding a feat
 | Select, add to selection, rubber band, clear | click, ⇧-click, ⇧-drag, click on empty ground | core (Flow: clicks, shift clicks and a rubber band), ui ("⇧-click selected both", "the ⇧-drag band selected the duplicates", "a click on empty ground cleared the selection") |
 | Select all | ⌘A | core, ui ("⌘A selected all … objects") |
 | Place an object, the picker | right click or ⌃-click; the bar's object button | core (Flow: a right click with no object chosen asks for one), ui ("the picker's row … is clicked", "⌃-click placed a second one", "the bar's object button is clicked", "Esc closed it") |
+| Start positions as owners (teamStart<N>) | bar and inspector pop-ups | core (Map players: a multiplayer map's start positions…, Flow: a multiplayer map's start positions own objects…), maps (--edit-maps: one object owned by teamStart1 per multiplayer map), game (Catch2 StartPositionOwner; -headless start_owned_* counts), ui ("the Owner pop-up lists the start positions", "the inspector's Owner pop-up chose Start 1", "it is Start 1's") |
 | Placement owner | bar pop-up | core (Map players, placement.owner), ui ("the placement bar's Owner pop-up chose …", "owned by the chosen team") |
 | Placement angle | bar stepper | core, ui ("the bar's angle stepper is clicked up", "and down again") |
 | Move the selection | drag a selected object | core (Flow: a drag on the selection moves it), maps, ui ("the drag moved both by the same offset", "on the ground there") |
@@ -366,6 +373,6 @@ Every user-facing feature and what checks it. Keep this table when adding a feat
 | **Play** | | |
 | Play: save the map with its unsaved edits to the test copy and start the game on it | toolbar Play, ⌘R, Map > Play Map | core (Flow: Play saves the map with its unsaved edits …: the command line, the environment, the user's map left unsaved), ui ("the toolbar's Play is clicked", "the game runs", "with -testMap on the test copy and the settings", "the game started the test copy", "⌘R started the game again", "Map > Play Map started it again") |
 | Play again / Stop Game | ⌘R again, Map > Stop Game | core (Flow: Play again closes the game the last Play started), ui ("the first game is closed", "the game ended") |
-| Play settings: faction, start position, AI opponents, AI difficulty, game app, Default, Choose… | toolbar Play Settings | core (Flow: Play settings: defaults, refused values, kept across sessions), ui ("Faction: FactionChina chosen", "Start position: 2 chosen", "the AI stepper's up arrow", "the difficulty's Hard is clicked", "the game app typed", "Default is clicked", "Play settings > Choose… opened an app panel"); the app chosen in that panel: not driven (out of process) |
+| Play settings: faction, color, start position, AI opponents, AI difficulty, game app, Default, Choose… | toolbar Play Settings | core (Flow: Play settings: defaults, refused values, kept across sessions; Commands: the Play button's settings), ui ("Faction: FactionChina chosen", "Color: Blue chosen", "Start position: 2 chosen", "the AI stepper's up arrow", "the difficulty's Hard is clicked", "the game app typed", "Default is clicked", "Play settings > Choose… opened an app panel"); the app chosen in that panel: not driven (out of process) |
 | The game goes straight into the map (skirmish for maps with start positions, a mission otherwise) | — | game (all maps, untouched and edited: placed units, waypoints, a road), ui (the windowed game in the VM, see below) |
 

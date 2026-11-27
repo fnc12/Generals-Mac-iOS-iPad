@@ -233,6 +233,9 @@ int main(int argc, char** argv) {
     print(select(columns(&ObjectRow::side, count()), group_by(&ObjectRow::side), order_by(count()).desc(), limit(10)));
     std::printf("-- playable factions (play.faction)\n");
     print(select(columns(&FactionRow::name, &FactionRow::side), order_by(&FactionRow::id)));
+    std::printf("-- player colors (play.color; idx is -testMapColor)\n");
+    print(select(columns(&PlayerColorRow::index, &PlayerColorRow::name, &PlayerColorRow::rgb),
+                 order_by(&PlayerColorRow::index)));
     std::printf("-- warnings (first 20)\n");
     print(select(&WarningRow::text, limit(20)));
 
@@ -493,6 +496,7 @@ int main(int argc, char** argv) {
                              limit(1)));
         const auto paths = mapPaths(onlyMaps);
         int good = 0;
+        int slotMaps = 0;  // maps with start positions as owners
         const auto wait = [&]() {
             while (end_editor_pending_work() > 0 && savedPath() != out && editMessage().rfind("error", 0) != 0) {
                 end_editor_update();
@@ -527,6 +531,9 @@ int main(int argc, char** argv) {
             const auto team = firstTeam();
             const auto road = firstRoad();
             const auto& template_ = *placed;
+            // A multiplayer map: one more object, owned by whoever starts at start position 1.
+            const auto slotTeam = front(db->select(&MapPlayerRow::team, where(c(&MapPlayerRow::start) == 1), limit(1)));
+            slotMaps += slotTeam.has_value();
 
             // Object 1 moves by (10, 20), object 2 turns to 1 radian, the next object that is no
             // road point goes; one object is placed in the middle of the map, a second one is
@@ -544,16 +551,20 @@ int main(int argc, char** argv) {
                         where(c(&MapObjectRow::id) >= 3 and not_in(&MapObjectRow::kind, {"road", "bridge"})));
             const auto removed = removedId ? std::to_string(*removedId) : std::string();
             const std::string owner = team.value_or("");
-            for (const auto& command: std::vector<std::string>{
-                     "map.move\t1\t" + at(x1) + "\t" + at(y1),
-                     "map.rotate\t2\t1",
-                     "map.delete\t" + removed,
-                     "map.place\t" + template_ + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
-                     "map.place\t" + template_ + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
-                     "map.undo",
-                     "map.redo",
-                     "map.place\t" + template_ + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
-                     "map.undo"}) {
+            std::vector<std::string> edits{
+                "map.move\t1\t" + at(x1) + "\t" + at(y1),
+                "map.rotate\t2\t1",
+                "map.delete\t" + removed,
+                "map.place\t" + template_ + "\t" + at(cx) + "\t" + at(cy) + "\t0.5\t" + owner,
+                "map.place\t" + template_ + "\t" + at(cx + 50) + "\t" + at(cy) + "\t0\t" + owner,
+                "map.undo",
+                "map.redo",
+                "map.place\t" + template_ + "\t" + at(cx + 100) + "\t" + at(cy) + "\t0\t" + owner,
+                "map.undo"};
+            if (slotTeam) {
+                edits.push_back("map.place\t" + template_ + "\t" + at(cx + 150) + "\t" + at(cy) + "\t0\t" + *slotTeam);
+            }
+            for (const auto& command: edits) {
                 end_editor_send(command.c_str());
             }
             // Step 5, the way the client sends it: the object in the middle raised and given
@@ -608,8 +619,13 @@ int main(int argc, char** argv) {
             const bool step5 = raised == 2 && checks[1] == 2 && checks[2] == 1 && checks[3] == 1 &&
                                checks[4] == (road ? 1 : 0) &&
                                std::filesystem::file_size(preview, sizeError) == 18 + 128 * 128 * 4 + 26;
+            // Saved with originalOwner "teamStart1", and read back as that start position's object.
+            const bool slotOwned =
+                !slotTeam || db->count<MapObjectRow>(where(c(&MapObjectRow::owner) == *slotTeam and
+                                                           abs(c(&MapObjectRow::x) - (cx + 150)) < 0.01 and
+                                                           abs(c(&MapObjectRow::y) - cy) < 0.01)) == 1;
             const bool ok =
-                step5 && after == edited + added && near(cx, cy) == 1 && near(cx + 50, cy) == 1 &&
+                slotOwned && step5 && after == edited + added && near(cx, cy) == 1 && near(cx + 50, cy) == 1 &&
                 near(cx + 100, cy) == 0 &&
                 db->count<MapObjectRow>(
                     where(abs(c(&MapObjectRow::x) - x1) < 0.01 and abs(c(&MapObjectRow::y) - y1) < 0.01)) >= 1 &&
@@ -638,10 +654,12 @@ int main(int argc, char** argv) {
                             saveMessage.c_str());
             }
         }
-        std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n",
+        std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s; %d multiplayer maps "
+                    "with one owned by teamStart1)\n",
                     good,
                     paths.size(),
-                    placed ? placed->c_str() : "nothing");
+                    placed ? placed->c_str() : "nothing",
+                    slotMaps);
     }
     if (!playDir.empty()) {
         const auto at = [](double v) {

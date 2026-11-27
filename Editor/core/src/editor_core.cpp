@@ -84,6 +84,7 @@ namespace end_editor {
             }
             this->publishEditor();
             this->storage->remove_all<FactionRow>();
+            this->storage->remove_all<PlayerColorRow>();
             // The Play settings stay from the last session; a game it started then is not ours.
             if (auto previous = this->storage->get_pointer<PlayRow>(1)) {
                 this->play = *previous;
@@ -429,6 +430,19 @@ namespace end_editor {
                     }
                 }
             });
+            this->storage->remove_all<PlayerColorRow>();
+            this->colorNames.clear();
+            // The game reads one copy of each, the default first (GameEngine.cpp: TheMultiplayerSettings).
+            std::string multiplayer;
+            for (const auto* path: {"data/ini/default/multiplayer.ini", "data/ini/multiplayer.ini"}) {
+                if (this->files.read(path, multiplayer)) {
+                    for (auto& color: parsePlayerColors(multiplayer)) {
+                        this->storage->insert(
+                            PlayerColorRow{0, int(this->colorNames.size()), color.name, int(color.rgb)});
+                        this->colorNames.push_back(std::move(color.name));
+                    }
+                }
+            }
             this->writePlay();  // the default app follows the game
             this->setStatus("ready",
                             std::to_string(scan.objects.size()) + " objects from " + std::to_string(scan.iniFileCount) +
@@ -701,10 +715,17 @@ namespace end_editor {
 
             const auto players = mapPlayers(map);
             for (const auto& player: players) {
-                this->storage->insert(
-                    MapPlayerRow{0, player.name, player.displayName, player.team, int(player.color), player.neutral});
+                this->storage->insert(MapPlayerRow{0,
+                                                   player.name,
+                                                   player.displayName,
+                                                   player.team,
+                                                   int(player.color),
+                                                   player.neutral,
+                                                   player.start});
             }
             const auto objectCount = map.objects.size();
+            // Before the document takes the objects (the start waypoints give the start positions' teams).
+            auto teams = mapTeams(map);
             this->document = std::make_unique<MapDocument>(std::move(map));
             // The document numbers the objects the engine keeps 1.. in file order, like the scene.
             for (const auto& entry: this->document->objects()) {
@@ -716,7 +737,7 @@ namespace end_editor {
             this->tileColors = std::move(scene.tileColors);
             this->writeMapLinks();
             this->editor.open(this->document.get(),
-                              mapTeams(opened),
+                              std::move(teams),
                               players.empty() ? std::string() : players.front().team,
                               MapEditor::Point{(scene.playable[0] + scene.playable[2]) / 2,
                                                (scene.playable[1] + scene.playable[3]) / 2});
@@ -1137,6 +1158,14 @@ namespace end_editor {
             .string();
     }
 
+    std::optional<int> EditorCore::colorIndex(std::string_view name) const {
+        const auto found = std::find(this->colorNames.begin(), this->colorNames.end(), name);
+        if (found == this->colorNames.end()) {
+            return std::nullopt;
+        }
+        return int(found - this->colorNames.begin());
+    }
+
     void EditorCore::writePlay() {
         this->play.id = 1;
         this->play.appResolved = this->play.app.empty() ? this->defaultGameApp() : this->play.app;
@@ -1161,6 +1190,15 @@ namespace end_editor {
                                                               "No playable faction " + name + " in PlayerTemplate.ini");
                                       }
                                       this->play.faction = name;
+                                      return std::string();
+                                  },
+                                  [this](const commands::SetPlayColor& color) {
+                                      const auto& name = color.color;
+                                      if (name != "Random" && !this->colorNames.empty() && !this->colorIndex(name)) {
+                                          return this->refuse("error:unknown_color",
+                                                              "No player color " + name + " in Multiplayer.ini");
+                                      }
+                                      this->play.color = name;
                                       return std::string();
                                   },
                                   [this](const commands::SetPlayAiCount& ai) {
@@ -1264,6 +1302,11 @@ namespace end_editor {
                                  this->play.aiDifficulty,
                                  "-testMapStart",
                                  std::to_string(this->play.startPosition)};
+            // Random (or a color this game does not have) leaves the color to the game.
+            if (const auto color = this->colorIndex(this->play.color)) {
+                request.arguments.emplace_back("-testMapColor");
+                request.arguments.push_back(std::to_string(*color));
+            }
             // The game reads the same data the editor shows.
             if (!this->gameFolders.empty()) {
                 request.environment.emplace_back("CNC_GENERALS_ZH_PATH", this->gameFolders.front().string());

@@ -78,6 +78,8 @@ int GeneralsXBrowserShouldHoldMatch(void);
 #include "Common/Recorder.h"
 #include "Common/StatsCollector.h"
 #include "Common/ThingFactory.h"
+#include "Common/StartPositionOwner.h"
+#include "Common/TestMap.h"
 #include "Common/Team.h"
 #include "Common/ThingTemplate.h"
 #if RTS_GENERALS && RETAIL_COMPATIBLE_CRC
@@ -869,6 +871,25 @@ static void populateRandomSideAndColor( GameInfo *game )
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 static const WaypointMap s_emptyWaypoints = WaypointMap();
+
+// GeneralsX @feature fnc12 27/11/2026 The default team of the player who starts at a start position
+// (0-based) in this multiplayer or skirmish game, or null when nobody starts there.
+static Team *startPositionTeam( Int startPosition )
+{
+	if (TheGameInfo == nullptr)
+		return nullptr;
+	for (Int i = 0; i < MAX_SLOTS; ++i)
+	{
+		const GameSlot *slot = TheGameInfo->getConstSlot(i);
+		if (slot == nullptr || !slot->isOccupied() || slot->getStartPos() != startPosition)
+			continue;
+		AsciiString playerName;
+		playerName.format("player%d", i);	// the slot's player (startNewGame)
+		Player *player = ThePlayerList->findPlayerWithNameKey(NAMEKEY(playerName));
+		return player ? player->getDefaultTeam() : nullptr;
+	}
+	return nullptr;
+}
 
 static void populateRandomStartPosition( GameInfo *game )
 {
@@ -2053,7 +2074,21 @@ void GameLogic::tryStartNewGame( Bool loadingSaveGame )
 			// Get the team information
 			DEBUG_ASSERTCRASH(pMapObj->getProperties()->getType(TheKey_originalOwner) == Dict::DICT_ASCIISTRING, ("unit %s has no original owner specified (obsolete map file)",pMapObj->getName().str()));
 			AsciiString originalOwner = pMapObj->getProperties()->getAsciiString(TheKey_originalOwner);
-			Team *team = ThePlayerList->validateTeam(originalOwner);
+			// GeneralsX @feature fnc12 27/11/2026 An owner "teamStart<N>" (END Editor) is whoever starts at
+			// start position N; with nobody there the object is left out (Common/StartPositionOwner.h).
+			const Int startPosition = StartPositionOwner::parse(originalOwner.str());
+			Team *team = nullptr;
+			if (startPosition >= 0 && TheTeamFactory->findTeam(originalOwner) == nullptr)
+			{
+				team = startPositionTeam(startPosition);
+				TestMap::noteStartPositionObject(team);
+				if (team == nullptr)
+					continue;
+			}
+			else
+			{
+				team = ThePlayerList->validateTeam(originalOwner);
+			}
 
 			// create new object in the world
 			Object *obj = TheThingFactory->newObject( thingTemplate, team ); //, OBJECT_STATUS_LOADING_FROM_MAP );

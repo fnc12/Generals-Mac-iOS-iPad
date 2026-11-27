@@ -148,6 +148,28 @@ namespace end_editor {
         return result;
     }
 
+    std::vector<PlayerColor> parsePlayerColors(std::string_view text) {
+        std::vector<PlayerColor> result;
+        forEachBlock(text, [&](const Block& block) {
+            if (!equalsNoCase(block.keyword, "multiplayercolor") || block.name.empty()) {
+                return;
+            }
+            PlayerColor color{std::string(block.name)};
+            for (const auto& [key, value]: block.fields) {
+                if (equalsNoCase(key, "rgbcolor")) {
+                    std::array<float, 3> rgb{1, 1, 1};
+                    readColor(value, rgb);
+                    color.rgb = 0;
+                    for (const auto component: rgb) {
+                        color.rgb = color.rgb << 8 | std::uint32_t(std::clamp(component * 255.0f + 0.5f, 0.0f, 255.0f));
+                    }
+                }
+            }
+            result.push_back(std::move(color));
+        });
+        return result;
+    }
+
     WaterLook parseWaterLook(std::string_view text, int timeOfDay) {
         static const char* const times[] = {"morning", "afternoon", "evening", "night"};
         const std::string_view wanted = timeOfDay >= 1 && timeOfDay <= 4 ? times[timeOfDay - 1] : "afternoon";

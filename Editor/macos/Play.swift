@@ -15,6 +15,7 @@ struct PlayState: Equatable {
     var aiCount = 1
     var aiDifficulty = "medium"
     var startPosition = 1
+    var color = "Random"
     var state = "idle"
     var message = ""
     var mapPath = ""
@@ -32,12 +33,22 @@ struct FactionItem: Hashable, Identifiable {
     var id: String { name }
 }
 
+/// A player color of Multiplayer.ini (the player_colors table); `index` is the game's color index.
+struct PlayerColorItem: Hashable, Identifiable {
+    let index: Int
+    let name: String
+    let rgb: UInt32
+    var id: Int { index }
+    /// "ColorBlue" -> "Blue"
+    var label: String { name.hasPrefix("Color") && name.count > 5 ? String(name.dropFirst(5)) : name }
+}
+
 extension StoreReader {
     func play() -> PlayState? {
         var result: PlayState?
         rows("""
             SELECT app, app_resolved, faction, ai_count, ai_difficulty, start_position, state, message, map_path, command,
-                   log_path, pid, exit_code, runs, revision FROM play WHERE id = 1
+                   log_path, pid, exit_code, runs, revision, color FROM play WHERE id = 1
             """) { s in
             result = PlayState(app: Self.text(s, 0), appResolved: Self.text(s, 1), faction: Self.text(s, 2),
                                aiCount: Int(sqlite3_column_int(s, 3)), aiDifficulty: Self.text(s, 4),
@@ -46,6 +57,7 @@ extension StoreReader {
                                logPath: Self.text(s, 10), pid: sqlite3_column_int64(s, 11),
                                exitCode: Int(sqlite3_column_int(s, 12)), runs: sqlite3_column_int64(s, 13),
                                revision: sqlite3_column_int64(s, 14))
+            result?.color = Self.text(s, 15)
         }
         return result
     }
@@ -54,6 +66,15 @@ extension StoreReader {
         var result: [FactionItem] = []
         rows("SELECT name, side FROM factions ORDER BY id") { s in
             result.append(FactionItem(name: Self.text(s, 0), side: Self.text(s, 1)))
+        }
+        return result
+    }
+
+    func playerColors() -> [PlayerColorItem] {
+        var result: [PlayerColorItem] = []
+        rows("SELECT idx, name, rgb FROM player_colors ORDER BY idx, id") { s in
+            result.append(PlayerColorItem(index: Int(sqlite3_column_int(s, 0)), name: Self.text(s, 1),
+                                          rgb: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 2))))
         }
         return result
     }
@@ -78,6 +99,16 @@ struct PlaySettingsView: View {
                 ForEach(editor.factions) { faction in Text(faction.name).tag(faction.name) }
             }
             .accessibilityIdentifier("play.faction")
+            Picker("Color", selection: Binding(get: { play.color }, set: { editor.send("play.color\t" + $0) })) {
+                Text("Random").tag("Random")
+                // The first entry of a name is the one play.color means.
+                ForEach(editor.playerColors.filter { color in
+                    editor.playerColors.first { $0.name == color.name }?.index == color.index
+                }) { color in
+                    Text(color.label).tag(color.name)
+                }
+            }
+            .accessibilityIdentifier("play.color")
             Picker("Start position", selection: Binding(get: { play.startPosition },
                                                         set: { editor.send("play.start\t\($0)") })) {
                 Text("Random").tag(0)
@@ -210,7 +241,7 @@ struct PlayToolbar: View {
             .disabled(!editor.canEditMap)
             .accessibilityIdentifier("toolbar.play")
         Button { settingsShown.toggle() } label: { Label("Play Settings", systemImage: "gearshape") }
-            .help("Faction, AI opponents and the game app for Play")
+            .help("Faction, color, AI opponents and the game app for Play")
             .accessibilityIdentifier("toolbar.playSettings")
             .popover(isPresented: $settingsShown, arrowEdge: .bottom) { PlaySettingsView() }
     }
