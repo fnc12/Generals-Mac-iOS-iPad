@@ -335,18 +335,20 @@ int main(int argc, char** argv) {
             end_editor_update();
         }
         std::printf("-- map\n");
-        for (const auto& [name, state, message, width, height, border, x1, y1, timeOfDay, loaded, models]:
-             db->iterate(select(columns(&MapRow::name,
-                                        &MapRow::state,
-                                        &MapRow::message,
-                                        &MapRow::width,
-                                        &MapRow::height,
-                                        &MapRow::border,
-                                        &MapRow::playableX1,
-                                        &MapRow::playableY1,
-                                        &MapRow::timeOfDay,
-                                        &MapRow::modelsLoaded,
-                                        &MapRow::modelCount)))) {
+        if (const auto map = front(db->select(columns(&MapRow::name,
+                                                      &MapRow::state,
+                                                      &MapRow::message,
+                                                      &MapRow::width,
+                                                      &MapRow::height,
+                                                      &MapRow::border,
+                                                      &MapRow::playableX1,
+                                                      &MapRow::playableY1,
+                                                      &MapRow::timeOfDay,
+                                                      &MapRow::modelsLoaded,
+                                                      &MapRow::modelCount),
+                                              where(c(&MapRow::id) == 1),
+                                              limit(1)))) {
+            const auto& [name, state, message, width, height, border, x1, y1, timeOfDay, loaded, models] = *map;
             printRow(name,
                      state,
                      message,
@@ -370,13 +372,17 @@ int main(int argc, char** argv) {
             std::printf("failed: %s: %s\n", name.c_str(), message.c_str());
         }
         std::printf("-- terrain chunks, vertices, textures\n");
-        for (const auto& [chunks, vertexBytes]:
-             db->iterate(select(columns(count(), sum(length(&MapTerrainRow::vertices)))))) {
+        {
+            // An aggregate: always one row.
+            const auto rows = db->select(columns(count(), sum(length(&MapTerrainRow::vertices))));
+            const auto& [chunks, vertexBytes] = rows.front();
             printRow(chunks, vertexBytes ? std::to_string(std::int64_t(*vertexBytes) / 56) : std::string());
         }
         print(select(columns(&MapTextureRow::name, &MapTextureRow::width, &MapTextureRow::height)));
-        for (const auto& [textures, bytes]: db->iterate(
-                 select(columns(count(), sum(c(&MapModelTextureRow::width) * &MapModelTextureRow::height * 4))))) {
+        {
+            const auto rows =
+                db->select(columns(count(), sum(c(&MapModelTextureRow::width) * &MapModelTextureRow::height * 4)));
+            const auto& [textures, bytes] = rows.front();
             printRow(textures, bytes ? std::to_string(std::int64_t(*bytes)) : std::string());
         }
         std::printf("-- water\n");
