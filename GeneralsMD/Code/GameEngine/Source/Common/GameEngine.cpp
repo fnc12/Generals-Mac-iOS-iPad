@@ -39,6 +39,7 @@
 #include "Common/PlayerList.h"
 #include "Common/GameAudio.h"
 #include "Common/GameEngine.h"
+#include "Common/TestMap.h"
 #include "Common/INI.h"
 #include "Common/INIException.h"
 #include "Common/MessageStream.h"
@@ -854,6 +855,12 @@ void GameEngine::init()
 				msg->appendIntegerArgument(0);
 				InitRandom(0);
 			}
+		}
+
+		// GeneralsX @feature fnc12 27/11/2026 -testMap starts its map once the client runs: no shell map.
+		if (TestMap::isRequested())
+		{
+			TheWritableGlobalData->m_shellMapOn = FALSE;
 		}
 
 		//

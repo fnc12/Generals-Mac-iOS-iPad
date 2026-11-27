@@ -41,14 +41,14 @@ final class StoreReader {
 
     deinit { sqlite3_close(db) }
 
-    private func rows(_ sql: String, _ read: (OpaquePointer) -> Void) {
+    func rows(_ sql: String, _ read: (OpaquePointer) -> Void) {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else { return }
         defer { sqlite3_finalize(statement) }
         while sqlite3_step(statement) == SQLITE_ROW { read(statement) }
     }
 
-    private static func text(_ s: OpaquePointer, _ i: Int32) -> String {
+    static func text(_ s: OpaquePointer, _ i: Int32) -> String {
         guard let c = sqlite3_column_text(s, i) else { return "" }
         return String(cString: c)
     }
@@ -405,6 +405,13 @@ final class EditorModel {
     var mapOverlay: MapOverlay {
         MapOverlay(selection: mapSelection, gesture: mapGesture, roadStart: mapEditor.roadStart, pending: mapEditor.pending)
     }
+    /// The Play button's settings and last run (the play row), the playable factions.
+    var play = PlayState()
+    var factions: [FactionItem] = []
+    /// map.save_as found another map at its target (the map row's save_conflict).
+    var saveConflict = ""
+    /// The Save Map As sheet is up (⇧⌘S, the placement bar's Save As… button).
+    var saveSheetShown = false
     @ObservationIgnored private var mapRevision: Int64 = -1
     @ObservationIgnored private var mapModelRevision: Int64 = -1
     @ObservationIgnored private var lastMapTexture: Int64 = 0
@@ -571,9 +578,25 @@ final class EditorModel {
 
     var canEditMap: Bool { mapState == "ready" }
 
-    /// "Save Map As…": into the game's user Maps folder by default, as Maps/<name>/<name>.map
-    /// (the layout the game looks for); never over the game's own files.
+    /// The game's user Maps folder of the open game.
+    var userMapsFolder: URL { Self.userMapsFolder(forGame: status.gameDir) }
+
+    /// "Save Map As…": the sheet with a name for the map in the game's user Maps folder.
     func saveMapAs() {
+        guard canEditMap else { return }
+        saveSheetShown = true
+    }
+
+    /// ⌘R, the toolbar's Play: the map with its unsaved edits goes to the core's test copy and the
+    /// game starts on it.
+    func playMap() {
+        send("map.play")
+    }
+
+    /// The sheet's "Other Location…": any .map file, through the system save panel; into the
+    /// user Maps folder as Maps/<name>/<name>.map (the layout the game looks for). Never over the
+    /// game's own files (the core refuses).
+    func saveMapToOtherLocation() {
         guard canEditMap else { return }
         let maps = Self.userMapsFolder(forGame: status.gameDir)
         try? FileManager.default.createDirectory(at: maps, withIntermediateDirectories: true)
@@ -628,6 +651,8 @@ final class EditorModel {
     /// Picks up the core's editing state: tool, note, selection, gesture.
     private func readEditor(_ reader: StoreReader) {
         guard let (state, gesture) = reader.mapEditor(), state.revision != mapEditor.revision else { return }
+        let conflict = reader.saveConflict()
+        if conflict != saveConflict { saveConflict = conflict }
         if gesture != mapGesture { mapGesture = gesture }
         if state.selectionRevision != mapEditor.selectionRevision {
             let selection = reader.mapSelection()
@@ -687,6 +712,7 @@ final class EditorModel {
                 warnings = reader.warnings()
                 maps = reader.maps()
                 roadTypes = reader.roadTypes()
+                factions = reader.factions()
                 modelName = ""
                 preview = PreviewModel()
                 animations = []
@@ -694,6 +720,7 @@ final class EditorModel {
         }
         readMap(reader)
         readEditor(reader)
+        if let fresh = reader.play(), fresh.revision != play.revision { play = fresh }
         if let header = reader.modelHeader(), header.revision != modelRevision {
             modelRevision = header.revision
             modelState = header.state
@@ -739,14 +766,20 @@ struct ContentView: View {
                     Button("Open Map File…") { mode = .maps; model.chooseMapFile() }
                         .disabled(model.status.state != "ready")
                 } label: { Label("Game Folders", systemImage: "folder") }
+                .accessibilityIdentifier("toolbar.gameFolders")
             }
             ToolbarItem(placement: .principal) {
                 Picker("Mode", selection: $mode) {
                     ForEach(EditorMode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .accessibilityIdentifier("toolbar.mode")
             }
             ToolbarItem(placement: .status) { StatusText() }
+            ToolbarItemGroup(placement: .primaryAction) { PlayToolbar() }
+        }
+        .sheet(isPresented: Binding(get: { model.saveSheetShown }, set: { model.saveSheetShown = $0 })) {
+            SaveMapSheet()
         }
         .alert("Editor core", isPresented: .constant(model.coreError != nil)) {
             Button("OK") { model.coreError = nil }
@@ -783,9 +816,11 @@ struct ObjectBrowser: View {
         NavigationSplitView {
             List(selection: $side) {
                 Label("All objects (\(model.objects.count))", systemImage: "square.grid.2x2").tag(Self.allSides)
+                    .accessibilityIdentifier("objects.side.all")
                 Section("Side") {
                     ForEach(sides, id: \.0) { name, count in
                         Text("\(name.isEmpty ? "(no side)" : name) (\(count))").tag(name)
+                            .accessibilityIdentifier("objects.side." + name)
                     }
                 }
             }
@@ -820,7 +855,10 @@ struct StatusText: View {
     var body: some View {
         switch model.status.state {
         case "loading": HStack { ProgressView().controlSize(.small); Text("Reading game data…") }
-        case "ready": Text(model.status.message).foregroundStyle(.secondary).help(model.status.gameDir)
+        case "ready":
+            // Truncated: the toolbar keeps room for Play and its settings.
+            Text(model.status.message).foregroundStyle(.secondary).help(model.status.gameDir)
+                .lineLimit(1).truncationMode(.tail).frame(maxWidth: 180)
         case "error": Text(model.status.message).foregroundStyle(.red)
         default: Text("No game folder open").foregroundStyle(.secondary)
         }
@@ -1056,6 +1094,11 @@ struct MapCommands: Commands {
         CommandGroup(after: .saveItem) {
             Button("Save Map As…") { model.saveMapAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+        }
+        CommandMenu("Map") {
+            // Without a map the core refuses with a note (see Duplicate).
+            Button("Play Map") { model.playMap() }.keyboardShortcut("r")
+            Button("Stop Game") { model.send("play.stop") }
         }
     }
 }

@@ -57,6 +57,7 @@ add_library(end_editor_core STATIC
     src/map_document.cpp
     src/map_editor.cpp
     src/map_preview.cpp
+    src/game_launch.cpp
     src/editor_core.cpp
     src/editor_core_c.cpp
 )

@@ -103,6 +103,7 @@ set(GAMEENGINE_SRC
 #    Include/Common/Recorder.h
 #    Include/Common/Registry.h
     Include/Common/ReplaySimulation.h
+    Include/Common/TestMap.h
 #    Include/Common/ResourceGatheringManager.h
 #    Include/Common/Science.h
 #    Include/Common/ScopedMutex.h
@@ -634,6 +635,7 @@ set(GAMEENGINE_SRC
     Source/Common/RandomValue.cpp
 #    Source/Common/Recorder.cpp
     Source/Common/ReplaySimulation.cpp
+    Source/Common/TestMap.cpp
     Source/Common/RTS/AcademyStats.cpp
 #    Source/Common/RTS/ActionManager.cpp
 #    Source/Common/RTS/Energy.cpp

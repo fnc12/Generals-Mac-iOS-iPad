@@ -19,6 +19,14 @@ namespace end_editor {
     };
     std::vector<RoadType> parseRoadTypes(std::string_view text);
 
+    // Data/INI/PlayerTemplate.ini: the factions a player can play (PlayableSide = Yes), in file
+    // order: what the game's -testMapFaction takes.
+    struct Faction {
+        std::string name;  // e.g. "FactionAmerica"
+        std::string side;  // e.g. "America"
+    };
+    std::vector<Faction> parsePlayableFactions(std::string_view text);
+
     // What Data/INI/Water.ini says about standing water for one time of day.
     struct WaterLook {
         std::string texture;                        // WaterSet's WaterTexture

@@ -1,6 +1,7 @@
 #include "editor_core.h"
 
 #include "game_data.h"
+#include "game_launch.h"
 #include "map_preview.h"
 #include "map_scene.h"
 
@@ -8,11 +9,13 @@
 #include <chrono>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <locale>
 #include <sstream>
 #include <system_error>
+#include <thread>
 
 namespace end_editor {
 
@@ -87,6 +90,15 @@ namespace end_editor {
                 this->revision = std::max(this->revision, previous->revision);
             }
             this->publishEditor();
+            this->storage->remove_all<FactionRow>();
+            // The Play settings stay from the last session; a game it started then is not ours.
+            if(auto previous = this->storage->get_pointer<PlayRow>(1)) {
+                this->play = *previous;
+            }
+            this->play.state = "idle";
+            this->play.message.clear();
+            this->play.pid = 0;
+            this->writePlay();
             return true;
         });
     }
@@ -138,6 +150,7 @@ namespace end_editor {
         }
         if(name == "maps.user") {
             this->userMapsFolder = hasArgument ? arguments.front() : "";
+            this->writePlay();  // the default game app follows the game of the Maps folder
             if(this->loader) {
                 this->jobs.push_back(Job{Job::listMaps, {}});
             }
@@ -145,6 +158,41 @@ namespace end_editor {
         }
         const bool mapQueued = std::any_of(this->jobs.begin(), this->jobs.end(),
                                            [](const Job &job) { return job.kind == Job::openMap; });
+        if(name.rfind("play.", 0) == 0) {
+            return this->setPlaySetting(name, arguments);
+        }
+        if(name == "map.play") {
+            if(!this->document && !mapQueued) {
+                return this->refuse("error:no_map", "No map is open");
+            }
+            if(this->userMapsFolder.empty()) {
+                return this->refuse("error:no_user_maps", "Play needs the game's user Maps folder (maps.user)");
+            }
+            this->queueBeforeModelLoading(Job{Job::playMap, {}});
+            return "";
+        }
+        if(name == "map.save_as") {
+            if(!this->document && !mapQueued) {
+                return this->refuse("error:no_map", "No map is open");
+            }
+            const auto mapName = arguments.empty() ? std::string() : arguments.front();
+            if(mapName.find_first_not_of(" .") == std::string::npos) {
+                return this->refuse("error:missing_argument", "Type a name for the map");
+            }
+            if(mapName.find_first_of("/\\:") != std::string::npos) {
+                return this->refuse("error:bad_argument", "A map name cannot have / \\ or : in it");
+            }
+            if(this->userMapsFolder.empty()) {
+                return this->refuse("error:no_user_maps", "No user Maps folder to save into (maps.user)");
+            }
+            const auto target = std::filesystem::path(this->userMapsFolder) / mapName / (mapName + ".map");
+            std::vector<std::string> save{target.string(), "as"};
+            if(arguments.size() > 1 && arguments[1] == "replace") {
+                save.push_back("replace");
+            }
+            this->queueBeforeModelLoading(Job{Job::saveMap, save});
+            return "";
+        }
         if(name.rfind("map.", 0) == 0 || name.rfind("edit.", 0) == 0 || name.rfind("selection.", 0) == 0 ||
            name.rfind("placement.", 0) == 0 || name == "waypoint.link" || name == "note.clear") {
             if(name == "map.save" || name == "map.open") {
@@ -296,6 +344,7 @@ namespace end_editor {
             }
             return false;
         };
+        this->pollPlay();
         while(!this->jobs.empty()) {
             const auto job = std::move(this->jobs.front());
             this->jobs.pop_front();
@@ -342,7 +391,10 @@ namespace end_editor {
                     });
                     return;
                 case Job::saveMap:
-                    this->runSaveMap(job.arguments.front());
+                    this->runSaveMap(job.arguments);
+                    return;
+                case Job::playMap:
+                    this->runPlayMap();
                     return;
                 case Job::listMaps:
                     this->relistMaps();
@@ -428,6 +480,18 @@ namespace end_editor {
             for(const auto &type: this->roadTypes) {
                 this->storage->insert(RoadTypeRow{0, type.name, type.bridge});
             }
+            this->storage->remove_all<FactionRow>();
+            this->factionNames.clear();
+            for(const auto &text: this->files.readAll("data/ini/playertemplate.ini")) {
+                for(auto &faction: parsePlayableFactions(text)) {  // the first copy wins
+                    if(std::find(this->factionNames.begin(), this->factionNames.end(), faction.name) ==
+                       this->factionNames.end()) {
+                        this->factionNames.push_back(faction.name);
+                        this->storage->insert(FactionRow{0, faction.name, faction.side});
+                    }
+                }
+            }
+            this->writePlay();  // the default app follows the game
             this->setStatus("ready",
                             std::to_string(scan.objects.size()) + " objects from " +
                                 std::to_string(scan.iniFileCount) + " INI files in " +
@@ -594,8 +658,8 @@ namespace end_editor {
         }
         std::vector<std::filesystem::path> userMaps;
         for(const auto &folder: std::filesystem::directory_iterator(this->userMapsFolder, error)) {
-            if(!folder.is_directory(error)) {
-                continue;
+            if(!folder.is_directory(error) || folder.path().filename() == testMapName) {
+                continue;  // the Play button's test copy is not one of the user's maps
             }
             for(const auto &file: std::filesystem::directory_iterator(folder.path(), error)) {
                 auto extension = file.path().extension().string();
@@ -1002,56 +1066,81 @@ namespace end_editor {
         this->published = state;
     }
 
-    void EditorCore::runSaveMap(const std::string &path) {
+    std::string EditorCore::writeMapFiles(const std::filesystem::path &target, std::string &previewError) {
+        for(const auto &folder: this->gameFolders) {
+            if(isInside(target, folder)) {
+                return "error: not saved, " + target.string() + " is inside the game folder";
+            }
+        }
+        const auto bytes = this->document->save();
+        std::error_code error;
+        if(target.has_parent_path()) {
+            std::filesystem::create_directories(target.parent_path(), error);
+        }
+        // Written next to the target, then renamed over it: a failed write leaves no half file.
+        auto temporary = target;
+        temporary += ".saving";
+        {
+            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+            file.write(bytes.data(), std::streamsize(bytes.size()));
+            if(!file) {
+                std::filesystem::remove(temporary, error);
+                return "error: cannot write " + temporary.string();
+            }
+        }
+        std::filesystem::rename(temporary, target, error);
+        if(error) {
+            const auto message = "error: cannot write " + target.string() + ": " + error.message();
+            std::filesystem::remove(temporary, error);
+            return message;
+        }
+        // The game's map lists show <name>.tga from next to the map (WorldBuilder writes it too).
+        auto preview = target;
+        preview.replace_extension(".tga");
+        const auto image =
+            encodeTga(mapPreviewSize, mapPreviewSize, renderMapPreview(this->document->map(), this->tileColors));
+        std::ofstream file(preview, std::ios::binary | std::ios::trunc);
+        file.write(image.data(), std::streamsize(image.size()));
+        if(!file) {
+            previewError = "error: saved, but cannot write the preview " + preview.string();
+        }
+        return "";
+    }
+
+    void EditorCore::runSaveMap(const std::vector<std::string> &arguments) {
         if(!this->document) {
             return;
         }
+        const auto &path = arguments.front();
+        const bool saveAs = arguments.size() > 1 && arguments[1] == "as";
+        const bool replace = arguments.size() > 2 && arguments[2] == "replace";
         const std::filesystem::path target(path);
-        std::string message, previewError;
-        for(const auto &folder: this->gameFolders) {
-            if(isInside(target, folder)) {
-                message = "error: not saved, " + path + " is inside the game folder";
-            }
+        std::error_code error;
+        const auto own = this->storage->get_pointer<MapRow>(1);
+        // Save As into the Maps folder does not silently replace another map: the store says
+        // which file is in the way, and the client asks before sending "replace".
+        if(saveAs && !replace && std::filesystem::exists(target, error) && (!own || own->savedPath != path)) {
+            const auto message = "error: " + target.parent_path().filename().string() +
+                                 " already exists in the Maps folder; save again to replace it";
+            this->storage->transaction([&] {
+                if(auto row = this->storage->get_pointer<MapRow>(1)) {
+                    row->saveConflict = path;
+                    this->storage->replace(*row);
+                }
+                this->updateMapEditState(message);
+                this->editor.setNote(message, "error");
+                this->publishEditor();
+                return true;
+            });
+            return;
         }
-        if(message.empty()) {
-            const auto bytes = this->document->save();
-            std::error_code error;
-            if(target.has_parent_path()) {
-                std::filesystem::create_directories(target.parent_path(), error);
-            }
-            // Written next to the target, then renamed over it: a failed write leaves no half file.
-            auto temporary = target;
-            temporary += ".saving";
-            {
-                std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-                file.write(bytes.data(), std::streamsize(bytes.size()));
-                if(!file) {
-                    message = "error: cannot write " + temporary.string();
-                }
-            }
-            if(message.empty()) {
-                std::filesystem::rename(temporary, target, error);
-                if(error) {
-                    message = "error: cannot write " + path + ": " + error.message();
-                }
-            }
-            if(message.empty()) {
-                // The game's map lists show <name>.tga from next to the map (WorldBuilder writes it too).
-                auto preview = target;
-                preview.replace_extension(".tga");
-                const auto image = encodeTga(mapPreviewSize, mapPreviewSize,
-                                             renderMapPreview(this->document->map(), this->tileColors));
-                std::ofstream file(preview, std::ios::binary | std::ios::trunc);
-                file.write(image.data(), std::streamsize(image.size()));
-                if(!file) {
-                    previewError = "error: saved, but cannot write the preview " + preview.string();
-                }
-            }
-            if(!message.empty()) {
-                std::filesystem::remove(temporary, error);
-            }
-        }
+        std::string previewError;
+        auto message = this->writeMapFiles(target, previewError);
         this->storage->transaction([&] {
+            if(auto row = this->storage->get_pointer<MapRow>(1)) {
+                row->saveConflict.clear();
+                this->storage->replace(*row);
+            }
             if(message.empty()) {
                 this->document->markSaved();
                 if(auto row = this->storage->get_pointer<MapRow>(1)) {
@@ -1068,5 +1157,173 @@ namespace end_editor {
         if(!this->userMapsFolder.empty() && isInside(target, this->userMapsFolder)) {
             this->relistMaps();
         }
+    }
+
+    std::string EditorCore::defaultGameApp() const {
+        const char *home = std::getenv("HOME");
+        if(!home || !*home) {
+            return "";
+        }
+        // The user Maps folder is .../GeneralsX/GeneralsZH/Maps for Zero Hour, .../Generals/Maps for the base game.
+        const bool baseGame = !this->userMapsFolder.empty() &&
+                              std::filesystem::path(this->userMapsFolder).parent_path().filename() == "Generals";
+        return (std::filesystem::path(home) / "GeneralsX" / "Apps" / (baseGame ? "GeneralsX.app" : "GeneralsXZH.app"))
+            .string();
+    }
+
+    void EditorCore::writePlay() {
+        this->play.id = 1;
+        this->play.appResolved = this->play.app.empty() ? this->defaultGameApp() : this->play.app;
+        this->play.revision = ++this->revision;
+        this->storage->replace(this->play);
+    }
+
+    std::string EditorCore::setPlaySetting(std::string_view name, const std::vector<std::string> &arguments) {
+        const auto arg = arguments.empty() ? std::string() : arguments.front();
+        double number = 0;
+        if(name == "play.app") {
+            this->play.app = arg;  // "" goes back to the default
+        } else if(name == "play.faction") {
+            if(arg.empty()) {
+                return this->refuse("error:missing_argument", "play.faction: missing argument");
+            }
+            const bool known = arg == "Random" || this->factionNames.empty() ||
+                               std::find(this->factionNames.begin(), this->factionNames.end(), arg) != this->factionNames.end();
+            if(!known) {
+                return this->refuse("error:unknown_faction", "No playable faction " + arg + " in PlayerTemplate.ini");
+            }
+            this->play.faction = arg;
+        } else if(name == "play.ai" || name == "play.start") {
+            if(!parseNumber(arg, number) || number < 0 || number > 7 || number != std::floor(number)) {
+                return this->refuse("error:bad_argument", std::string(name) + ": a whole number from 0 to 7");
+            }
+            (name == "play.ai" ? this->play.aiCount : this->play.startPosition) = int(number);
+        } else if(name == "play.difficulty") {
+            if(arg != "easy" && arg != "medium" && arg != "hard") {
+                return this->refuse("error:bad_argument", "play.difficulty: easy, medium or hard");
+            }
+            this->play.aiDifficulty = arg;
+        } else if(name == "play.stop") {
+            if(this->play.state == "running") {
+                stopProcess(this->play.pid);
+                this->playStopAsked = std::chrono::steady_clock::now();
+            }
+        } else {
+            return "error:unknown_command";
+        }
+        this->storage->transaction([&] {
+            this->writePlay();
+            return true;
+        });
+        return "";
+    }
+
+    void EditorCore::pollPlay() {
+        if(this->play.state != "running") {
+            return;
+        }
+        const auto code = pollProcess(this->play.pid);
+        if(!code) {
+            // A game that does not quit when asked (SIGTERM while it loads) is ended.
+            if(this->playStopAsked && std::chrono::steady_clock::now() - *this->playStopAsked > std::chrono::seconds(3)) {
+                stopProcess(this->play.pid, true);
+                this->playStopAsked.reset();
+            }
+            return;
+        }
+        this->playStopAsked.reset();
+        this->play.state = "exited";
+        this->play.exitCode = *code;
+        this->play.message = "The game ended (exit code " + std::to_string(*code) + ")";
+        this->play.pid = 0;
+        this->storage->transaction([&] {
+            this->writePlay();
+            return true;
+        });
+    }
+
+    void EditorCore::runPlayMap() {
+        if(!this->document) {
+            return;
+        }
+        std::string message;
+        const auto target = std::filesystem::path(this->userMapsFolder) / testMapName / (std::string(testMapName) + ".map");
+        std::string previewError;
+        message = this->writeMapFiles(target, previewError);
+        const auto app = this->play.app.empty() ? this->defaultGameApp() : this->play.app;
+        const auto program = programForApp(app);
+        if(message.empty() && program.empty()) {
+            message = "error: no game app at " + app + " (choose it in the Play settings)";
+        }
+        if(message.empty()) {
+            // Play again restarts the test: the game the last Play started is closed first.
+            if(this->play.state == "running") {
+                // Asked to quit; ended for good when it has not after 3 s.
+                stopProcess(this->play.pid);
+                bool ended = false;
+                for(int i = 0; i < 150 && !ended; ++i) {
+                    ended = pollProcess(this->play.pid).has_value();
+                    if(!ended) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    }
+                }
+                if(!ended) {
+                    stopProcess(this->play.pid, true);
+                    for(int i = 0; i < 50 && !pollProcess(this->play.pid); ++i) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    }
+                }
+                this->playStopAsked.reset();
+            }
+            LaunchRequest request;
+            request.program = program;
+            request.arguments = {"-testMap", target.string(), "-testMapFaction", this->play.faction,
+                                 "-testMapAI", std::to_string(this->play.aiCount),
+                                 "-testMapAIDifficulty", this->play.aiDifficulty,
+                                 "-testMapStart", std::to_string(this->play.startPosition)};
+            // The game reads the same data the editor shows.
+            if(!this->gameFolders.empty()) {
+                request.environment.emplace_back("CNC_GENERALS_ZH_PATH", this->gameFolders.front().string());
+            }
+            if(this->gameFolders.size() > 1) {
+                request.environment.emplace_back("CNC_GENERALS_PATH", this->gameFolders[1].string());
+            }
+            // Its user data folder is the one whose Maps folder has the test copy (the same one by
+            // default; GeneralsX reads GENERALSX_USER_DATA_DIR).
+            request.environment.emplace_back("GENERALSX_USER_DATA_DIR",
+                                             std::filesystem::path(this->userMapsFolder).parent_path().string());
+            request.logPath = (std::filesystem::path(this->path).parent_path() / "play.log").string();
+            const auto launched = launchProcess(request);
+            std::string command = request.program;
+            for(const auto &argument: request.arguments) {
+                command += "\t" + argument;
+            }
+            this->play.command = command;
+            this->play.mapPath = target.string();
+            this->play.logPath = request.logPath;
+            if(launched.error.empty()) {
+                this->play.state = "running";
+                this->play.pid = launched.pid;
+                this->play.exitCode = 0;
+                ++this->play.runs;
+                const auto row = this->storage->get_pointer<MapRow>(1);
+                message = "Playing " + (row ? row->name : std::string("the map")) + " in " +
+                          std::filesystem::path(app).filename().string();
+                this->play.message = message;
+            } else {
+                message = "error: " + launched.error;
+            }
+        }
+        if(message.rfind("error", 0) == 0) {
+            this->play.state = "error";
+            this->play.message = message;
+            this->play.pid = 0;
+        }
+        this->storage->transaction([&] {
+            this->writePlay();
+            this->editor.setNote(message, message.rfind("error", 0) == 0 ? "error" : "info");
+            this->publishEditor();
+            return true;
+        });
     }
 }

@@ -13,6 +13,11 @@
 //                  undo and a redo), raises one and edits its properties, copies and pastes it,
 //                  places a linked pair of waypoints and a road, saves, opens the saved file and
 //                  checks what it holds (and that the preview .tga is next to it).
+// --play-maps <user Maps folder> saves every listed map twice into the folder, the way the game
+//                  finds user maps (<folder>/<name>/<name>.map): untouched (EdU<n>) and edited (EdE<n>:
+//                  an object moved and one turned, three vehicles placed in the middle, a path of three
+//                  waypoints, a road segment). Prints one line per map for scripts/qa/editor:
+//                  PLAYMAP <n> <original path> <untouched file> <edited file> <vehicles placed>
 #include "end_editor/editor_core_c.h"
 
 #include "compression.h"
@@ -72,7 +77,7 @@ namespace {
 int main(int argc, char **argv) {
     std::string gameDir, baseDir, dbArg, modelName, objectName, animation;
     bool allModels = false, allMaps = false;
-    std::string mapPath, roundTripDir, editDir, onlyMaps;
+    std::string mapPath, roundTripDir, editDir, onlyMaps, playDir;
     for(int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         const auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
@@ -96,6 +101,8 @@ int main(int argc, char **argv) {
             roundTripDir = next();
         } else if(arg == "--edit-maps") {
             editDir = next();
+        } else if(arg == "--play-maps") {
+            playDir = next();
         } else if(arg == "--only") {
             onlyMaps = next();  // --edit-maps: only maps whose path has this text
         } else {
@@ -125,6 +132,8 @@ int main(int argc, char **argv) {
     print("SELECT state, message FROM status");
     std::printf("-- objects per side\n");
     print("SELECT side, COUNT(*) FROM objects GROUP BY side ORDER BY COUNT(*) DESC LIMIT 10");
+    std::printf("-- playable factions (play.faction)\n");
+    print("SELECT name, side FROM factions ORDER BY id");
     std::printf("-- warnings (first 20)\n");
     print("SELECT text FROM warnings LIMIT 20");
 
@@ -413,6 +422,86 @@ int main(int argc, char **argv) {
         }
         std::printf("-- edits: %d of %zu maps saved and read back as expected (placed %s)\n", good, paths.size(),
                     placed.empty() ? "nothing" : placed.front().c_str());
+    }
+    if(!playDir.empty()) {
+        const auto number = [&](const std::string &sql) {
+            const auto values = column(sql.c_str());
+            return values.empty() || values.front().empty() ? 0.0 : std::stod(values.front());
+        };
+        const auto at = [](double v) { return std::to_string(v); };
+        // A ground vehicle both games have, else the first one there is.
+        const auto vehicle = column("SELECT name FROM objects WHERE model <> '' AND kind_of LIKE '%VEHICLE%' "
+                                    "AND kind_of NOT LIKE '%AIRCRAFT%' ORDER BY name <> 'AmericaTankCrusader', name LIMIT 1");
+        auto paths = column("SELECT path FROM maps WHERE source <> 'User maps' ORDER BY path");
+        if(!onlyMaps.empty()) {
+            std::erase_if(paths, [&](const std::string &path) { return path.find(onlyMaps) == std::string::npos; });
+        }
+        int index = 0;
+        for(const auto &path: paths) {
+            ++index;
+            const auto saveAs = [&](const std::string &name) {
+                const auto file = (std::filesystem::path(playDir) / name / (name + ".map")).string();
+                end_editor_send(("map.save\t" + file).c_str());
+                while(end_editor_pending_work() > 0) {
+                    end_editor_update();
+                }
+                return column("SELECT saved_path FROM map").front() == file ? file : std::string("-");
+            };
+            send("map.open\t" + path);
+            while(end_editor_pending_work() > 0) {
+                end_editor_update();
+            }
+            if(column("SELECT state FROM map").front() != "ready") {
+                std::printf("PLAYMAP\t%d\t%s\t-\t-\t0\n", index, path.c_str());
+                continue;
+            }
+            const auto untouched = saveAs("EdU" + std::to_string(index));
+            const double cx = number("SELECT (playable_x0 + playable_x1) / 2 FROM map");
+            const double cy = number("SELECT (playable_y0 + playable_y1) / 2 FROM map");
+            const auto team = column("SELECT team FROM map_players ORDER BY neutral DESC, id LIMIT 1");
+            const auto road = column("SELECT name FROM road_types WHERE bridge = 0 ORDER BY id LIMIT 1");
+            std::vector<std::string> commands;
+            if(number("SELECT COUNT(*) FROM map_objects WHERE id = 1 AND kind = 'model'") == 1) {
+                commands.push_back("map.move\t1\t" + at(number("SELECT x FROM map_objects WHERE id = 1") + 10) + "\t" +
+                                   at(number("SELECT y FROM map_objects WHERE id = 1") + 10));
+            }
+            if(number("SELECT COUNT(*) FROM map_objects WHERE id = 2") == 1) {
+                commands.push_back("map.rotate\t2\t1");
+            }
+            int placed = 0;
+            if(!vehicle.empty()) {
+                commands.push_back("placement.template\t" + vehicle.front());
+                if(!team.empty()) {
+                    commands.push_back("placement.owner\t" + team.front());
+                }
+                for(int i = 0; i < 3; ++i) {
+                    commands.push_back("map.click_right\t" + at(cx + 40 * i) + "\t" + at(cy) + "\t");
+                    ++placed;
+                }
+            }
+            commands.insert(commands.end(), {"placement.waypoint", "selection.set\t"});
+            for(int i = 0; i < 3; ++i) {
+                commands.push_back("map.click_right\t" + at(cx + 40 * i) + "\t" + at(cy - 80) + "\t");
+            }
+            if(!road.empty()) {
+                commands.insert(commands.end(), {"placement.road\t" + road.front(),
+                                                 "map.click_right\t" + at(cx - 80) + "\t" + at(cy) + "\t",
+                                                 "map.click_right\t" + at(cx - 80) + "\t" + at(cy + 80) + "\t"});
+            }
+            commands.push_back("placement.object");
+            for(const auto &command: commands) {
+                const std::string result = end_editor_send(command.c_str());
+                if(!result.empty()) {
+                    std::fprintf(stderr, "%s: %s: %s\n", path.c_str(), command.c_str(), result.c_str());
+                }
+                while(end_editor_pending_work() > 0) {
+                    end_editor_update();
+                }
+            }
+            const auto edited = saveAs("EdE" + std::to_string(index));
+            std::printf("PLAYMAP\t%d\t%s\t%s\t%s\t%d\n", index, path.c_str(), untouched.c_str(), edited.c_str(), placed);
+            std::fflush(stdout);
+        }
     }
     sqlite3_close(db);
     end_editor_shutdown();
