@@ -223,6 +223,21 @@ final class MapViewState: ObservableObject {
         distance = min(max(distance * factor, 40), 30000)
     }
 
+    /// Zoom around the ground under `point` (view, origin top left): it stays under the cursor,
+    /// like in every map app. Off the terrain it zooms around the middle of the view.
+    func zoom(by factor: Float, at point: CGPoint, size: CGSize, scene: MapScene) {
+        guard let before = groundPoint(at: point, size: size, scene: scene) else { return zoom(by: factor) }
+        zoom(by: factor)
+        // The ray through the point now meets the level of that ground point elsewhere; moving the
+        // camera sideways by the difference brings it back exactly (even where the ray, zoomed out,
+        // would leave the map).
+        let (origin, direction) = ray(at: point, size: size)
+        guard abs(direction.z) > 1e-4 else { return }
+        let after = origin + direction * ((before.z - origin.z) / direction.z)
+        target.x += before.x - after.x
+        target.y += before.y - after.y
+    }
+
     /// Where the ray through a point of the view (origin top left) meets the terrain: marched in
     /// steps over the height map, then refined by bisection. Nil when it misses the map.
     func groundPoint(at point: CGPoint, size: CGSize, scene: MapScene) -> SIMD3<Float>? {
@@ -1230,12 +1245,18 @@ final class MapMTKView: MTKView {
                       viewHeight: Float(bounds.height))
         } else {
             let lines = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY * 0.1 : event.scrollingDeltaY
-            state.zoom(by: 1 + Float(lines) * -0.1)
+            zoom(by: 1 + Float(lines) * -0.1, at: event)
         }
     }
 
     override func magnify(with event: NSEvent) {
-        state?.zoom(by: 1 - Float(event.magnification))
+        zoom(by: 1 - Float(event.magnification), at: event)
+    }
+
+    private func zoom(by factor: Float, at event: NSEvent) {
+        guard let state else { return }
+        guard let renderer else { return state.zoom(by: factor) }
+        state.zoom(by: factor, at: viewPoint(event), size: bounds.size, scene: renderer.scene)
     }
 
     override func rotate(with event: NSEvent) {
@@ -1320,7 +1341,7 @@ struct MapScreen: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            Text("Drag or two-finger swipe to pan, ⌥-drag to turn, pinch or mouse wheel to zoom, click to select, ⇧-click or ⇧-drag to add. "
+            Text("Drag or two-finger swipe to pan, ⌥-drag to turn, pinch or mouse wheel to zoom at the cursor, click to select, ⇧-click or ⇧-drag to add. "
                  + "Right-click places, drag the selection to move it, [ ] turn it, Delete removes it, "
                  + "⌘C ⌘V ⌘D copy, paste, duplicate, ⌘Z undoes")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.bottom, 4)
