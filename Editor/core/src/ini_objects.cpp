@@ -170,17 +170,16 @@ namespace end_editor {
             }
 
             if(blocks.size() == 1) {
-                const std::string value(rest);
                 if(equalsNoCase(key, "Side")) {
-                    current.side = value;
+                    current.side = rest;
                 } else if(equalsNoCase(key, "KindOf")) {
-                    current.kindOf = value;
+                    current.kindOf = rest;
                 } else if(equalsNoCase(key, "Buildable")) {
-                    current.buildable = value;
+                    current.buildable = rest;
                 } else if(equalsNoCase(key, "EditorSorting")) {
-                    current.editorSorting = value;
+                    current.editorSorting = rest;
                 } else if(equalsNoCase(key, "DisplayName")) {
-                    current.displayName = value;
+                    current.displayName = rest;
                 }
             } else if(equalsNoCase(key, "WeaponMuzzleFlash") && equalsNoCase(blocks[1], "Draw") && !drawDone) {
                 // "WeaponMuzzleFlash = PRIMARY TurretFX": slot, then the bone name prefix
@@ -214,7 +213,9 @@ namespace end_editor {
     }
 
     void resolveInheritance(std::vector<ObjectInfo> &objects) {
-        std::unordered_map<std::string, std::size_t> byName;
+        // Views of the names: `objects` is not resized below.
+        std::unordered_map<std::string_view, std::size_t> byName;
+        byName.reserve(objects.size());
         for(std::size_t i = 0; i < objects.size(); ++i) {
             byName.emplace(objects[i].name, i);
         }

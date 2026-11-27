@@ -70,7 +70,7 @@ namespace end_editor {
       private:
         struct Source {
             int archive = -1;  // index in `archives`, or -1 for a loose file
-            BigEntry entry;
+            std::size_t entry = 0;  // index in the archive's entries (not a copy of its strings)
             std::filesystem::path looseFile;
             std::string relativeName;  // loose files: path under the folder, original case
         };

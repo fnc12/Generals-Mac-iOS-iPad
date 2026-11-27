@@ -36,7 +36,7 @@ namespace end_editor {
                         continue;
                     }
                     const auto relative = std::filesystem::relative(it->path(), folder, ec).generic_string();
-                    this->add(normalizeArchivePath(relative), Source{-1, {}, it->path(), relative});
+                    this->add(normalizeArchivePath(relative), Source{-1, 0, it->path(), relative});
                 }
             }
 
@@ -57,8 +57,9 @@ namespace end_editor {
                     continue;
                 }
                 const int index = int(this->archives.size());
-                for(const auto &entry: archive->entries()) {
-                    this->add(entry.path, Source{index, entry, {}, {}});
+                const auto &entries = archive->entries();
+                for(std::size_t i = 0; i < entries.size(); ++i) {
+                    this->add(entries[i].path, Source{index, i, {}, {}});
                 }
                 this->archives.push_back(std::move(*archive));
             }
@@ -88,7 +89,8 @@ namespace end_editor {
 
     bool GameFiles::readSource(const Source &source, std::uint32_t maxBytes, std::string &out) const {
         if(source.archive >= 0) {
-            return this->archives[std::size_t(source.archive)].readPrefix(source.entry, maxBytes, out);
+            const auto &archive = this->archives[std::size_t(source.archive)];
+            return archive.readPrefix(archive.entries()[source.entry], maxBytes, out);
         }
         std::ifstream file(source.looseFile, std::ios::binary);
         if(!file) {
@@ -106,7 +108,10 @@ namespace end_editor {
         if(found == this->sources.end()) {
             return path;
         }
-        std::string name = found->second.archive >= 0 ? found->second.entry.name : found->second.relativeName;
+        const auto &source = found->second;
+        std::string name = source.archive >= 0
+                               ? this->archives[std::size_t(source.archive)].entries()[source.entry].name
+                               : source.relativeName;
         std::replace(name.begin(), name.end(), '\\', '/');
         return name;
     }

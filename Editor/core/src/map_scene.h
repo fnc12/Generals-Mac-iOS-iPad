@@ -45,7 +45,8 @@ namespace end_editor {
         std::vector<std::uint32_t> indices;
     };
 
-    // A map object resolved against the game's object templates.
+    // A map object resolved against the game's object templates (its properties stay in the
+    // MapObject).
     struct PlacedObject {
         std::string templateName;
         // "model": drawn with its template's model; "marker": no model (or none found);
@@ -58,7 +59,6 @@ namespace end_editor {
         std::string modelKey;   // model.open style request: model \t muzzle flashes \t hidden sub-objects
         std::string owner;      // team name (originalOwner)
         std::uint32_t color = 0xFFFFFF;  // owner's player color, 0xRRGGBB
-        Dict properties;
     };
 
     struct MapScene {
@@ -67,7 +67,6 @@ namespace end_editor {
         std::vector<WaterArea> water;
         WaterLook waterLook;
         Image waterTexture;
-        std::vector<PlacedObject> objects;
         std::array<float, 4> playable{};  // world rectangle x0 y0 x1 y1 of the first boundary
         // Average color (RGB 0..1) of each source tile by tile number (MapFile::tiles >> 2), what
         // WorldHeightMap::getTerrainColorAt gives the map preview; black for tiles of no class.
@@ -78,9 +77,9 @@ namespace end_editor {
     using ObjectLookup = std::function<const ObjectInfo *(const std::string &templateName)>;
 
     // Builds what the client draws: terrain meshes with atlas coordinates and blend weights
-    // (WorldHeightMap::getAlphaUVData's per-corner alphas), water polygons, object placements.
-    // Terrain.ini and Water.ini are read from `files`.
-    MapScene buildMapScene(const MapFile &map, const GameFiles &files, const ObjectLookup &findObject);
+    // (WorldHeightMap::getAlphaUVData's per-corner alphas) and water polygons. Terrain.ini and
+    // Water.ini are read from `files`. The objects are resolved one by one (resolveObject()).
+    MapScene buildMapScene(const MapFile &map, const GameFiles &files);
 
     // One object as the scene shows it: kind, model, world height, owner color.
     PlacedObject resolveObject(const MapFile &map, const MapObject &object, const ObjectLookup &findObject);

@@ -47,6 +47,7 @@ namespace end_editor {
 
         explicit MapDocument(MapFile map);
 
+        // The file as read; its `objects` are moved into objects() (map().objects is empty).
         const MapFile &map() const {
             return this->file;
         }

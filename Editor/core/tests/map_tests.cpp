@@ -214,9 +214,7 @@ TEST_CASE("Map scene: terrain, water, objects") {
     ObjectInfo tree;
     tree.name = "TestTree";
     tree.model = "TTree";
-    const auto scene = buildMapScene(map, files, [&](const std::string &name) {
-        return name == "TestTree" ? &tree : nullptr;
-    });
+    const auto scene = buildMapScene(map, files);
     CHECK(scene.warnings.empty());
 
     // Atlas: grass (64 px), rock (128 px) and the placeholder, each with a 4 px border.
@@ -264,13 +262,16 @@ TEST_CASE("Map scene: terrain, water, objects") {
     CHECK(scene.waterLook.transparentDiffuse[3] == Approx(0.6f));
     CHECK(scene.waterLook.standingColor[2] == Approx(1));
 
-    REQUIRE(scene.objects.size() == 2);
-    CHECK(scene.objects[0].kind == "model");
-    CHECK(scene.objects[0].model == "TTree");
-    CHECK(scene.objects[0].color == 0xFF0000);
-    CHECK(scene.objects[0].z == Approx(groundHeight(map, 15, 5) + 2));
-    CHECK(scene.objects[1].kind == "waypoint");
-    CHECK(scene.objects[1].color == 0xFFFFFF);
+    const auto findObject = [&](const std::string &name) { return name == "TestTree" ? &tree : nullptr; };
+    REQUIRE(map.objects.size() == 2);
+    const auto placedTree = resolveObject(map, map.objects[0], findObject);
+    CHECK(placedTree.kind == "model");
+    CHECK(placedTree.model == "TTree");
+    CHECK(placedTree.color == 0xFF0000);
+    CHECK(placedTree.z == Approx(groundHeight(map, 15, 5) + 2));
+    const auto placedWaypoint = resolveObject(map, map.objects[1], findObject);
+    CHECK(placedWaypoint.kind == "waypoint");
+    CHECK(placedWaypoint.color == 0xFFFFFF);
 }
 
 TEST_CASE("EditorCore lists and opens maps") {
@@ -363,7 +364,7 @@ TEST_CASE("Terrain.ini copies of later folders fill in missing names") {
     std::string error;
     REQUIRE(files.mount({mod, base}, warnings, error));
     CHECK(files.readEach("data/ini/terrain.ini", [](const std::string &) {}) == 2);
-    const auto scene = buildMapScene(parsed(testMap()), files, nullptr);
+    const auto scene = buildMapScene(parsed(testMap()), files);
     CHECK(scene.warnings.empty());
     // Grass came from the first copy: its texture is green, not the placeholder.
     const auto &uv = scene.chunks[0].vertices[0].uv;

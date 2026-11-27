@@ -22,8 +22,9 @@ namespace end_editor {
             return text;
         }
 
-        // Nearest-neighbour resize to a square of `size` pixels.
-        Image resizeSquare(const Image &image, std::uint32_t size) {
+        // Nearest-neighbour resize to a square of `size` pixels (an image of that size is moved
+        // through).
+        Image resizeSquare(Image image, std::uint32_t size) {
             if(image.width == size && image.height == size) {
                 return image;
             }
@@ -62,6 +63,7 @@ namespace end_editor {
                     this->scene.warnings.push_back("Data/INI/Terrain.ini not found");
                 }
                 std::vector<Image> images;
+                images.reserve(this->map.textureClasses.size() + 1);
                 for(const auto &textureClass: this->map.textureClasses) {
                     const int size = std::clamp(textureClass.width, 1, 16) * tilePixels;
                     Image image;
@@ -75,7 +77,7 @@ namespace end_editor {
                     if(image.width == 0) {
                         image = this->placeholder(std::uint32_t(size));
                     }
-                    images.push_back(resizeSquare(image, std::uint32_t(size)));
+                    images.push_back(resizeSquare(std::move(image), std::uint32_t(size)));
                 }
                 images.push_back(this->placeholder(tilePixels));  // for tiles of no class
 
@@ -163,6 +165,10 @@ namespace end_editor {
                         TerrainChunk chunk;
                         chunk.x = x0;
                         chunk.y = y0;
+                        const auto cells = std::size_t(std::min(terrainChunkCells, cellsX - x0)) *
+                                           std::size_t(std::min(terrainChunkCells, cellsY - y0));
+                        chunk.vertices.reserve(cells * 4);
+                        chunk.indices.reserve(cells * 6);
                         for(int y = y0; y < std::min(y0 + terrainChunkCells, cellsY); ++y) {
                             for(int x = x0; x < std::min(x0 + terrainChunkCells, cellsX); ++x) {
                                 this->addCell(chunk, x, y);
@@ -510,7 +516,6 @@ namespace end_editor {
         placed.z = groundHeight(map, object.x, object.y) + object.z;
         placed.angle = object.angle;
         placed.flags = object.flags;
-        placed.properties = object.properties;
         if(const auto *owner = findDictValue(object.properties, "originalOwner")) {
             placed.owner = owner->text;
         }
@@ -532,7 +537,7 @@ namespace end_editor {
         return placed;
     }
 
-    MapScene buildMapScene(const MapFile &map, const GameFiles &files, const ObjectLookup &findObject) {
+    MapScene buildMapScene(const MapFile &map, const GameFiles &files) {
         MapScene scene;
         TerrainBuilder terrain(map, files, scene);
         terrain.buildAtlas();
@@ -563,6 +568,8 @@ namespace end_editor {
             area.river = polygon.river;
             area.height = float(polygon.points.front()[2]);
             std::vector<std::array<float, 2>> outline;
+            outline.reserve(polygon.points.size());
+            area.vertices.reserve(polygon.points.size() * 3);
             for(const auto &point: polygon.points) {
                 outline.push_back({float(point[0]), float(point[1])});
                 area.vertices.insert(area.vertices.end(), {float(point[0]), float(point[1]),
@@ -570,10 +577,6 @@ namespace end_editor {
             }
             area.indices = triangulatePolygon(outline);
             scene.water.push_back(std::move(area));
-        }
-
-        for(const auto &object: map.objects) {
-            scene.objects.push_back(resolveObject(map, object, findObject));
         }
         return scene;
     }

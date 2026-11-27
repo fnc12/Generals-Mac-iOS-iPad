@@ -170,20 +170,21 @@ namespace end_editor {
             this->nextNameId = std::max(this->nextNameId, id + 1);
         }
         // Children of ObjectsList as they are, with the objects the engine keeps (in file order,
-        // like MapFile::objects) given ids.
-        std::vector<const MapObject *> byChunk(this->file.objectChunks.size(), nullptr);
-        for(const auto &object: this->file.objects) {
+        // like MapFile::objects) given ids. The objects move from the file into the entries.
+        std::vector<MapObject *> byChunk(this->file.objectChunks.size(), nullptr);
+        for(auto &object: this->file.objects) {
             if(object.chunk < byChunk.size()) {
                 byChunk[object.chunk] = &object;
             }
         }
+        this->entries.reserve(this->file.objectChunks.size());
         for(std::size_t i = 0; i < this->file.objectChunks.size(); ++i) {
             const auto &span = this->file.objectChunks[i];
             Object entry;
             entry.chunk = this->file.data.substr(span.header, span.end - span.header);
             if(byChunk[i]) {
                 entry.id = this->nextId++;
-                entry.object = *byChunk[i];
+                entry.object = std::move(*byChunk[i]);
                 if(const auto *unique = findDictValue(entry.object.properties, "uniqueID")) {
                     this->nextUniqueNumber = std::max(this->nextUniqueNumber, uniqueNumber(unique->text) + 1);
                 }
@@ -193,6 +194,8 @@ namespace end_editor {
             }
             this->entries.push_back(std::move(entry));
         }
+        this->file.objects.clear();
+        this->file.objects.shrink_to_fit();
         this->waypointLinks = this->file.waypointLinks;
         // Links can name waypoints the map no longer has; a new waypoint must not revive them.
         for(const auto &link: this->waypointLinks) {
@@ -363,10 +366,12 @@ namespace end_editor {
             }
         }
         std::string chunk;
+        chunk.reserve(DataChunkReader::headerBytes + data.size());
         putU32(chunk, this->nameId("Object"));
         putU16(chunk, 3);
         putU32(chunk, std::uint32_t(data.size()));
-        return chunk + data;
+        chunk += data;
+        return chunk;
     }
 
     std::string MapDocument::uniqueId(const std::string &name) {
@@ -687,30 +692,33 @@ namespace end_editor {
 
         // ObjectsList: the children kept, then the placed objects; bytes after the last child of
         // the original (none in the shipped maps) stay.
+        // Written straight into `out`: the size in the header is counted first.
         const auto writeObjects = [&](std::uint32_t nameId, std::uint16_t version, std::string_view tail) {
-            std::string children;
+            std::size_t size = tail.size();
             for(const auto &entry: this->entries) {
                 if(!entry.removed) {
-                    children += entry.chunk;
+                    size += entry.chunk.size();
                 }
             }
-            children += tail;
             putU32(out, nameId);
             putU16(out, version);
-            putU32(out, std::uint32_t(children.size()));
-            out += children;
+            putU32(out, std::uint32_t(size));
+            for(const auto &entry: this->entries) {
+                if(!entry.removed) {
+                    out += entry.chunk;
+                }
+            }
+            out += tail;
         };
         const auto writeLinks = [&](std::uint32_t nameId, std::uint16_t version) {
-            std::string body;
-            putU32(body, std::uint32_t(this->waypointLinks.size()));
-            for(const auto &link: this->waypointLinks) {
-                putU32(body, std::uint32_t(link[0]));
-                putU32(body, std::uint32_t(link[1]));
-            }
             putU32(out, nameId);
             putU16(out, version);
-            putU32(out, std::uint32_t(body.size()));
-            out += body;
+            putU32(out, std::uint32_t(4 + 8 * this->waypointLinks.size()));
+            putU32(out, std::uint32_t(this->waypointLinks.size()));
+            for(const auto &link: this->waypointLinks) {
+                putU32(out, std::uint32_t(link[0]));
+                putU32(out, std::uint32_t(link[1]));
+            }
         };
         std::size_t at = this->file.tableEnd;
         bool wroteObjects = false, wroteLinks = false;

@@ -6,6 +6,7 @@
 #include "map_scene.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <cmath>
@@ -106,11 +107,16 @@ namespace end_editor {
         });
     }
 
+    bool EditorCore::NoCaseLess::operator()(std::string_view a, std::string_view b) const {
+        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) {
+            return std::tolower(static_cast<unsigned char>(x)) < std::tolower(static_cast<unsigned char>(y));
+        });
+    }
+
     std::string EditorCore::send(std::string_view command) {
         const auto tab = command.find('\t');
         const auto name = command.substr(0, tab);
-        const auto arguments =
-            tab == std::string_view::npos ? std::vector<std::string>() : splitTabs(command.substr(tab + 1));
+        auto arguments = tab == std::string_view::npos ? std::vector<std::string>() : splitTabs(command.substr(tab + 1));
         const bool hasArgument = !arguments.empty() && !arguments.front().empty();
 
         if(name == "game.open") {
@@ -119,7 +125,7 @@ namespace end_editor {
             }
             // Status changes now so the client shows "loading" before the work in update() starts.
             this->setStatus("loading", "Reading game data", arguments.front(), 0);
-            this->jobs.push_back(Job{Job::openGame, arguments});
+            this->jobs.push_back(Job{Job::openGame, std::move(arguments)});
             return "";
         }
         if(name == "model.open") {
@@ -130,14 +136,17 @@ namespace end_editor {
                 return "error:no_game";
             }
             this->setModelState(arguments.front(), "loading", "");
-            this->jobs.push_back(Job{Job::openModel, arguments});
+            this->jobs.push_back(Job{Job::openModel, std::move(arguments)});
             return "";
         }
         if(name == "model.animation") {
             if(!this->loader) {
                 return "error:no_game";
             }
-            this->jobs.push_back(Job{Job::playAnimation, arguments.empty() ? std::vector<std::string>{""} : arguments});
+            if(arguments.empty()) {
+                arguments.emplace_back();
+            }
+            this->jobs.push_back(Job{Job::playAnimation, std::move(arguments)});
             return "";
         }
         if(name == "map.open") {
@@ -148,7 +157,7 @@ namespace end_editor {
                 return "error:no_game";
             }
             this->setMapState(arguments.front(), "loading", "Reading the map");
-            this->jobs.push_back(Job{Job::openMap, arguments});
+            this->jobs.push_back(Job{Job::openMap, std::move(arguments)});
             return "";
         }
         if(name == "maps.user") {
@@ -209,9 +218,12 @@ namespace end_editor {
                 if(!error.empty()) {
                     return error;
                 }
-                std::vector<std::string> edit{std::string(name)};
-                edit.insert(edit.end(), arguments.begin(), arguments.end());
-                this->queueBeforeModelLoading(Job{Job::editMap, edit});
+                std::vector<std::string> edit;
+                edit.reserve(arguments.size() + 1);
+                edit.emplace_back(name);
+                edit.insert(edit.end(), std::make_move_iterator(arguments.begin()),
+                            std::make_move_iterator(arguments.end()));
+                this->queueBeforeModelLoading(Job{Job::editMap, std::move(edit)});
                 return "";
             }
         }
@@ -222,7 +234,7 @@ namespace end_editor {
             if(!this->document && !mapQueued) {
                 return "error:no_map";
             }
-            this->queueBeforeModelLoading(Job{Job::saveMap, arguments});
+            this->queueBeforeModelLoading(Job{Job::saveMap, std::move(arguments)});
             return "";
         }
         return "error:unknown_command";
@@ -247,7 +259,8 @@ namespace end_editor {
     }
 
     std::string EditorCore::checkEditCommand(std::string_view name, const std::vector<std::string> &arguments) {
-        const auto arg = [&](std::size_t i) { return i < arguments.size() ? arguments[i] : std::string(); };
+        static const std::string none;
+        const auto arg = [&](std::size_t i) -> const std::string & { return i < arguments.size() ? arguments[i] : none; };
         const auto isNumber = [&](std::size_t i) {
             double value = 0;
             return parseNumber(arg(i), value);
@@ -432,7 +445,7 @@ namespace end_editor {
         this->gameFolders = folders;
         this->loader.reset();
         this->model = LoadedModel{};
-        const auto scan = scanGameData(folders, this->files);
+        auto scan = scanGameData(folders, this->files);
         const auto &gameDir = job.arguments.front();
         this->storage->transaction([&] {
             this->storage->remove_all<ObjectRow>();
@@ -454,8 +467,8 @@ namespace end_editor {
                 this->setStatus("error", scan.error, gameDir, 0);
                 return true;
             }
+            ObjectRow row;  // one row for every object: its strings keep their buffers
             for(const auto &object: scan.objects) {
-                ObjectRow row;
                 row.name = object.name;
                 row.definition = object.definition;
                 row.parent = object.parent;
@@ -504,15 +517,13 @@ namespace end_editor {
                             std::int64_t(scan.objects.size()));
             return true;
         });
+        this->objectsByName.clear();  // views of objectInfos' names
         this->objectInfos.clear();
-        this->objectsByName.clear();
         if(scan.error.empty()) {
             this->loader = std::make_unique<ModelLoader>(this->files);
-            this->objectInfos = scan.objects;
+            this->objectInfos = std::move(scan.objects);
             for(std::size_t i = 0; i < this->objectInfos.size(); ++i) {
-                auto key = this->objectInfos[i].name;
-                std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-                this->objectsByName.emplace(key, i);
+                this->objectsByName.emplace(this->objectInfos[i].name, i);
             }
         }
     }
@@ -707,9 +718,7 @@ namespace end_editor {
     }
 
     const ObjectInfo *EditorCore::findObject(const std::string &templateName) const {
-        auto key = templateName;
-        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        const auto found = this->objectsByName.find(key);
+        const auto found = this->objectsByName.find(std::string_view(templateName));
         return found == this->objectsByName.end() ? nullptr : &this->objectInfos[found->second];
     }
 
@@ -738,10 +747,7 @@ namespace end_editor {
         MapFile map;
         std::string error;
         const bool parsed = parseMap(bytes, map, error);
-        const auto scene = parsed ? buildMapScene(map, this->files, [&](const std::string &templateName) {
-            return this->findObject(templateName);
-        })
-                                  : MapScene{};
+        auto scene = parsed ? buildMapScene(map, this->files) : MapScene{};
         this->storage->transaction([&] {
             this->clearMap();
             if(!parsed) {
@@ -768,11 +774,12 @@ namespace end_editor {
                                                   toBlob(water.indices)});
             }
 
-            for(const auto &player: mapPlayers(map)) {
+            const auto players = mapPlayers(map);
+            for(const auto &player: players) {
                 this->storage->insert(MapPlayerRow{0, player.name, player.displayName, player.team,
                                                    int(player.color), player.neutral});
             }
-            const auto objectCount = scene.objects.size();
+            const auto objectCount = map.objects.size();
             this->document = std::make_unique<MapDocument>(std::move(map));
             // The document numbers the objects the engine keeps 1.. in file order, like the scene.
             for(const auto &entry: this->document->objects()) {
@@ -781,9 +788,8 @@ namespace end_editor {
                 }
             }
             const auto &opened = this->document->map();
-            this->tileColors = scene.tileColors;
+            this->tileColors = std::move(scene.tileColors);
             this->writeMapLinks();
-            const auto players = mapPlayers(opened);
             this->editor.open(this->document.get(), mapTeams(opened), players.empty() ? std::string() : players.front().team,
                               MapEditor::Point{(scene.playable[0] + scene.playable[2]) / 2,
                                                (scene.playable[1] + scene.playable[3]) / 2});
@@ -808,6 +814,7 @@ namespace end_editor {
             row.timeOfDay = opened.lighting.timeOfDay;
             const auto time = std::size_t(std::clamp(opened.lighting.timeOfDay, 1, 4) - 1);
             std::vector<float> lighting;
+            lighting.reserve(18);
             for(const auto *light: {&opened.lighting.terrain[time], &opened.lighting.objects[time]}) {
                 lighting.insert(lighting.end(), light->ambient.begin(), light->ambient.end());
                 lighting.insert(lighting.end(), light->diffuse.begin(), light->diffuse.end());
@@ -904,7 +911,8 @@ namespace end_editor {
                         const auto found = model.textures.find(part.texture);
                         if(found != model.textures.end()) {
                             this->mapTextures.insert(part.texture);
-                            auto image = shrinkImage(found->second, 512);
+                            // The texture goes once (mapTextures): the model's copy is not needed again.
+                            auto image = shrinkImage(std::move(found->second), 512);
                             this->storage->insert(MapModelTextureRow{0, part.texture, int(image.width),
                                                                      int(image.height), toBlob(image.rgba)});
                         }
@@ -975,7 +983,7 @@ namespace end_editor {
             row.modelId = it->second;
         }
         this->storage->replace(row);
-        for(const auto &value: placed.properties) {
+        for(const auto &value: entry->object.properties) {
             this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value.type), value.toString()});
         }
     }
@@ -1304,7 +1312,7 @@ namespace end_editor {
             const auto launched = launchProcess(request);
             std::string command = request.program;
             for(const auto &argument: request.arguments) {
-                command += "\t" + argument;
+                command.append(1, '\t').append(argument);
             }
             this->play.command = command;
             this->play.mapPath = target.string();

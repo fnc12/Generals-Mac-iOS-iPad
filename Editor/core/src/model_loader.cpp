@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <string_view>
 
 namespace end_editor {
 
@@ -17,8 +18,28 @@ namespace end_editor {
             return text;
         }
 
-        bool sameName(const std::string &a, const std::string &b) {
-            return lower(a) == lower(b);
+        char lowerChar(char c) {
+            return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+        }
+
+        // Equal without case (ASCII), without making lower-case copies.
+        bool sameName(std::string_view a, std::string_view b) {
+            return a.size() == b.size() &&
+                   std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) { return lowerChar(x) == lowerChar(y); });
+        }
+
+        bool startsWithNoCase(std::string_view text, std::string_view prefix) {
+            return text.size() >= prefix.size() && sameName(text.substr(0, prefix.size()), prefix);
+        }
+
+        // sameName(mesh.fullName(), name) without building the full name.
+        bool isMeshNamed(const W3dMesh &mesh, std::string_view name) {
+            if(mesh.container.empty()) {
+                return sameName(mesh.name, name);
+            }
+            return name.size() == mesh.container.size() + 1 + mesh.name.size() && name[mesh.container.size()] == '.' &&
+                   sameName(name.substr(0, mesh.container.size()), mesh.container) &&
+                   sameName(name.substr(mesh.container.size() + 1), mesh.name);
         }
 
         bool isW3dPath(const std::string &path) {
@@ -50,6 +71,7 @@ namespace end_editor {
             }
             // (texture index, shader index) -> triangles
             std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<std::uint32_t>> trianglesByMaterial;
+            std::vector<std::uint32_t> remap;  // one for every part of the mesh
             const std::size_t triangleCount = mesh.indices.size() / 3;
             for(std::size_t t = 0; t < triangleCount; ++t) {
                 const std::uint32_t texture = mesh.triangleTextures.empty() ? 0 : mesh.triangleTextures[t];
@@ -68,7 +90,7 @@ namespace end_editor {
                 }
                 if(part.texture.rfind("zhc", 0) == 0) {
                     part.houseColor = 1;
-                } else if(lower(mesh.name).rfind("housecolor", 0) == 0) {
+                } else if(startsWithNoCase(mesh.name, "housecolor")) {
                     part.houseColor = 2;
                 }
                 part.bone = bone;
@@ -76,13 +98,16 @@ namespace end_editor {
                 part.twoSided = (mesh.attributes & w3d::meshFlagTwoSided) != 0;
                 part.hidden = (mesh.attributes & w3d::meshFlagHidden) != 0;
 
-                // Keep only the vertices this part uses.
-                std::map<std::uint32_t, std::uint32_t> remap;
+                // Keep only the vertices this part uses: remap[source] is the part's vertex.
+                constexpr auto unused = std::numeric_limits<std::uint32_t>::max();
+                remap.assign(mesh.vertexCount(), unused);
+                part.indices.reserve(triangles.size() * 3);
                 for(const auto triangle: triangles) {
                     for(int k = 0; k < 3; ++k) {
                         const std::uint32_t source = mesh.indices[triangle * 3 + std::size_t(k)];
-                        auto [it, added] = remap.emplace(source, std::uint32_t(part.vertices.size()));
-                        if(added) {
+                        auto &target = remap[source];
+                        if(target == unused) {
+                            target = std::uint32_t(part.vertices.size());
                             ModelVertex vertex{};
                             std::copy_n(&mesh.positions[source * 3], 3, vertex.position);
                             std::copy_n(&mesh.normals[source * 3], 3, vertex.normal);
@@ -96,7 +121,7 @@ namespace end_editor {
                             }
                             part.vertices.push_back(vertex);
                         }
-                        part.indices.push_back(it->second);
+                        part.indices.push_back(target);
                     }
                 }
                 parts.push_back(std::move(part));
@@ -294,7 +319,7 @@ namespace end_editor {
                 const W3dMesh *mesh = nullptr;
                 const auto findIn = [&](const W3dFile &in) {
                     for(const auto &candidate: in.meshes) {
-                        if(sameName(candidate.fullName(), sub.name)) {
+                        if(isMeshNamed(candidate, sub.name)) {
                             mesh = &candidate;
                         }
                     }

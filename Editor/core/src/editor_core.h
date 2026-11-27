@@ -107,8 +107,14 @@ namespace end_editor {
         std::unique_ptr<ModelLoader> loader;
         LoadedModel model;
 
+        // Template names compared without case (ASCII); looked up by a view, without a copy.
+        struct NoCaseLess {
+            using is_transparent = void;
+            bool operator()(std::string_view a, std::string_view b) const;
+        };
         std::vector<ObjectInfo> objectInfos;
-        std::map<std::string, std::size_t> objectsByName;  // lower-case template name -> objectInfos
+        // Template name (a view of objectInfos' name) -> objectInfos.
+        std::map<std::string_view, std::size_t, NoCaseLess> objectsByName;
         // Models of the open map still to load, in map_models id order.
         struct PendingMapModel {
             std::int64_t id = 0;
