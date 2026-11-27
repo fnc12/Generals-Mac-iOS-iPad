@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace end_editor {
@@ -14,21 +15,43 @@ namespace end_editor {
         using std::runtime_error::runtime_error;
     };
 
+    // The two string kinds of a Dict value: ASCII, and Unicode (UTF-16 in the file, UTF-8 here).
+    struct AsciiText {
+        std::string text;
+        bool operator==(const AsciiText&) const = default;
+    };
+    struct UnicodeText {
+        std::string text;
+        bool operator==(const UnicodeText&) const = default;
+    };
+
     // A value of the engine's Dict (key -> bool / int / real / ASCII / Unicode string).
     struct DictValue {
-        enum Type : std::uint8_t { boolean = 0, integer = 1, real = 2, ascii = 3, unicode = 4 } type = boolean;
-        std::string key;
-        std::int32_t intValue = 0;  // bool and int
-        float realValue = 0;
-        std::string text;  // ASCII, or Unicode converted to UTF-8
+        // In the order of the file's type codes (Dict::DataType: DICT_BOOL, DICT_INT, DICT_REAL,
+        // DICT_ASCIISTRING, DICT_UNICODESTRING), so a value's code is its index.
+        using Data = std::variant<bool, std::int32_t, float, AsciiText, UnicodeText>;
 
+        std::string key;
+        Data data;
+
+        // The type code the file stores.
+        std::uint8_t typeCode() const {
+            return std::uint8_t(this->data.index());
+        }
+        // An int value, nullptr for the other types.
+        const std::int32_t* integer() const {
+            return std::get_if<std::int32_t>(&this->data);
+        }
+        // The text of a string value (either kind), "" for the other types.
+        std::string_view text() const;
         // The value as the inspector shows it ("true", "42", "1.5", the text).
         std::string toString() const;
     };
     using Dict = std::vector<DictValue>;
 
     const DictValue* findDictValue(const Dict& dict, std::string_view key);
-    const char* dictTypeName(DictValue::Type type);
+    // "bool" | "int" | "real" | "string" | "unicode": the type as the store and the commands name it.
+    const char* dictTypeName(const DictValue& value);
 
     // Reader of the engine's DataChunk files (DataChunk.cpp): a "CkMp" table of contents that maps
     // name ids to names, then chunks of {uint32 name id, uint16 version, int32 size, data}.

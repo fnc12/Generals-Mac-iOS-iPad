@@ -108,12 +108,15 @@ namespace {
         }
         std::string property(std::int64_t id, const std::string& key) {
             using namespace sqlite_orm;
-            for (const auto& row: this->reader->iterate<MapPropertyRow>(
-                     where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key),
-                     limit(1))) {
-                return row.type + ":" + row.value;
+            const auto rows =
+                this->reader->select(columns(&MapPropertyRow::type, &MapPropertyRow::value),
+                                     where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key),
+                                     limit(1));
+            if (rows.empty()) {
+                return "<none>";
             }
-            return "<none>";
+            const auto& [type, value] = rows.front();
+            return type + ":" + value;
         }
         std::vector<MapLinkRow> links() {
             return this->reader->get_all<MapLinkRow>(sqlite_orm::order_by(&MapLinkRow::id));
@@ -373,8 +376,10 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     CHECK(flow.property(1, "objectScale") == "<none>");
     // Bad values are refused with a note; nothing changes.
     const auto steps = flow.reader->get<MapRow>(1).undoCount;
-    flow.send("selection.property\tobjectInitialHealth\tint\tlots");
+    // A value that is not of its type is refused when the command is read.
+    CHECK(flow.refused("selection.property\tobjectInitialHealth\tint\tlots") == "error:bad_argument");
     CHECK(flow.editor().noteKind == "error");
+    CHECK(flow.editor().note == "objectInitialHealth: \"lots\" is not a number");
     flow.send("selection.height\t100000");
     CHECK(flow.editor().noteKind == "error");
     flow.send("selection.owner\tteamNobody");
@@ -393,10 +398,10 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     const auto& tree = file.objects[0];
     CHECK(tree.x == 17);
     CHECK(tree.z == 25);
-    CHECK(findDictValue(tree.properties, "objectInitialHealth")->intValue == 40);
-    CHECK(findDictValue(tree.properties, "objectName")->text == "Öak");
-    CHECK(findDictValue(tree.properties, "objectName")->type == DictValue::unicode);
-    CHECK(findDictValue(tree.properties, "objectScriptAttachment")->text == "TreeScript");
+    CHECK(findDictValue(tree.properties, "objectInitialHealth")->data == DictValue::Data(std::int32_t(40)));
+    CHECK(findDictValue(tree.properties, "objectName")->text() == "Öak");
+    CHECK(std::holds_alternative<UnicodeText>(findDictValue(tree.properties, "objectName")->data));
+    CHECK(findDictValue(tree.properties, "objectScriptAttachment")->text() == "TreeScript");
     CHECK_FALSE(findDictValue(tree.properties, "objectScale"));
     // The waypoint and every chunk but ObjectsList are the original bytes.
     const auto original = parsed(testMap());

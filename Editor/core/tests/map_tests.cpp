@@ -137,11 +137,11 @@ TEST_CASE("Map chunks") {
         CHECK(tree.z == 2);
         CHECK(tree.angle == Approx(1.5f));
         REQUIRE(tree.properties.size() == 5);
-        CHECK(findDictValue(tree.properties, "objectInitialHealth")->intValue == 100);
+        CHECK(findDictValue(tree.properties, "objectInitialHealth")->data == DictValue::Data(std::int32_t(100)));
         CHECK(findDictValue(tree.properties, "objectScale")->toString() == "1.5");
         CHECK(findDictValue(tree.properties, "objectIndestructible")->toString() == "true");
-        CHECK(findDictValue(tree.properties, "objectName")->text == "Oak");
-        CHECK(findDictValue(tree.properties, "objectName")->type == DictValue::unicode);
+        CHECK(findDictValue(tree.properties, "objectName")->text() == "Oak");
+        CHECK(std::holds_alternative<UnicodeText>(findDictValue(tree.properties, "objectName")->data));
 
         REQUIRE(map.polygons.size() == 2);
         CHECK(map.polygons[0].water);
@@ -149,9 +149,9 @@ TEST_CASE("Map chunks") {
         CHECK_FALSE(map.polygons[1].water);
 
         REQUIRE(map.sides.size() == 1);
-        CHECK(findDictValue(map.sides[0].player, "playerName")->text == "PlyrRed");
+        CHECK(findDictValue(map.sides[0].player, "playerName")->text() == "PlyrRed");
         REQUIRE(map.teams.size() == 1);
-        CHECK(findDictValue(map.worldInfo, "weather")->intValue == 1);
+        CHECK(findDictValue(map.worldInfo, "weather")->data == DictValue::Data(std::int32_t(1)));
         REQUIRE(map.hasLighting);
         CHECK(map.lighting.timeOfDay == 2);
         CHECK(map.lighting.terrain[1].ambient[0] == Approx(0.5f));

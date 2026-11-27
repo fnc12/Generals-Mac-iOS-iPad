@@ -1,5 +1,7 @@
 #include "map_document.h"
 
+#include "overloaded.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -64,7 +66,7 @@ namespace end_editor {
         }
 
         // The number after the last space of a uniqueID ("AmericaTankCrusader 12" -> 12), or -1.
-        int uniqueNumber(const std::string& id) {
+        int uniqueNumber(std::string_view id) {
             const auto space = id.rfind(' ');
             if (space == std::string::npos || space + 1 >= id.size()) {
                 return -1;
@@ -80,25 +82,13 @@ namespace end_editor {
         }
 
         DictValue boolean(const char* key, bool value) {
-            DictValue v;
-            v.type = DictValue::boolean;
-            v.key = key;
-            v.intValue = value ? 1 : 0;
-            return v;
+            return DictValue{key, value};
         }
         DictValue integer(const char* key, std::int32_t value) {
-            DictValue v;
-            v.type = DictValue::integer;
-            v.key = key;
-            v.intValue = value;
-            return v;
+            return DictValue{key, value};
         }
         DictValue ascii(const char* key, const std::string& text) {
-            DictValue v;
-            v.type = DictValue::ascii;
-            v.key = key;
-            v.text = text;
-            return v;
+            return DictValue{key, AsciiText{text}};
         }
 
         // MapObject's defaults for a new object (WorldHeightMap.cpp).
@@ -136,21 +126,20 @@ namespace end_editor {
         for (const auto& side: map.sides) {
             MapPlayer player;
             if (const auto* name = findDictValue(side.player, "playerName")) {
-                player.name = name->text;
+                player.name = name->text();
             }
             if (const auto* display = findDictValue(side.player, "playerDisplayName")) {
-                player.displayName = display->text;
+                player.displayName = display->text();
             }
-            if (const auto* color = findDictValue(side.player, "playerColor");
-                color && color->type == DictValue::integer) {
-                player.color = std::uint32_t(color->intValue) & 0xFFFFFF;
+            if (const auto* color = findDictValue(side.player, "playerColor"); color && color->integer()) {
+                player.color = std::uint32_t(*color->integer()) & 0xFFFFFF;
             }
             player.neutral = player.name.empty();
             // SidesList.cpp: every player has a default team named "team" + its name.
             player.team = "team" + player.name;
             const bool hasTeam = std::any_of(map.teams.begin(), map.teams.end(), [&](const Dict& team) {
                 const auto* teamName = findDictValue(team, "teamName");
-                return teamName && teamName->text == player.team;
+                return teamName && teamName->text() == player.team;
             });
             if (hasTeam) {
                 players.push_back(std::move(player));
@@ -163,7 +152,7 @@ namespace end_editor {
         std::vector<std::string> teams;
         for (const auto& team: map.teams) {
             if (const auto* name = findDictValue(team, "teamName")) {
-                teams.push_back(name->text);
+                teams.emplace_back(name->text());
             }
         }
         return teams;
@@ -190,10 +179,11 @@ namespace end_editor {
                 entry.id = this->nextId++;
                 entry.object = std::move(*byChunk[i]);
                 if (const auto* unique = findDictValue(entry.object.properties, "uniqueID")) {
-                    this->nextUniqueNumber = std::max(this->nextUniqueNumber, uniqueNumber(unique->text) + 1);
+                    this->nextUniqueNumber = std::max(this->nextUniqueNumber, uniqueNumber(unique->text()) + 1);
                 }
-                if (const auto* waypoint = findDictValue(entry.object.properties, "waypointID")) {
-                    this->nextWaypointId = std::max(this->nextWaypointId, waypoint->intValue + 1);
+                if (const auto* waypoint = findDictValue(entry.object.properties, "waypointID");
+                    waypoint && waypoint->integer()) {
+                    this->nextWaypointId = std::max(this->nextWaypointId, *waypoint->integer() + 1);
                 }
             }
             this->entries.push_back(std::move(entry));
@@ -232,7 +222,7 @@ namespace end_editor {
     std::int32_t MapDocument::waypointId(std::int64_t id) const {
         const auto* entry = this->find(id);
         const auto* value = entry ? findDictValue(entry->object.properties, "waypointID") : nullptr;
-        return value && value->type == DictValue::integer ? value->intValue : 0;
+        return value && value->integer() ? *value->integer() : 0;
     }
 
     std::int64_t MapDocument::waypointObject(std::int32_t waypointId) const {
@@ -241,7 +231,7 @@ namespace end_editor {
                 continue;
             }
             const auto* value = findDictValue(entry.object.properties, "waypointID");
-            if (value && value->type == DictValue::integer && value->intValue == waypointId) {
+            if (value && value->integer() && *value->integer() == waypointId) {
                 return entry.id;
             }
         }
@@ -354,24 +344,23 @@ namespace end_editor {
         putAscii(data, object.templateName);
         putU16(data, std::uint16_t(object.properties.size()));
         for (const auto& value: object.properties) {
-            putU32(data, (this->nameId(value.key) << 8) | std::uint32_t(value.type));
-            switch (value.type) {
-                case DictValue::boolean:
-                    data.push_back(char(value.intValue ? 1 : 0));
-                    break;
-                case DictValue::integer:
-                    putU32(data, std::uint32_t(value.intValue));
-                    break;
-                case DictValue::real:
-                    putFloat(data, value.realValue);
-                    break;
-                case DictValue::ascii:
-                    putAscii(data, value.text);
-                    break;
-                case DictValue::unicode:
-                    putUnicode(data, value.text);
-                    break;
-            }
+            putU32(data, (this->nameId(value.key) << 8) | value.typeCode());
+            std::visit(Overloaded{[&](bool flag) {
+                                      data.push_back(char(flag ? 1 : 0));
+                                  },
+                                  [&](std::int32_t number) {
+                                      putU32(data, std::uint32_t(number));
+                                  },
+                                  [&](float number) {
+                                      putFloat(data, number);
+                                  },
+                                  [&](const AsciiText& text) {
+                                      putAscii(data, text.text);
+                                  },
+                                  [&](const UnicodeText& text) {
+                                      putUnicode(data, text.text);
+                                  }},
+                       value.data);
         }
         std::string chunk;
         chunk.reserve(DataChunkReader::headerBytes + data.size());
@@ -436,7 +425,7 @@ namespace end_editor {
         const auto taken = [&](const std::string& name) {
             return std::any_of(this->entries.begin(), this->entries.end(), [&](const Object& entry) {
                 const auto* value = findDictValue(entry.object.properties, "waypointName");
-                return !entry.removed && value && value->text == name;
+                return !entry.removed && value && value->text() == name;
             });
         };
         while (taken("Waypoint " + std::to_string(number))) {
@@ -539,8 +528,7 @@ namespace end_editor {
             return false;
         }
         const auto* existing = findDictValue(this->entries[index].object.properties, value.key);
-        if (existing && existing->type == value.type && existing->intValue == value.intValue &&
-            existing->realValue == value.realValue && existing->text == value.text) {
+        if (existing && existing->data == value.data) {
             return true;  // as it is: the bytes stay
         }
         Step step(*this);

@@ -66,9 +66,14 @@
  *   "selection.height\t<z>", "selection.angle\t<degrees>",
  *   "selection.property\t<key>\t<bool|int|real|string|unicode>\t<value>", "selection.unset\t<key>",
  *   "waypoint.link"
+ * A command is read whole when it is sent (src/commands.h): numbers in the C locale's format, ids
+ * positive whole numbers, modifiers among shift, alt and cmd, a property value of its type. A
+ * malformed one is refused right there and changes nothing.
  * Errors: error:missing_argument, error:unknown_command, error:no_game (model or map before game),
- * error:no_map (an edit without a map), error:bad_argument (not a number),
- * error:unknown_template, error:unknown_road; a refused edit also leaves its note in map_editor. Edits run in the next end_editor_update(), all queued ones at once.
+ * error:no_map (an edit without a map), error:bad_argument (not a number, not an id list, a value
+ * not of its type), error:unknown_template, error:unknown_road, error:unknown_faction,
+ * error:no_user_maps; a refused edit also leaves its note in map_editor. Edits run in the next
+ * end_editor_update(), all queued ones at once.
  * Work runs in end_editor_update(), which the client calls once per tick. */
 
 #ifdef __cplusplus

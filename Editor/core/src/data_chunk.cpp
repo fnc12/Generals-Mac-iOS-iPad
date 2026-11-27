@@ -1,5 +1,7 @@
 #include "data_chunk.h"
 
+#include "overloaded.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -20,28 +22,45 @@ namespace end_editor {
         }
     }
 
+    std::string_view DictValue::text() const {
+        return std::visit(Overloaded{[](const AsciiText& value) {
+                                         return std::string_view(value.text);
+                                     },
+                                     [](const UnicodeText& value) {
+                                         return std::string_view(value.text);
+                                     },
+                                     [](const auto&) {
+                                         return std::string_view();
+                                     }},
+                          this->data);
+    }
+
     std::string DictValue::toString() const {
-        switch (this->type) {
-            case boolean:
-                return this->intValue ? "true" : "false";
-            case integer:
-                return std::to_string(this->intValue);
-            case real: {
-                std::string text = std::to_string(this->realValue);
-                // "1.500000" -> "1.5"
-                while (text.size() > 1 && text.back() == '0' && text.find('.') != std::string::npos) {
-                    text.pop_back();
-                }
-                if (!text.empty() && text.back() == '.') {
-                    text.pop_back();
-                }
-                return text;
-            }
-            case ascii:
-            case unicode:
-                return this->text;
-        }
-        return {};
+        return std::visit(Overloaded{[](bool value) {
+                                         return std::string(value ? "true" : "false");
+                                     },
+                                     [](std::int32_t value) {
+                                         return std::to_string(value);
+                                     },
+                                     [](float value) {
+                                         std::string text = std::to_string(value);
+                                         // "1.500000" -> "1.5"
+                                         while (text.size() > 1 && text.back() == '0' &&
+                                                text.find('.') != std::string::npos) {
+                                             text.pop_back();
+                                         }
+                                         if (!text.empty() && text.back() == '.') {
+                                             text.pop_back();
+                                         }
+                                         return text;
+                                     },
+                                     [](const AsciiText& value) {
+                                         return value.text;
+                                     },
+                                     [](const UnicodeText& value) {
+                                         return value.text;
+                                     }},
+                          this->data);
     }
 
     const DictValue* findDictValue(const Dict& dict, std::string_view key) {
@@ -53,20 +72,23 @@ namespace end_editor {
         return nullptr;
     }
 
-    const char* dictTypeName(DictValue::Type type) {
-        switch (type) {
-            case DictValue::boolean:
-                return "bool";
-            case DictValue::integer:
-                return "int";
-            case DictValue::real:
-                return "real";
-            case DictValue::ascii:
-                return "string";
-            case DictValue::unicode:
-                return "unicode";
-        }
-        return "?";
+    const char* dictTypeName(const DictValue& value) {
+        return std::visit(Overloaded{[](bool) {
+                                         return "bool";
+                                     },
+                                     [](std::int32_t) {
+                                         return "int";
+                                     },
+                                     [](float) {
+                                         return "real";
+                                     },
+                                     [](const AsciiText&) {
+                                         return "string";
+                                     },
+                                     [](const UnicodeText&) {
+                                         return "unicode";
+                                     }},
+                          value.data);
     }
 
     DataChunkReader::DataChunkReader(std::string_view bytes) : data(bytes) {
@@ -205,26 +227,21 @@ namespace end_editor {
             const auto keyAndType = std::uint32_t(this->readInt());
             DictValue value;
             value.key = this->nameOf(keyAndType >> 8);
-            switch (keyAndType & 0xFF) {
-                case DictValue::boolean:
-                    value.type = DictValue::boolean;
-                    value.intValue = this->readByte() ? 1 : 0;
+            switch (keyAndType & 0xFF) {  // DictValue::Data's order
+                case 0:
+                    value.data = this->readByte() != 0;
                     break;
-                case DictValue::integer:
-                    value.type = DictValue::integer;
-                    value.intValue = this->readInt();
+                case 1:
+                    value.data = this->readInt();
                     break;
-                case DictValue::real:
-                    value.type = DictValue::real;
-                    value.realValue = this->readReal();
+                case 2:
+                    value.data = this->readReal();
                     break;
-                case DictValue::ascii:
-                    value.type = DictValue::ascii;
-                    value.text = this->readAsciiString();
+                case 3:
+                    value.data = AsciiText{this->readAsciiString()};
                     break;
-                case DictValue::unicode:
-                    value.type = DictValue::unicode;
-                    value.text = this->readUnicodeString();
+                case 4:
+                    value.data = UnicodeText{this->readUnicodeString()};
                     break;
                 default:
                     throw ChunkError("unknown dictionary value type " + std::to_string(keyAndType & 0xFF));

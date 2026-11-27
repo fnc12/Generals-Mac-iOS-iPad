@@ -4,6 +4,7 @@
 #include "game_launch.h"
 #include "map_preview.h"
 #include "map_scene.h"
+#include "overloaded.h"
 
 #include <algorithm>
 #include <cctype>
@@ -13,28 +14,12 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
-#include <locale>
-#include <sstream>
 #include <system_error>
 #include <thread>
 
 namespace end_editor {
 
     namespace {
-        std::vector<std::string> splitTabs(std::string_view text) {
-            std::vector<std::string> parts;
-            std::size_t start = 0;
-            while (true) {
-                const auto tab = text.find('\t', start);
-                parts.emplace_back(
-                    text.substr(start, tab == std::string_view::npos ? std::string_view::npos : tab - start));
-                if (tab == std::string_view::npos) {
-                    return parts;
-                }
-                start = tab + 1;
-            }
-        }
-
         bool isInside(const std::filesystem::path& path, const std::filesystem::path& folder) {
             std::error_code error;
             const auto full = std::filesystem::weakly_canonical(path, error);
@@ -55,9 +40,6 @@ namespace end_editor {
 
     EditorCore::EditorCore(std::string dbPath) :
         path(std::move(dbPath)), editor(MapEditor::Game{[this](const std::string& name) {
-                                                            return this->findObject(name) != nullptr;
-                                                        },
-                                                        [this](const std::string& name) {
                                                             return this->roadKind(name);
                                                         },
                                                         [this](bool bridge) {
@@ -81,11 +63,13 @@ namespace end_editor {
         // Only the revisions of the last session's model and map rows, not their blobs.
         using namespace sqlite_orm;
         for (const auto modelRevision:
-             this->storage->iterate(select(&ModelRow::revision, where(c(&ModelRow::id) == 1)))) {
+             this->storage->select(&ModelRow::revision, where(c(&ModelRow::id) == 1), limit(1))) {
             this->revision = std::max(this->revision, modelRevision);
         }
-        for (const auto& [mapRevision, modelRevision]: this->storage->iterate(
-                 select(columns(&MapRow::revision, &MapRow::modelRevision), where(c(&MapRow::id) == 1)))) {
+        for (const auto& [mapRevision, modelRevision]:
+             this->storage->select(columns(&MapRow::revision, &MapRow::modelRevision),
+                                   where(c(&MapRow::id) == 1),
+                                   limit(1))) {
             this->revision = std::max({this->revision, mapRevision, modelRevision});
         }
         this->setStatus("idle", "", "", 0);
@@ -119,133 +103,108 @@ namespace end_editor {
     }
 
     std::string EditorCore::send(std::string_view command) {
-        const auto tab = command.find('\t');
-        const auto name = command.substr(0, tab);
-        auto arguments =
-            tab == std::string_view::npos ? std::vector<std::string>() : splitTabs(command.substr(tab + 1));
-        const bool hasArgument = !arguments.empty() && !arguments.front().empty();
+        auto parsed = commands::parse(command);
+        if (const auto* error = std::get_if<commands::Error>(&parsed)) {
+            // The map editor's commands tell the user why too.
+            return error->note.empty() ? error->code : this->refuse(error->code, error->note);
+        }
+        return std::visit(
+            [this](auto&& accepted) {
+                return this->accept(std::move(accepted));
+            },
+            std::get<commands::Command>(std::move(parsed)));
+    }
 
-        if (name == "game.open") {
-            if (!hasArgument) {
-                return "error:missing_argument";
-            }
-            // Status changes now so the client shows "loading" before the work in update() starts.
-            this->setStatus("loading", "Reading game data", arguments.front(), 0);
-            this->jobs.push_back(Job{Job::openGame, std::move(arguments)});
-            return "";
+    std::string EditorCore::accept(commands::OpenGame&& command) {
+        // Status changes now so the client shows "loading" before the work in update() starts.
+        this->setStatus("loading", "Reading game data", command.folder, 0);
+        this->jobs.push_back(std::move(command));
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::OpenModel&& command) {
+        if (!this->loader) {
+            return "error:no_game";
         }
-        if (name == "model.open") {
-            if (!hasArgument) {
-                return "error:missing_argument";
-            }
-            if (!this->loader) {
-                return "error:no_game";
-            }
-            this->setModelState(arguments.front(), "loading", "");
-            this->jobs.push_back(Job{Job::openModel, std::move(arguments)});
-            return "";
+        this->setModelState(command.name, "loading", "");
+        this->jobs.push_back(std::move(command));
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::PlayAnimation&& command) {
+        if (!this->loader) {
+            return "error:no_game";
         }
-        if (name == "model.animation") {
-            if (!this->loader) {
-                return "error:no_game";
-            }
-            if (arguments.empty()) {
-                arguments.emplace_back();
-            }
-            this->jobs.push_back(Job{Job::playAnimation, std::move(arguments)});
-            return "";
+        this->jobs.push_back(std::move(command));
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::OpenMap&& command) {
+        if (!this->loader) {
+            return "error:no_game";
         }
-        if (name == "map.open") {
-            if (!hasArgument) {
-                return "error:missing_argument";
-            }
-            if (!this->loader) {
-                return "error:no_game";
-            }
-            this->setMapState(arguments.front(), "loading", "Reading the map");
-            this->jobs.push_back(Job{Job::openMap, std::move(arguments)});
-            return "";
+        this->setMapState(command.path, "loading", "Reading the map");
+        this->jobs.push_back(std::move(command));
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::SetUserMaps&& command) {
+        this->userMapsFolder = std::move(command.folder);
+        this->writePlay();  // the default game app follows the game of the Maps folder
+        if (this->loader) {
+            this->jobs.push_back(ListMaps{});
         }
-        if (name == "maps.user") {
-            this->userMapsFolder = hasArgument ? arguments.front() : "";
-            this->writePlay();  // the default game app follows the game of the Maps folder
-            if (this->loader) {
-                this->jobs.push_back(Job{Job::listMaps, {}});
-            }
-            return "";
+        return "";
+    }
+
+    bool EditorCore::hasMap() const {
+        return this->document || this->queued<commands::OpenMap>();
+    }
+
+    std::string EditorCore::accept(commands::SaveMap&& command) {
+        if (!this->hasMap()) {
+            return "error:no_map";
         }
-        const bool mapQueued = std::any_of(this->jobs.begin(), this->jobs.end(), [](const Job& job) {
-            return job.kind == Job::openMap;
-        });
-        if (name.rfind("play.", 0) == 0) {
-            return this->setPlaySetting(name, arguments);
+        this->queueBeforeModelLoading(SaveMapTo{std::move(command.file)});
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::SaveMapAs&& command) {
+        if (!this->hasMap()) {
+            return this->refuse("error:no_map", "No map is open");
         }
-        if (name == "map.play") {
-            if (!this->document && !mapQueued) {
-                return this->refuse("error:no_map", "No map is open");
-            }
-            if (this->userMapsFolder.empty()) {
-                return this->refuse("error:no_user_maps", "Play needs the game's user Maps folder (maps.user)");
-            }
-            this->queueBeforeModelLoading(Job{Job::playMap, {}});
-            return "";
+        if (this->userMapsFolder.empty()) {
+            return this->refuse("error:no_user_maps", "No user Maps folder to save into (maps.user)");
         }
-        if (name == "map.save_as") {
-            if (!this->document && !mapQueued) {
-                return this->refuse("error:no_map", "No map is open");
-            }
-            const auto mapName = arguments.empty() ? std::string() : arguments.front();
-            if (mapName.find_first_not_of(" .") == std::string::npos) {
-                return this->refuse("error:missing_argument", "Type a name for the map");
-            }
-            if (mapName.find_first_of("/\\:") != std::string::npos) {
-                return this->refuse("error:bad_argument", "A map name cannot have / \\ or : in it");
-            }
-            if (this->userMapsFolder.empty()) {
-                return this->refuse("error:no_user_maps", "No user Maps folder to save into (maps.user)");
-            }
-            const auto target = std::filesystem::path(this->userMapsFolder) / mapName / (mapName + ".map");
-            std::vector<std::string> save{target.string(), "as"};
-            if (arguments.size() > 1 && arguments[1] == "replace") {
-                save.push_back("replace");
-            }
-            this->queueBeforeModelLoading(Job{Job::saveMap, save});
-            return "";
+        const auto target = std::filesystem::path(this->userMapsFolder) / command.name / (command.name + ".map");
+        this->queueBeforeModelLoading(SaveMapTo{target.string(), true, command.replace});
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::PlayMap&& command) {
+        if (!this->hasMap()) {
+            return this->refuse("error:no_map", "No map is open");
         }
-        if (name.rfind("map.", 0) == 0 || name.rfind("edit.", 0) == 0 || name.rfind("selection.", 0) == 0 ||
-            name.rfind("placement.", 0) == 0 || name == "waypoint.link" || name == "note.clear") {
-            if (name == "map.save" || name == "map.open") {
-                // below
-            } else {
-                const bool needsMap = name.rfind("placement.", 0) != 0 && name != "note.clear";
-                if (needsMap && !this->document && !mapQueued) {
-                    return this->refuse("error:no_map", "No map is open");
-                }
-                const auto error = this->checkEditCommand(name, arguments);
-                if (!error.empty()) {
-                    return error;
-                }
-                std::vector<std::string> edit;
-                edit.reserve(arguments.size() + 1);
-                edit.emplace_back(name);
-                edit.insert(edit.end(),
-                            std::make_move_iterator(arguments.begin()),
-                            std::make_move_iterator(arguments.end()));
-                this->queueBeforeModelLoading(Job{Job::editMap, std::move(edit)});
-                return "";
-            }
+        if (this->userMapsFolder.empty()) {
+            return this->refuse("error:no_user_maps", "Play needs the game's user Maps folder (maps.user)");
         }
-        if (name == "map.save") {
-            if (!hasArgument) {
-                return "error:missing_argument";
-            }
-            if (!this->document && !mapQueued) {
-                return "error:no_map";
-            }
-            this->queueBeforeModelLoading(Job{Job::saveMap, std::move(arguments)});
-            return "";
+        this->queueBeforeModelLoading(command);
+        return "";
+    }
+
+    std::string EditorCore::accept(commands::PlaySetting&& command) {
+        return this->setPlaySetting(command);
+    }
+
+    std::string EditorCore::accept(commands::Edit&& command) {
+        if (commands::needsMap(command) && !this->hasMap()) {
+            return this->refuse("error:no_map", "No map is open");
         }
-        return "error:unknown_command";
+        if (auto error = this->checkNames(command); !error.empty()) {
+            return error;
+        }
+        this->queueBeforeModelLoading(EditMap{std::move(command)});
+        return "";
     }
 
     std::string EditorCore::refuse(const std::string& error, const std::string& note) {
@@ -257,120 +216,48 @@ namespace end_editor {
         return error;
     }
 
-    int EditorCore::roadKind(const std::string& name) const {
+    MapEditor::RoadKind EditorCore::roadKind(const std::string& name) const {
         for (const auto& type: this->roadTypes) {
             if (type.name == name) {
-                return type.bridge ? 2 : 1;
+                return type.bridge ? MapEditor::RoadKind::bridge : MapEditor::RoadKind::road;
             }
         }
-        return 0;
+        return MapEditor::RoadKind::unknown;
     }
 
-    std::string EditorCore::checkEditCommand(std::string_view name, const std::vector<std::string>& arguments) {
-        static const std::string none;
-        const auto arg = [&](std::size_t i) -> const std::string& {
-            return i < arguments.size() ? arguments[i] : none;
+    std::string EditorCore::checkNames(const commands::Edit& edit) {
+        const auto checkTemplate = [this](const std::string& name) {
+            return this->findObject(name)
+                       ? std::string()
+                       : this->refuse("error:unknown_template", "No object " + name + " in this game");
         };
-        const auto isNumber = [&](std::size_t i) {
-            double value = 0;
-            return parseNumber(arg(i), value);
-        };
-        // Optional numbers: empty (the cursor is off the map) or a number.
-        const auto isPoint = [&](std::size_t i) {
-            return (arg(i).empty() && arg(i + 1).empty()) || (isNumber(i) && isNumber(i + 1));
-        };
-        const auto missing = [&] {
-            return this->refuse("error:missing_argument", std::string(name) + ": missing argument");
-        };
-        const auto bad = [&] {
-            return this->refuse("error:bad_argument", std::string(name) + ": not a number");
-        };
-        if (name == "map.place") {
-            // place <template> <x> <y> <angle> <team>
-            if (arguments.size() < 5 || arg(0).empty()) {
-                return missing();
-            }
-            if (!isNumber(1) || !isNumber(2) || !isNumber(3)) {
-                return bad();
-            }
-            if (!this->findObject(arg(0))) {
-                return this->refuse("error:unknown_template", "No object " + arg(0) + " in this game");
-            }
-        } else if (name == "map.move" || name == "map.rotate" || name == "map.delete") {
-            const std::size_t needed = name == "map.move" ? 3 : name == "map.rotate" ? 2 : 1;
-            if (arguments.size() < needed || arg(0).empty()) {
-                return missing();
-            }
-            for (std::size_t i = 0; i < needed; ++i) {
-                if (!isNumber(i)) {
-                    return bad();
-                }
-            }
-        } else if (name == "placement.template") {
-            if (arg(0).empty()) {
-                return missing();
-            }
-            if (!this->findObject(arg(0))) {
-                return this->refuse("error:unknown_template", "No object " + arg(0) + " in this game");
-            }
-        } else if (name == "placement.road" || name == "placement.bridge") {
-            if (!arg(0).empty() && this->roadKind(arg(0)) != (name == "placement.road" ? 1 : 2)) {
-                return this->refuse("error:unknown_road",
-                                    std::string("No ") + (name == "placement.road" ? "road " : "bridge ") + arg(0) +
-                                        " in Roads.ini");
-            }
-        } else if (name == "placement.owner" || name == "selection.owner" || name == "selection.unset") {
-            if (arg(0).empty()) {
-                return missing();
-            }
-        } else if (name == "placement.angle" || name == "edit.rotate" || name == "selection.height" ||
-                   name == "selection.angle") {
-            if (arg(0).empty()) {
-                return missing();
-            }
-            if (!isNumber(0)) {
-                return bad();
-            }
-        } else if (name == "map.click_right" || name == "map.press" || name == "map.drag" || name == "edit.paste") {
-            if (!isPoint(0)) {
-                return bad();
-            }
-        } else if (name == "selection.property") {
-            if (arguments.size() < 3 || arg(0).empty()) {
-                return missing();
-            }
-            const auto& type = arg(1);
-            if (type != "bool" && type != "int" && type != "real" && type != "string" && type != "unicode") {
-                return this->refuse("error:bad_argument", "selection.property: unknown type " + type);
-            }
-        } else {
-            static const std::set<std::string_view> plain{"placement.object",
-                                                          "placement.waypoint",
-                                                          "placement.pick",
-                                                          "placement.cancel",
-                                                          "note.clear",
-                                                          "map.release",
-                                                          "map.undo",
-                                                          "map.redo",
-                                                          "edit.delete",
-                                                          "edit.copy",
-                                                          "edit.duplicate",
-                                                          "edit.cancel",
-                                                          "edit.select_all",
-                                                          "selection.set",
-                                                          "waypoint.link"};
-            if (!plain.count(name)) {
-                return "error:unknown_command";
-            }
-        }
-        return "";
+        return std::visit(Overloaded{[&](const commands::PlaceObject& place) {
+                                         return checkTemplate(place.templateName);
+                                     },
+                                     [&](const commands::ChooseTemplate& choose) {
+                                         return checkTemplate(choose.templateName);
+                                     },
+                                     [this](const commands::UseRoadTool& tool) {
+                                         const auto kind =
+                                             tool.bridge ? MapEditor::RoadKind::bridge : MapEditor::RoadKind::road;
+                                         if (tool.type.empty() || this->roadKind(tool.type) == kind) {
+                                             return std::string();
+                                         }
+                                         return this->refuse("error:unknown_road",
+                                                             std::string("No ") + (tool.bridge ? "bridge " : "road ") +
+                                                                 tool.type + " in Roads.ini");
+                                     },
+                                     [](const auto&) {
+                                         return std::string();
+                                     }},
+                          edit);
     }
 
     void EditorCore::queueBeforeModelLoading(Job job) {
         // Model loading re-queues itself at the back; an edit or a save goes before it so it runs
         // in the next update and the client sees it at once.
         auto at = this->jobs.end();
-        while (at != this->jobs.begin() && std::prev(at)->kind == Job::loadMapModels) {
+        while (at != this->jobs.begin() && std::holds_alternative<LoadMapModels>(*std::prev(at))) {
             --at;
         }
         this->jobs.insert(at, std::move(job));
@@ -379,75 +266,72 @@ namespace end_editor {
     void EditorCore::update() {
         // A later request can make a queued one pointless (the user clicked on); those are
         // dropped without using up the update.
-        const auto supersededBy = [&](auto predicate) {
-            for (const auto& later: this->jobs) {
-                if (predicate(later.kind)) {
-                    return true;
-                }
-            }
-            return false;
-        };
+        using commands::OpenGame, commands::OpenModel, commands::PlayAnimation, commands::OpenMap;
         this->pollPlay();
         while (!this->jobs.empty()) {
-            const auto job = std::move(this->jobs.front());
+            auto job = std::move(this->jobs.front());
             this->jobs.pop_front();
-            switch (job.kind) {
-                case Job::openGame:
-                    this->runOpenGame(job);
-                    return;
-                case Job::openModel:
-                    if (supersededBy([](auto kind) {
-                            return kind == Job::openModel || kind == Job::openGame;
-                        })) {
-                        continue;
-                    }
-                    this->runOpenModel(job.arguments);
-                    return;
-                case Job::playAnimation:
-                    if (supersededBy([](auto kind) {
-                            return kind == Job::playAnimation || kind == Job::openModel || kind == Job::openGame;
-                        })) {
-                        continue;
-                    }
-                    this->runPlayAnimation(job.arguments.front());
-                    return;
-                case Job::openMap:
-                    if (supersededBy([](auto kind) {
-                            return kind == Job::openMap || kind == Job::openGame;
-                        })) {
-                        continue;
-                    }
-                    this->runOpenMap(job.arguments.front());
-                    return;
-                case Job::loadMapModels:
-                    if (supersededBy([](auto kind) {
-                            return kind == Job::openMap || kind == Job::openGame;
-                        })) {
-                        continue;
-                    }
-                    this->runLoadMapModels();
-                    return;
-                case Job::editMap:
-                    // Edits are quick: every one queued runs now, in order, in one transaction.
-                    this->storage->transaction([&] {
-                        this->runEditMap(job.arguments);
-                        while (!this->jobs.empty() && this->jobs.front().kind == Job::editMap) {
-                            const auto next = std::move(this->jobs.front());
-                            this->jobs.pop_front();
-                            this->runEditMap(next.arguments);
-                        }
-                        return true;
-                    });
-                    return;
-                case Job::saveMap:
-                    this->runSaveMap(job.arguments);
-                    return;
-                case Job::playMap:
-                    this->runPlayMap();
-                    return;
-                case Job::listMaps:
-                    this->relistMaps();
-                    return;
+            const bool ran = std::visit(Overloaded{[this](const OpenGame& open) {
+                                                       this->runOpenGame(open);
+                                                       return true;
+                                                   },
+                                                   [this](const OpenModel& open) {
+                                                       if (this->queued<OpenModel, OpenGame>()) {
+                                                           return false;
+                                                       }
+                                                       this->runOpenModel(open);
+                                                       return true;
+                                                   },
+                                                   [this](const PlayAnimation& play) {
+                                                       if (this->queued<PlayAnimation, OpenModel, OpenGame>()) {
+                                                           return false;
+                                                       }
+                                                       this->runPlayAnimation(play.name);
+                                                       return true;
+                                                   },
+                                                   [this](const OpenMap& open) {
+                                                       if (this->queued<OpenMap, OpenGame>()) {
+                                                           return false;
+                                                       }
+                                                       this->runOpenMap(open.path);
+                                                       return true;
+                                                   },
+                                                   [this](const LoadMapModels&) {
+                                                       if (this->queued<OpenMap, OpenGame>()) {
+                                                           return false;
+                                                       }
+                                                       this->runLoadMapModels();
+                                                       return true;
+                                                   },
+                                                   [this](const EditMap& edit) {
+                                                       // Edits are quick: every one queued runs now, in order, in one transaction.
+                                                       this->storage->transaction([&] {
+                                                           this->runEditMap(edit.edit);
+                                                           while (!this->jobs.empty() &&
+                                                                  std::holds_alternative<EditMap>(this->jobs.front())) {
+                                                               const auto next = std::move(this->jobs.front());
+                                                               this->jobs.pop_front();
+                                                               this->runEditMap(std::get<EditMap>(next).edit);
+                                                           }
+                                                           return true;
+                                                       });
+                                                       return true;
+                                                   },
+                                                   [this](const SaveMapTo& save) {
+                                                       this->runSaveMap(save);
+                                                       return true;
+                                                   },
+                                                   [this](const commands::PlayMap&) {
+                                                       this->runPlayMap();
+                                                       return true;
+                                                   },
+                                                   [this](const ListMaps&) {
+                                                       this->relistMaps();
+                                                       return true;
+                                                   }},
+                                        job);
+            if (ran) {
+                return;
             }
         }
     }
@@ -475,13 +359,16 @@ namespace end_editor {
         this->storage->replace(row);
     }
 
-    void EditorCore::runOpenGame(const Job& job) {
-        std::vector<std::filesystem::path> folders(job.arguments.begin(), job.arguments.end());
+    void EditorCore::runOpenGame(const commands::OpenGame& command) {
+        std::vector<std::filesystem::path> folders{command.folder};
+        if (command.baseFolder) {
+            folders.emplace_back(*command.baseFolder);
+        }
         this->gameFolders = folders;
         this->loader.reset();
         this->model = LoadedModel{};
         auto scan = scanGameData(folders, this->files);
-        const auto& gameDir = job.arguments.front();
+        const auto& gameDir = command.folder;
         this->storage->transaction([&] {
             this->storage->remove_all<ObjectRow>();
             this->storage->remove_all<WarningRow>();
@@ -523,7 +410,7 @@ namespace end_editor {
             this->roadTypes.clear();
             this->files.readEach("data/ini/roads.ini", [&](const std::string& text) {
                 for (auto& type: parseRoadTypes(text)) {  // the first copy wins
-                    if (this->roadKind(type.name) == 0) {
+                    if (this->roadKind(type.name) == MapEditor::RoadKind::unknown) {
                         this->roadTypes.push_back(std::move(type));
                     }
                 }
@@ -562,15 +449,9 @@ namespace end_editor {
         }
     }
 
-    void EditorCore::runOpenModel(const std::vector<std::string>& arguments) {
-        const std::string& name = arguments.front();
-        ModelLoader::Hiding hiding;
-        if (arguments.size() > 1) {
-            hiding.muzzleFlashes = arguments[1];
-        }
-        if (arguments.size() > 2) {
-            hiding.subObjects = arguments[2];
-        }
+    void EditorCore::runOpenModel(const commands::OpenModel& command) {
+        const std::string& name = command.name;
+        const ModelLoader::Hiding hiding{command.muzzleFlashes, command.hiddenSubObjects};
         this->model = this->loader->load(name, hiding);
         std::string poseError;
         const auto pose = this->model.error.empty() ? this->loader->pose(this->model, "", poseError) : ModelPose{};
@@ -636,8 +517,9 @@ namespace end_editor {
         using namespace sqlite_orm;
         // The model row's state and message, not the pose blob that is replaced anyway.
         std::optional<std::string> message;
-        for (auto&& [state, text]: this->storage->iterate(
-                 select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1)))) {
+        for (auto&& [state, text]: this->storage->select(columns(&ModelRow::state, &ModelRow::message),
+                                                         where(c(&ModelRow::id) == 1),
+                                                         limit(1))) {
             if (state == "ready") {
                 message = std::move(text);
             }
@@ -914,14 +796,10 @@ namespace end_editor {
                    (loaded == 0 || std::chrono::steady_clock::now() - start < budget)) {
                 const auto& pending = this->mapModels[this->nextMapModel++];
                 ++loaded;
-                const auto request = splitTabs(pending.request);
-                ModelLoader::Hiding hiding;
-                hiding.muzzleFlashes = request.size() > 1 ? request[1] : "";
-                hiding.subObjects = request.size() > 2 ? request[2] : "";
-                auto model = this->loader->load(request.front(), hiding, false);
+                auto model = this->loader->load(pending.model, pending.hiding, false);
                 MapModelRow row;
                 row.id = pending.id;
-                row.name = request.front();
+                row.name = pending.model;
                 if (!model.error.empty()) {
                     row.state = "error";
                     row.message = model.error;
@@ -1005,7 +883,7 @@ namespace end_editor {
         });
         this->mapModelJobQueued = this->nextMapModel < this->mapModels.size();
         if (this->mapModelJobQueued) {
-            this->jobs.push_back(Job{Job::loadMapModels, {}});
+            this->jobs.push_back(LoadMapModels{});
         }
     }
 
@@ -1032,18 +910,23 @@ namespace end_editor {
         row.flags = placed.flags;
         row.owner = placed.owner;
         row.color = int(placed.color);
-        if (!placed.modelKey.empty()) {
-            // One map_models row per distinct model request, in first-use order.
-            auto [it, added] = this->mapModelIds.emplace(placed.modelKey, std::int64_t(this->mapModelIds.size() + 1));
+        if (!placed.model.empty()) {
+            // One map_models row per distinct model and hidden parts, in first-use order.
+            auto [it, added] =
+                this->mapModelIds.emplace(ModelKey{placed.model, placed.muzzleFlashes, placed.hiddenSubObjects},
+                                          std::int64_t(this->mapModelIds.size() + 1));
             if (added) {
                 MapModelRow model;
                 model.id = it->second;
                 model.name = placed.model;
                 model.state = "pending";
                 this->storage->replace(model);
-                this->mapModels.push_back(PendingMapModel{it->second, placed.modelKey});
+                this->mapModels.push_back(
+                    PendingMapModel{it->second,
+                                    placed.model,
+                                    ModelLoader::Hiding{placed.muzzleFlashes, placed.hiddenSubObjects}});
                 if (!this->mapModelJobQueued && this->loader) {
-                    this->jobs.push_back(Job{Job::loadMapModels, {}});
+                    this->jobs.push_back(LoadMapModels{});
                     this->mapModelJobQueued = true;
                 }
             }
@@ -1051,7 +934,7 @@ namespace end_editor {
         }
         this->storage->replace(row);
         for (const auto& value: entry->object.properties) {
-            this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value.type), value.toString()});
+            this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value), value.toString()});
         }
     }
 
@@ -1076,12 +959,9 @@ namespace end_editor {
                                   where(c(&MapRow::id) == 1));
     }
 
-    void EditorCore::runEditMap(const std::vector<std::string>& arguments) {
-        if (arguments.empty()) {
-            return;
-        }
+    void EditorCore::runEditMap(const commands::Edit& edit) {
         const auto revision = this->document ? this->document->revision() : -1;
-        this->editor.run(arguments);
+        this->editor.run(edit);
         if (this->document && this->document->revision() != revision) {
             for (const auto id: this->document->lastChanged()) {
                 this->writeMapObject(id);
@@ -1199,13 +1079,13 @@ namespace end_editor {
         return "";
     }
 
-    void EditorCore::runSaveMap(const std::vector<std::string>& arguments) {
+    void EditorCore::runSaveMap(const SaveMapTo& save) {
         if (!this->document) {
             return;
         }
-        const auto& path = arguments.front();
-        const bool saveAs = arguments.size() > 1 && arguments[1] == "as";
-        const bool replace = arguments.size() > 2 && arguments[2] == "replace";
+        const auto& path = save.path;
+        const bool saveAs = save.saveAs;
+        const bool replace = save.replace;
         const std::filesystem::path target(path);
         using namespace sqlite_orm;
         std::error_code error;
@@ -1264,39 +1144,47 @@ namespace end_editor {
         this->storage->replace(this->play);
     }
 
-    std::string EditorCore::setPlaySetting(std::string_view name, const std::vector<std::string>& arguments) {
-        const auto arg = arguments.empty() ? std::string() : arguments.front();
-        double number = 0;
-        if (name == "play.app") {
-            this->play.app = arg;  // "" goes back to the default
-        } else if (name == "play.faction") {
-            if (arg.empty()) {
-                return this->refuse("error:missing_argument", "play.faction: missing argument");
-            }
-            const bool known =
-                arg == "Random" || this->factionNames.empty() ||
-                std::find(this->factionNames.begin(), this->factionNames.end(), arg) != this->factionNames.end();
-            if (!known) {
-                return this->refuse("error:unknown_faction", "No playable faction " + arg + " in PlayerTemplate.ini");
-            }
-            this->play.faction = arg;
-        } else if (name == "play.ai" || name == "play.start") {
-            if (!parseNumber(arg, number) || number < 0 || number > 7 || number != std::floor(number)) {
-                return this->refuse("error:bad_argument", std::string(name) + ": a whole number from 0 to 7");
-            }
-            (name == "play.ai" ? this->play.aiCount : this->play.startPosition) = int(number);
-        } else if (name == "play.difficulty") {
-            if (arg != "easy" && arg != "medium" && arg != "hard") {
-                return this->refuse("error:bad_argument", "play.difficulty: easy, medium or hard");
-            }
-            this->play.aiDifficulty = arg;
-        } else if (name == "play.stop") {
-            if (this->play.state == "running") {
-                stopProcess(this->play.pid);
-                this->playStopAsked = std::chrono::steady_clock::now();
-            }
-        } else {
-            return "error:unknown_command";
+    std::string EditorCore::setPlaySetting(const commands::PlaySetting& setting) {
+        auto error =
+            std::visit(Overloaded{[this](const commands::SetPlayApp& app) {
+                                      this->play.app = app.app;  // "" goes back to the default
+                                      return std::string();
+                                  },
+                                  [this](const commands::SetPlayFaction& faction) {
+                                      const auto& name = faction.faction;
+                                      const bool known =
+                                          name == "Random" || this->factionNames.empty() ||
+                                          std::find(this->factionNames.begin(), this->factionNames.end(), name) !=
+                                              this->factionNames.end();
+                                      if (!known) {
+                                          return this->refuse("error:unknown_faction",
+                                                              "No playable faction " + name + " in PlayerTemplate.ini");
+                                      }
+                                      this->play.faction = name;
+                                      return std::string();
+                                  },
+                                  [this](const commands::SetPlayAiCount& ai) {
+                                      this->play.aiCount = ai.count;
+                                      return std::string();
+                                  },
+                                  [this](const commands::SetPlayStart& start) {
+                                      this->play.startPosition = start.position;
+                                      return std::string();
+                                  },
+                                  [this](const commands::SetPlayDifficulty& difficulty) {
+                                      this->play.aiDifficulty = difficulty.difficulty;
+                                      return std::string();
+                                  },
+                                  [this](const commands::StopPlay&) {
+                                      if (this->play.state == "running") {
+                                          stopProcess(this->play.pid);
+                                          this->playStopAsked = std::chrono::steady_clock::now();
+                                      }
+                                      return std::string();
+                                  }},
+                       setting);
+        if (!error.empty()) {
+            return error;
         }
         this->storage->transaction([&] {
             this->writePlay();
@@ -1403,7 +1291,7 @@ namespace end_editor {
                 ++this->play.runs;
                 using namespace sqlite_orm;
                 std::string name = "the map";
-                for (auto&& mapName: this->storage->iterate(select(&MapRow::name, where(c(&MapRow::id) == 1)))) {
+                for (auto&& mapName: this->storage->select(&MapRow::name, where(c(&MapRow::id) == 1), limit(1))) {
                     name = std::move(mapName);
                 }
                 message = "Playing " + name + " in " + std::filesystem::path(app).filename().string();

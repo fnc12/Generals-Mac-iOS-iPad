@@ -56,7 +56,9 @@ namespace end_editor {
         float angle = 0;
         std::int32_t flags = 0;
         std::string model;  // the template's model, "" for markers
-        std::string modelKey;  // model.open style request: model \t muzzle flashes \t hidden sub-objects
+        // What its Draw module hides while idle (with the model, what the model is loaded with).
+        std::string muzzleFlashes;
+        std::string hiddenSubObjects;
         std::string owner;  // team name (originalOwner)
         std::uint32_t color = 0xFFFFFF;  // owner's player color, 0xRRGGBB
     };

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace end_editor {
@@ -99,11 +100,15 @@ namespace end_editor {
     W3dFile parseW3d(std::string_view bytes);
 
     // What the first chunk of a file says it is, read from its first bytes (see
-    // w3dHeaderPeekSize). For an animation, `hierarchy` names the skeleton it moves.
-    struct W3dFileKind {
-        enum Kind { otherFile, meshFile, hierarchyFile, animationFile, hlodFile } kind = otherFile;
-        std::string hierarchy;
+    // w3dHeaderPeekSize).
+    struct W3dOtherFile {};
+    struct W3dMeshFile {};
+    struct W3dHierarchyFile {};
+    struct W3dAnimationFile {
+        std::string hierarchy;  // the skeleton it moves
     };
+    struct W3dHlodFile {};
+    using W3dFileKind = std::variant<W3dOtherFile, W3dMeshFile, W3dHierarchyFile, W3dAnimationFile, W3dHlodFile>;
     constexpr std::uint32_t w3dHeaderPeekSize = 64;
     W3dFileKind peekW3dKind(std::string_view firstBytes);
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "commands.h"
 #include "map_document.h"
 
 #include <cstdint>
@@ -10,14 +11,12 @@
 
 namespace end_editor {
 
-    // A number of a command argument ("12.5"), independent of the C locale.
-    bool parseNumber(const std::string& text, double& value);
-
     // What the user is doing with the open map, and what their input means: the placement tool
     // (object template, waypoint, road or bridge type) with its owner and angle, a right click
     // waiting for a template, the first point of a road, the selection, a mouse gesture in
     // progress, the clipboard and the note shown to the user. The client sends input events as
-    // commands (EditorCore::send) and draws what the store says; every rule is here.
+    // commands (EditorCore::send parses them into commands::Edit values) and draws what the store
+    // says; every rule is here.
     //
     // The client does what needs its camera: the ground point under the cursor (world x, y; empty
     // when the cursor is off the map), the objects under it (ids, nearest first) and those inside
@@ -25,10 +24,7 @@ namespace end_editor {
     // decided here.
     class MapEditor {
       public:
-        struct Point {
-            float x = 0, y = 0;
-            bool operator==(const Point&) const = default;
-        };
+        using Point = commands::Point;
         struct Clip {
             MapObject object;  // template, flags, height above the ground, angle, properties
             float dx = 0, dy = 0;  // from the middle of what was copied
@@ -56,9 +52,9 @@ namespace end_editor {
             bool operator==(const State&) const = default;
         };
 
+        enum class RoadKind { unknown, road, bridge };
         struct Game {
-            std::function<bool(const std::string&)> hasTemplate;
-            std::function<int(const std::string&)> roadKind;  // 0 unknown, 1 road, 2 bridge
+            std::function<RoadKind(const std::string&)> roadKind;
             std::function<std::string(bool bridge)> firstRoad;  // the first road (bridge) type, "" none
         };
 
@@ -72,26 +68,53 @@ namespace end_editor {
         // the owner becomes one of its teams (`defaultTeam` unless the current one is among `teams`).
         void open(MapDocument* document, std::vector<std::string> teams, const std::string& defaultTeam, Point center);
 
-        // Runs one command (name and its arguments, checked by EditorCore::send). Returns false
-        // when the command did nothing (the note says why).
-        bool run(const std::vector<std::string>& command);
+        // Runs one edit (checked by EditorCore::send). Returns false when it did nothing (the note
+        // says why).
+        bool run(const commands::Edit& edit);
 
         void setNote(const std::string& text, const std::string& kind = "info");
 
       private:
-        using Ids = std::vector<std::int64_t>;
-        static std::optional<Point> point(const std::vector<std::string>& command, std::size_t at);
-        static Ids ids(const std::string& text);
+        using Ids = commands::Ids;
+        // One edit each; true when it did something.
+        bool apply(const commands::PlaceObject& edit);
+        bool apply(const commands::MoveObject& edit);
+        bool apply(const commands::RotateObject& edit);
+        bool apply(const commands::DeleteObject& edit);
+        bool apply(const commands::Undo& edit);
+        bool apply(const commands::Redo& edit);
+        bool apply(const commands::Press& edit);
+        bool apply(const commands::Drag& edit);
+        bool apply(const commands::Release& edit);
+        bool apply(const commands::RightClick& edit);
+        bool apply(const commands::DeleteSelection& edit);
+        bool apply(const commands::RotateSelection& edit);
+        bool apply(const commands::Copy& edit);
+        bool apply(const commands::Paste& edit);
+        bool apply(const commands::Duplicate& edit);
+        bool apply(const commands::Cancel& edit);
+        bool apply(const commands::SelectAll& edit);
+        bool apply(const commands::UseObjectTool& edit);
+        bool apply(const commands::ChooseTemplate& edit);
+        bool apply(const commands::UseWaypointTool& edit);
+        bool apply(const commands::UseRoadTool& edit);
+        bool apply(const commands::SetPlacementOwner& edit);
+        bool apply(const commands::SetPlacementAngle& edit);
+        bool apply(const commands::ShowPicker& edit);
+        bool apply(const commands::CancelPlacement& edit);
+        bool apply(const commands::ClearNote& edit);
+        bool apply(const commands::SetSelection& edit);
+        bool apply(const commands::SetOwner& edit);
+        bool apply(const commands::SetHeight& edit);
+        bool apply(const commands::SetAngle& edit);
+        bool apply(const commands::SetProperty& edit);
+        bool apply(const commands::UnsetProperty& edit);
+        bool apply(const commands::LinkWaypoints& edit);
+        bool undoOrRedo(bool undo);
         void select(Ids ids);
         bool selected(std::int64_t id) const;
         void prune();
         bool placeAt(Point at);
-        bool rightClick(std::optional<Point> at, const Ids& hits);
-        void press(std::optional<Point> at, const std::string& modifiers, const Ids& hits);
-        void drag(std::optional<Point> at);
-        bool release(const Ids& band);
-        bool remove();
-        bool rotate(double degrees);
         std::vector<Clip> copy(const Ids& ids, std::size_t& skipped) const;
         bool paste(const std::vector<Clip>& clips, Point at, const char* what);
         bool forSelection(const char* what, const std::function<bool(std::int64_t)>& edit);

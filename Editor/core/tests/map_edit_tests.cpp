@@ -114,12 +114,12 @@ TEST_CASE("MapDocument edits: move, turn, remove, place, undo, redo") {
     CHECK(rock.z == 0);
     CHECK(rock.angle == Approx(7.0f - 2 * 3.14159265f));
     REQUIRE(findDictValue(rock.properties, "originalOwner"));
-    CHECK(findDictValue(rock.properties, "originalOwner")->text == "teamPlyrRed");
+    CHECK(findDictValue(rock.properties, "originalOwner")->text() == "teamPlyrRed");
     REQUIRE(findDictValue(rock.properties, "uniqueID"));
-    CHECK(findDictValue(rock.properties, "uniqueID")->text == "TestRock 0");
+    CHECK(findDictValue(rock.properties, "uniqueID")->text() == "TestRock 0");
     REQUIRE(findDictValue(rock.properties, "objectInitialHealth"));
-    CHECK(findDictValue(rock.properties, "objectInitialHealth")->intValue == 100);
-    CHECK(findDictValue(rock.properties, "objectPowered")->intValue == 1);
+    CHECK(findDictValue(rock.properties, "objectInitialHealth")->data == DictValue::Data(std::int32_t(100)));
+    CHECK(findDictValue(rock.properties, "objectPowered")->data == DictValue::Data(true));
     // Everything but ObjectsList and the names it added is as it was.
     const auto original = parsed(testMap());
     CHECK(saved.chunkNames == original.chunkNames);
@@ -350,10 +350,7 @@ TEST_CASE("MapDocument groups, heights of old objects, properties and existing w
     document.begin();
     CHECK(document.move(1, 1, 1));
     CHECK(document.setHeight(1, 12));
-    DictValue name;
-    name.type = DictValue::ascii;
-    name.key = "objectName";
-    name.text = "Boulder";
+    const DictValue name{"objectName", AsciiText{"Boulder"}};
     CHECK(document.setProperty(1, name));
     document.commit();
     CHECK(document.undoCount() == 1);
@@ -363,8 +360,8 @@ TEST_CASE("MapDocument groups, heights of old objects, properties and existing w
     CHECK(saved.objectChunks[0].version == 3);  // written again: version 2 has no height the engine reads
     CHECK(saved.objects[0].z == 12);
     CHECK(saved.objects[0].x == 1);
-    CHECK(findDictValue(saved.objects[0].properties, "objectName")->text == "Boulder");
-    CHECK(findDictValue(saved.objects[0].properties, "originalOwner")->text == "team");
+    CHECK(findDictValue(saved.objects[0].properties, "objectName")->text() == "Boulder");
+    CHECK(findDictValue(saved.objects[0].properties, "originalOwner")->text() == "team");
     CHECK(document.undo());
     CHECK(document.save() == bytes);
 

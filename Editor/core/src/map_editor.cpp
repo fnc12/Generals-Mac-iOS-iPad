@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <locale>
-#include <sstream>
 
 namespace end_editor {
 
@@ -12,51 +10,9 @@ namespace end_editor {
         // How far "Duplicate" puts the copy from the original (world units, two cells).
         constexpr float duplicateOffset = 20;
 
-        std::vector<std::string> split(const std::string& text, char separator) {
-            std::vector<std::string> parts;
-            std::size_t start = 0;
-            while (start <= text.size()) {
-                auto end = text.find(separator, start);
-                if (end == std::string::npos) {
-                    end = text.size();
-                }
-                if (end > start) {
-                    parts.push_back(text.substr(start, end - start));
-                }
-                start = end + 1;
-            }
-            return parts;
-        }
-
         std::string count(std::size_t n, const char* what) {
             return std::to_string(n) + " " + what + (n == 1 ? "" : "s");
         }
-    }
-
-    bool parseNumber(const std::string& text, double& value) {
-        std::istringstream stream(text);
-        stream.imbue(std::locale::classic());
-        stream >> value;
-        return !text.empty() && stream && stream.peek() == std::char_traits<char>::eof() && std::isfinite(value);
-    }
-
-    std::optional<MapEditor::Point> MapEditor::point(const std::vector<std::string>& command, std::size_t at) {
-        double x = 0, y = 0;
-        if (at + 1 < command.size() && parseNumber(command[at], x) && parseNumber(command[at + 1], y)) {
-            return Point{float(x), float(y)};
-        }
-        return std::nullopt;
-    }
-
-    MapEditor::Ids MapEditor::ids(const std::string& text) {
-        Ids result;
-        for (const auto& part: split(text, ',')) {
-            double value = 0;
-            if (parseNumber(part, value) && value > 0) {
-                result.push_back(std::int64_t(value));
-            }
-        }
-        return result;
     }
 
     void MapEditor::setNote(const std::string& text, const std::string& kind) {
@@ -133,7 +89,9 @@ namespace end_editor {
         return true;
     }
 
-    bool MapEditor::rightClick(std::optional<Point> at, const Ids& hits) {
+    bool MapEditor::apply(const commands::RightClick& edit) {
+        const auto& at = edit.at;
+        const auto& hits = edit.hits;
         auto& state = this->current;
         if (!at) {
             this->setNote("Right-click on the map's ground to place", "error");
@@ -205,23 +163,20 @@ namespace end_editor {
         return true;
     }
 
-    void MapEditor::press(std::optional<Point> at, const std::string& modifiers, const Ids& hits) {
-        const auto keys = split(modifiers, ',');
-        const auto has = [&](const char* key) {
-            return std::find(keys.begin(), keys.end(), key) != keys.end();
-        };
-        this->pressAt = at;
+    bool MapEditor::apply(const commands::Press& edit) {
+        const auto& keys = edit.modifiers;
+        this->pressAt = edit.at;
         this->pressHits.clear();
-        for (const auto id: hits) {
+        for (const auto id: edit.hits) {
             if (this->document->find(id)) {
                 this->pressHits.push_back(id);
             }
         }
         auto& state = this->current;
         state.drag = {};
-        if ((has("alt") || has("cmd")) && !has("shift")) {
+        if ((keys.alt || keys.cmd) && !keys.shift) {
             state.gesture = "press_orbit";  // turns the camera
-        } else if (has("shift")) {
+        } else if (keys.shift) {
             state.gesture = "press_band";  // a click adds or removes, a drag selects a rectangle
         } else if (std::any_of(this->pressHits.begin(), this->pressHits.end(), [&](auto id) {
                        return this->selected(id);
@@ -230,9 +185,11 @@ namespace end_editor {
         } else {
             state.gesture = "press_pan";  // a click selects, a drag pans
         }
+        return true;
     }
 
-    void MapEditor::drag(std::optional<Point> at) {
+    bool MapEditor::apply(const commands::Drag& edit) {
+        const auto& at = edit.at;
         auto& state = this->current;
         if (state.gesture == "press_orbit") {
             state.gesture = "orbit";
@@ -246,9 +203,11 @@ namespace end_editor {
         if (state.gesture == "move" && at && this->pressAt) {
             state.drag = {at->x - this->pressAt->x, at->y - this->pressAt->y};
         }
+        return true;
     }
 
-    bool MapEditor::release(const Ids& band) {
+    bool MapEditor::apply(const commands::Release& edit) {
+        const auto& band = edit.band;
         auto& state = this->current;
         const auto gesture = state.gesture;
         const auto drag = state.drag;
@@ -290,7 +249,7 @@ namespace end_editor {
         return false;
     }
 
-    bool MapEditor::remove() {
+    bool MapEditor::apply(const commands::DeleteSelection&) {
         auto& state = this->current;
         if (state.roadStart) {
             state.roadStart.reset();
@@ -309,14 +268,14 @@ namespace end_editor {
         return true;
     }
 
-    bool MapEditor::rotate(double degrees) {
+    bool MapEditor::apply(const commands::RotateSelection& edit) {
         const auto& selection = this->current.selection;
         if (selection.empty()) {
             this->setNote("Nothing selected to turn");
             return false;
         }
         // Several objects turn together about their middle, each by the same angle.
-        const auto turn = float(degrees * pi / 180);
+        const auto turn = float(edit.degrees * pi / 180);
         const auto c = std::cos(turn), s = std::sin(turn);
         const auto pivot = this->middle(selection);
         this->document->begin();
@@ -400,223 +359,259 @@ namespace end_editor {
         return any;
     }
 
-    bool MapEditor::run(const std::vector<std::string>& command) {
-        if (command.empty()) {
+    bool MapEditor::apply(const commands::PlaceObject& edit) {
+        // What scripts and checks use: the angle in radians, any team.
+        this->select({this->document->place(edit.templateName, edit.x, edit.y, edit.angle, edit.team)});
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::MoveObject& edit) {
+        if (!this->document->move(edit.id, edit.x, edit.y)) {
+            this->setNote("No such object", "error");
             return false;
         }
-        const auto& name = command.front();
-        static const std::string none;
-        const auto arg = [&](std::size_t i) -> const std::string& {
-            return i < command.size() ? command[i] : none;
-        };
-        const auto number = [&](std::size_t i) {
-            double value = 0;
-            parseNumber(arg(i), value);
-            return value;
-        };
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::RotateObject& edit) {
+        if (!this->document->rotate(edit.id, edit.angle)) {
+            this->setNote("No such object", "error");
+            return false;
+        }
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::DeleteObject& edit) {
+        if (!this->document->remove(edit.id)) {
+            this->setNote("No such object", "error");
+            return false;
+        }
+        return true;
+    }
+
+    bool MapEditor::undoOrRedo(bool undo) {
+        if (!(undo ? this->document->undo() : this->document->redo())) {
+            this->setNote(undo ? "Nothing to undo" : "Nothing to redo");
+            return false;
+        }
+        // What the step changed becomes the selection (nothing after undoing a placement).
+        Ids changed;
+        for (const auto id: this->document->lastChanged()) {
+            if (this->document->find(id)) {
+                changed.push_back(id);
+            }
+        }
+        this->select(changed.empty() ? this->current.selection : changed);
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::Undo&) {
+        return this->undoOrRedo(true);
+    }
+
+    bool MapEditor::apply(const commands::Redo&) {
+        return this->undoOrRedo(false);
+    }
+
+    bool MapEditor::apply(const commands::Copy&) {
+        std::size_t skipped = 0;
+        auto clips = this->copy(this->current.selection, skipped);
+        if (clips.empty()) {
+            this->setNote(skipped > 0 ? "Waypoints are not copied" : "Nothing selected to copy", "error");
+            return false;
+        }
+        this->clipboard = std::move(clips);
+        this->setNote("Copied " + count(this->clipboard.size(), "object") +
+                      (skipped > 0 ? " (waypoints are not copied)" : ""));
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::Paste& edit) {
+        return this->paste(this->clipboard, edit.at.value_or(this->center), "Pasted");
+    }
+
+    bool MapEditor::apply(const commands::Duplicate&) {
+        std::size_t skipped = 0;
+        const auto clips = this->copy(this->current.selection, skipped);
+        if (clips.empty()) {
+            this->setNote(skipped > 0 ? "Waypoints are not duplicated" : "Nothing selected to duplicate", "error");
+            return false;
+        }
+        const auto at = this->middle(this->current.selection);
+        return this->paste(clips, Point{at.x + duplicateOffset, at.y - duplicateOffset}, "Duplicated");
+    }
+
+    bool MapEditor::apply(const commands::Cancel&) {
+        auto& state = this->current;
+        if (state.gesture == "move") {
+            state.gesture.clear();
+            state.drag = {};
+        }
+        state.picker = false;
+        state.pending.reset();
+        state.roadStart.reset();
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::SelectAll&) {
+        Ids all;
+        for (const auto& entry: this->document->objects()) {
+            if (entry.id != 0 && !entry.removed) {
+                all.push_back(entry.id);
+            }
+        }
+        this->select(std::move(all));
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::UseObjectTool&) {
+        auto& state = this->current;
+        state.tool = "object";
+        state.picker = false;
+        state.pending.reset();
+        state.roadStart.reset();
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::ChooseTemplate& edit) {
+        auto& state = this->current;
+        state.tool = "object";
+        state.templateName = edit.templateName;
+        state.picker = false;
+        state.roadStart.reset();
+        if (state.pending && this->document) {
+            const auto at = *state.pending;
+            state.pending.reset();
+            this->placeAt(at);
+        }
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::UseWaypointTool&) {
+        auto& state = this->current;
+        state.tool = "waypoint";
+        state.picker = false;
+        state.pending.reset();
+        state.roadStart.reset();
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::UseRoadTool& edit) {
+        auto& state = this->current;
+        state.tool = edit.bridge ? "bridge" : "road";
+        // Without a type: the one chosen before if it fits, else the first of Roads.ini.
+        if (!edit.type.empty()) {
+            state.roadType = edit.type;
+        } else if (this->game.roadKind(state.roadType) != (edit.bridge ? RoadKind::bridge : RoadKind::road)) {
+            state.roadType = this->game.firstRoad(edit.bridge);
+        }
+        state.picker = false;
+        state.pending.reset();
+        state.roadStart.reset();
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::SetPlacementOwner& edit) {
+        if (this->document && std::find(this->teams.begin(), this->teams.end(), edit.team) == this->teams.end()) {
+            this->setNote("This map has no team " + edit.team, "error");
+            return false;
+        }
+        this->current.team = edit.team;
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::SetPlacementAngle& edit) {
+        this->current.angle = edit.degrees;
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::ShowPicker&) {
+        this->current.picker = true;
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::CancelPlacement&) {
+        auto& state = this->current;
+        state.picker = false;
+        state.pending.reset();
+        state.roadStart.reset();
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::ClearNote&) {
+        this->setNote("");
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::SetSelection& edit) {
+        this->select(edit.ids);
+        return true;
+    }
+
+    bool MapEditor::apply(const commands::SetOwner& edit) {
+        if (std::find(this->teams.begin(), this->teams.end(), edit.team) == this->teams.end()) {
+            this->setNote("This map has no team " + edit.team, "error");
+            return false;
+        }
+        const DictValue owner{"originalOwner", AsciiText{edit.team}};
+        return this->forSelection("give an owner", [&](std::int64_t id) {
+            return this->document->setProperty(id, owner);
+        });
+    }
+
+    bool MapEditor::apply(const commands::SetHeight& edit) {
+        const bool done = this->forSelection("raise", [&](std::int64_t id) {
+            return this->document->setHeight(id, edit.z);
+        });
+        if (!done && !this->current.selection.empty()) {
+            this->setNote("The game drops objects that far from the ground", "error");
+        }
+        return done;
+    }
+
+    bool MapEditor::apply(const commands::SetAngle& edit) {
+        const auto angle = float(edit.degrees * pi / 180);
+        return this->forSelection("turn", [&](std::int64_t id) {
+            return this->document->rotate(id, angle);
+        });
+    }
+
+    bool MapEditor::apply(const commands::SetProperty& edit) {
+        return this->forSelection("change", [&](std::int64_t id) {
+            return this->document->setProperty(id, edit.value);
+        });
+    }
+
+    bool MapEditor::apply(const commands::UnsetProperty& edit) {
+        return this->forSelection("change", [&](std::int64_t id) {
+            return this->document->removeProperty(id, edit.key);
+        });
+    }
+
+    bool MapEditor::apply(const commands::LinkWaypoints&) {
+        const auto& selection = this->current.selection;
+        if (selection.size() != 2 || this->document->waypointId(selection[0]) == 0 ||
+            this->document->waypointId(selection[1]) == 0) {
+            this->setNote("Select two waypoints to link", "error");
+            return false;
+        }
+        return this->document->toggleLink(selection[0], selection[1]);
+    }
+
+    bool MapEditor::run(const commands::Edit& edit) {
         auto& state = this->current;
         this->noteSet = false;
         const auto revision = this->document ? this->document->revision() : 0;
-        bool done = true;
-
-        if (name == "placement.template") {
-            state.tool = "object";
-            state.templateName = arg(1);
-            state.picker = false;
-            state.roadStart.reset();
-            if (state.pending && this->document) {
-                const auto at = *state.pending;
-                state.pending.reset();
-                this->placeAt(at);
-            }
-        } else if (name == "placement.object" || name == "placement.waypoint" || name == "placement.road" ||
-                   name == "placement.bridge") {
-            state.tool = name.substr(10);
-            if (state.tool == "road" || state.tool == "bridge") {
-                // Without a type: the one chosen before if it fits, else the first of Roads.ini.
-                const bool bridge = state.tool == "bridge";
-                if (!arg(1).empty()) {
-                    state.roadType = arg(1);
-                } else if (this->game.roadKind(state.roadType) != (bridge ? 2 : 1)) {
-                    state.roadType = this->game.firstRoad(bridge);
-                }
-            }
-            state.picker = false;
-            state.pending.reset();
-            state.roadStart.reset();
-        } else if (name == "placement.owner") {
-            if (this->document && std::find(this->teams.begin(), this->teams.end(), arg(1)) == this->teams.end()) {
-                this->setNote("This map has no team " + arg(1), "error");
-                done = false;
-            } else {
-                state.team = arg(1);
-            }
-        } else if (name == "placement.angle") {
-            state.angle = number(1);
-        } else if (name == "placement.pick") {
-            state.picker = true;
-        } else if (name == "placement.cancel") {
-            state.picker = false;
-            state.pending.reset();
-            state.roadStart.reset();
-        } else if (name == "note.clear") {
-            this->setNote("");
-        } else if (!this->document) {
+        bool done = false;
+        if (!this->document && commands::needsMap(edit)) {
             this->setNote("No map is open", "error");
-            done = false;
-        } else if (name == "map.click_right") {
-            done = this->rightClick(point(command, 1), ids(arg(3)));
-        } else if (name == "map.press") {
-            this->press(point(command, 1), arg(3), ids(arg(4)));
-        } else if (name == "map.drag") {
-            this->drag(point(command, 1));
-        } else if (name == "map.release") {
-            done = this->release(ids(arg(1)));
-        } else if (name == "edit.delete") {
-            done = this->remove();
-        } else if (name == "edit.rotate") {
-            done = this->rotate(number(1));
-        } else if (name == "edit.copy") {
-            std::size_t skipped = 0;
-            auto clips = this->copy(state.selection, skipped);
-            if (clips.empty()) {
-                this->setNote(skipped > 0 ? "Waypoints are not copied" : "Nothing selected to copy", "error");
-                done = false;
-            } else {
-                this->clipboard = std::move(clips);
-                this->setNote("Copied " + count(this->clipboard.size(), "object") +
-                              (skipped > 0 ? " (waypoints are not copied)" : ""));
-            }
-        } else if (name == "edit.paste") {
-            done = this->paste(this->clipboard, point(command, 1).value_or(this->center), "Pasted");
-        } else if (name == "edit.duplicate") {
-            std::size_t skipped = 0;
-            const auto clips = this->copy(state.selection, skipped);
-            if (clips.empty()) {
-                this->setNote(skipped > 0 ? "Waypoints are not duplicated" : "Nothing selected to duplicate", "error");
-                done = false;
-            } else {
-                const auto at = this->middle(state.selection);
-                done = this->paste(clips, Point{at.x + duplicateOffset, at.y - duplicateOffset}, "Duplicated");
-            }
-        } else if (name == "edit.cancel") {
-            if (state.gesture == "move") {
-                state.gesture.clear();
-                state.drag = {};
-            }
-            state.picker = false;
-            state.pending.reset();
-            state.roadStart.reset();
-        } else if (name == "edit.select_all") {
-            Ids all;
-            for (const auto& entry: this->document->objects()) {
-                if (entry.id != 0 && !entry.removed) {
-                    all.push_back(entry.id);
-                }
-            }
-            this->select(all);
-        } else if (name == "selection.set") {
-            this->select(ids(arg(1)));
-        } else if (name == "selection.owner") {
-            if (std::find(this->teams.begin(), this->teams.end(), arg(1)) == this->teams.end()) {
-                this->setNote("This map has no team " + arg(1), "error");
-                done = false;
-            } else {
-                DictValue owner;
-                owner.type = DictValue::ascii;
-                owner.key = "originalOwner";
-                owner.text = arg(1);
-                done = this->forSelection("give an owner", [&](std::int64_t id) {
-                    return this->document->setProperty(id, owner);
-                });
-            }
-        } else if (name == "selection.height") {
-            const auto z = float(number(1));
-            done = this->forSelection("raise", [&](std::int64_t id) {
-                return this->document->setHeight(id, z);
-            });
-            if (!done && !state.selection.empty()) {
-                this->setNote("The game drops objects that far from the ground", "error");
-            }
-        } else if (name == "selection.angle") {
-            const auto angle = float(number(1) * pi / 180);
-            done = this->forSelection("turn", [&](std::int64_t id) {
-                return this->document->rotate(id, angle);
-            });
-        } else if (name == "selection.property") {
-            DictValue value;
-            value.key = arg(1);
-            const auto &type = arg(2), &text = arg(3);
-            double parsed = 0;
-            bool valid = true;
-            if (type == "bool") {
-                value.type = DictValue::boolean;
-                valid = text == "true" || text == "false" || text == "1" || text == "0";
-                value.intValue = text == "true" || text == "1" ? 1 : 0;
-            } else if (type == "int") {
-                value.type = DictValue::integer;
-                valid = parseNumber(text, parsed) && parsed == std::floor(parsed) && std::abs(parsed) < 2147483648.0;
-                value.intValue = valid ? std::int32_t(parsed) : 0;
-            } else if (type == "real") {
-                value.type = DictValue::real;
-                valid = parseNumber(text, parsed);
-                value.realValue = float(parsed);
-            } else {
-                value.type = type == "unicode" ? DictValue::unicode : DictValue::ascii;
-                value.text = text;
-            }
-            if (!valid) {
-                this->setNote(value.key + ": \"" + text + "\" is not a " + (type == "bool" ? "yes/no value" : "number"),
-                              "error");
-                done = false;
-            } else {
-                done = this->forSelection("change", [&](std::int64_t id) {
-                    return this->document->setProperty(id, value);
-                });
-            }
-        } else if (name == "selection.unset") {
-            done = this->forSelection("change", [&](std::int64_t id) {
-                return this->document->removeProperty(id, arg(1));
-            });
-        } else if (name == "waypoint.link") {
-            const auto& selection = state.selection;
-            if (selection.size() != 2 || this->document->waypointId(selection[0]) == 0 ||
-                this->document->waypointId(selection[1]) == 0) {
-                this->setNote("Select two waypoints to link", "error");
-                done = false;
-            } else {
-                done = this->document->toggleLink(selection[0], selection[1]);
-            }
-        } else if (name == "map.place") {
-            // place <template> <x> <y> <angle radians> <team>: what scripts and checks use.
-            const auto id = this->document->place(arg(1), float(number(2)), float(number(3)), float(number(4)), arg(5));
-            this->select({id});
-        } else if (name == "map.move" || name == "map.rotate" || name == "map.delete") {
-            const auto id = std::int64_t(number(1));
-            done = name == "map.move"     ? this->document->move(id, float(number(2)), float(number(3)))
-                   : name == "map.rotate" ? this->document->rotate(id, float(number(2)))
-                                          : this->document->remove(id);
-            if (!done) {
-                this->setNote("No such object", "error");
-            }
-        } else if (name == "map.undo" || name == "map.redo") {
-            done = name == "map.undo" ? this->document->undo() : this->document->redo();
-            if (!done) {
-                this->setNote(name == "map.undo" ? "Nothing to undo" : "Nothing to redo");
-            } else {
-                // What the step changed becomes the selection (nothing after undoing a placement).
-                Ids changed;
-                for (const auto id: this->document->lastChanged()) {
-                    if (this->document->find(id)) {
-                        changed.push_back(id);
-                    }
-                }
-                this->select(changed.empty() ? state.selection : changed);
-            }
         } else {
-            done = false;
+            done = std::visit(
+                [this](const auto& command) {
+                    return this->apply(command);
+                },
+                edit);
         }
-
         if (this->document && this->document->revision() != revision) {
             this->prune();
             if (!this->noteSet && !state.note.empty()) {

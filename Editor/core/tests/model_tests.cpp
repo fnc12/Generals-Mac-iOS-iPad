@@ -209,8 +209,8 @@ TEST_CASE("Animation channels") {
     SECTION("the first bytes of a file tell an animation and its skeleton") {
         const auto bytes = container(0x200, {animationHeader("A", "TANK_SKL", 1, false)});
         const auto kind = peekW3dKind(std::string_view(bytes).substr(0, w3dHeaderPeekSize));
-        CHECK(kind.kind == W3dFileKind::animationFile);
-        CHECK(kind.hierarchy == "TANK_SKL");
+        REQUIRE(std::holds_alternative<W3dAnimationFile>(kind));
+        CHECK(std::get<W3dAnimationFile>(kind).hierarchy == "TANK_SKL");
     }
 }
 

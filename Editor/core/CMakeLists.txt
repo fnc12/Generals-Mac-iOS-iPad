@@ -57,6 +57,7 @@ add_library(end_editor_core STATIC
     src/terrain_ini.cpp
     src/map_scene.cpp
     src/map_document.cpp
+    src/commands.cpp
     src/map_editor.cpp
     src/map_preview.cpp
     src/game_launch.cpp
@@ -102,7 +103,7 @@ if(END_EDITOR_BUILD_TESTS)
     FetchContent_MakeAvailable(Catch2)
     add_executable(end_editor_tests tests/big_archive_tests.cpp tests/ini_objects_tests.cpp tests/editor_core_tests.cpp
         tests/model_tests.cpp tests/map_tests.cpp tests/map_edit_tests.cpp
-        tests/map_flow_tests.cpp)
+        tests/map_flow_tests.cpp tests/command_tests.cpp)
     target_include_directories(end_editor_tests PRIVATE src)
     target_include_directories(end_editor_tests BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
     target_link_libraries(end_editor_tests PRIVATE end_editor_core Catch2::Catch2WithMain)

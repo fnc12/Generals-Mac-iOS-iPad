@@ -411,16 +411,16 @@ namespace end_editor {
             for (const auto& dict: map.teams) {
                 const auto* name = findDictValue(dict, "teamName");
                 const auto* teamOwner = findDictValue(dict, "teamOwner");
-                if (name && teamOwner && name->text == team) {
-                    owner = teamOwner->text;
+                if (name && teamOwner && name->text() == team) {
+                    owner = teamOwner->text();
                     break;
                 }
             }
             for (const auto& side: map.sides) {
                 const auto* name = findDictValue(side.player, "playerName");
                 const auto* color = findDictValue(side.player, "playerColor");
-                if (name && color && name->text == owner && color->type == DictValue::integer) {
-                    return std::uint32_t(color->intValue) & 0xFFFFFF;
+                if (name && color && name->text() == owner && color->integer()) {
+                    return std::uint32_t(*color->integer()) & 0xFFFFFF;
                 }
             }
             return 0xFFFFFF;
@@ -534,7 +534,7 @@ namespace end_editor {
         placed.angle = object.angle;
         placed.flags = object.flags;
         if (const auto* owner = findDictValue(object.properties, "originalOwner")) {
-            placed.owner = owner->text;
+            placed.owner = owner->text();
         }
         placed.color = ownerColor(map, placed.owner);
         const auto* info = findObject ? findObject(object.templateName) : nullptr;
@@ -547,7 +547,8 @@ namespace end_editor {
         } else if (info && !info->model.empty()) {
             placed.kind = "model";
             placed.model = info->model;
-            placed.modelKey = info->model + "\t" + info->muzzleFlashes + "\t" + info->hiddenSubObjects;
+            placed.muzzleFlashes = info->muzzleFlashes;
+            placed.hiddenSubObjects = info->hiddenSubObjects;
         } else {
             placed.kind = "marker";
         }
