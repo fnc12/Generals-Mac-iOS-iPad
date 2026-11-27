@@ -334,9 +334,12 @@ namespace end_editor {
         std::int64_t revision = 0;
     };
 
-    inline auto makeStorage(const std::string& path) {
+    // The core's connection writes; a reader (the cli, a client) opens the same store with
+    // {.open_forever = true, .open_mode = sqlite_orm::db_open_mode::readonly}.
+    inline auto makeStorage(const std::string& path, sqlite_orm::connection_control connection = {}) {
         using namespace sqlite_orm;
         return make_storage(path,
+                            std::move(connection),
                             make_index("objects_name", &ObjectRow::name),
                             make_index("map_object_properties_object", &MapPropertyRow::objectId),
                             make_index("map_model_parts_model", &MapModelPartRow::modelId),

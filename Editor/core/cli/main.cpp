@@ -219,8 +219,7 @@ int main(int argc, char** argv) {
     const std::string dbPath = end_editor_db_path();
     // Read the store like a client would, with its own connection.
     try {
-        db.emplace(makeStorage(dbPath));
-        db->open_forever();
+        db.emplace(makeStorage(dbPath, {.open_forever = true, .open_mode = sqlite_orm::db_open_mode::readonly}));
     } catch (const std::system_error& error) {
         std::fprintf(stderr, "cannot read %s: %s\n", dbPath.c_str(), error.what());
         return 1;
@@ -645,16 +644,13 @@ int main(int argc, char** argv) {
         const auto at = [](double v) {
             return std::to_string(v);
         };
-        // A ground vehicle both games have, else the first one there is. Two selects: an ORDER BY
-        // with a bound value inside multi_order_by() binds it in the LIMIT's place (sqlite_orm 1.9.1).
-        const auto isGroundVehicle = c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%") and
-                                     not like(&ObjectRow::kindOf, "%AIRCRAFT%");
-        auto vehicle = first(select(&ObjectRow::name,
-                                    where(isGroundVehicle and c(&ObjectRow::name) == "AmericaTankCrusader"),
-                                    limit(1)));
-        if (!vehicle) {
-            vehicle = first(select(&ObjectRow::name, where(isGroundVehicle), order_by(&ObjectRow::name), limit(1)));
-        }
+        // A ground vehicle both games have, else the first one there is.
+        const auto vehicle = first(
+            select(&ObjectRow::name,
+                   where(c(&ObjectRow::model) != "" and like(&ObjectRow::kindOf, "%VEHICLE%") and
+                         not like(&ObjectRow::kindOf, "%AIRCRAFT%")),
+                   multi_order_by(order_by(c(&ObjectRow::name) != "AmericaTankCrusader"), order_by(&ObjectRow::name)),
+                   limit(1)));
         const auto paths = mapPaths(onlyMaps, where(c(&MapListRow::source) != "User maps"));
         int index = 0;
         for (const auto& path: paths) {
