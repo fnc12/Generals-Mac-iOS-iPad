@@ -1,5 +1,7 @@
 #include "game_data.h"
 
+#include <iterator>
+
 namespace end_editor {
 
     bool isObjectIniPath(const std::string &path) {
@@ -12,23 +14,27 @@ namespace end_editor {
     GameDataScan scanObjects(const GameFiles &files) {
         GameDataScan scan;
         scan.archiveCount = files.archiveCount();
-        const auto paths = files.list(isObjectIniPath);
-        if(paths.empty()) {
-            scan.error = "no object INI files (Data/INI/Object) in the game folder";
-            return scan;
-        }
-        for(const auto &path: paths) {
-            std::string text;
+        bool found = false;
+        std::string text;  // one buffer for every file
+        files.forEachPath([&](const std::string &path) {
+            if(!isObjectIniPath(path)) {
+                return;
+            }
+            found = true;
             if(!files.read(path, text)) {
                 scan.warnings.push_back(path + ": cannot read");
-                continue;
+                return;
             }
             ++scan.iniFileCount;
             auto parsed = parseObjects(text, path);
-            scan.warnings.insert(scan.warnings.end(), parsed.warnings.begin(), parsed.warnings.end());
-            for(auto &object: parsed.objects) {
-                scan.objects.push_back(std::move(object));
-            }
+            scan.warnings.insert(scan.warnings.end(), std::make_move_iterator(parsed.warnings.begin()),
+                                 std::make_move_iterator(parsed.warnings.end()));
+            scan.objects.insert(scan.objects.end(), std::make_move_iterator(parsed.objects.begin()),
+                                std::make_move_iterator(parsed.objects.end()));
+        });
+        if(!found) {
+            scan.error = "no object INI files (Data/INI/Object) in the game folder";
+            return scan;
         }
         resolveInheritance(scan.objects);
         return scan;
@@ -44,7 +50,8 @@ namespace end_editor {
             return scan;
         }
         auto scan = scanObjects(files);
-        scan.warnings.insert(scan.warnings.begin(), warnings.begin(), warnings.end());
+        scan.warnings.insert(scan.warnings.begin(), std::make_move_iterator(warnings.begin()),
+                             std::make_move_iterator(warnings.end()));
         return scan;
     }
 

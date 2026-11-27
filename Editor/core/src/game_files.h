@@ -3,9 +3,10 @@
 #include "big_archive.h"
 
 #include <filesystem>
-#include <functional>
+#include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace end_editor {
@@ -31,9 +32,26 @@ namespace end_editor {
             return this->sources.count(path) != 0;
         }
         bool read(const std::string &path, std::string &out) const;
-        // Every copy of a path, the winning one first (for files the game merges, like a mod's
-        // Terrain.ini over the base game's).
-        std::vector<std::string> readAll(const std::string &path) const;
+        // Calls `visit` with the bytes of every copy of a path, the winning one first (for files
+        // the game merges, like a mod's Terrain.ini over the base game's); one buffer is reused.
+        // Returns the number of copies read.
+        template<class F>
+        std::size_t readEach(const std::string &path, F &&visit) const {
+            std::size_t copies = 0;
+            std::string bytes;
+            if(this->read(path, bytes)) {
+                ++copies;
+                visit(std::as_const(bytes));
+            }
+            const auto range = this->shadowed.equal_range(path);
+            for(auto it = range.first; it != range.second; ++it) {
+                if(this->readSource(it->second, UINT32_MAX, bytes)) {
+                    ++copies;
+                    visit(std::as_const(bytes));
+                }
+            }
+            return copies;
+        }
         bool readPrefix(const std::string &path, std::uint32_t maxBytes, std::string &out) const;
 
         // The path with its original case and '/' separators ("Maps/Alpine Assault/Alpine Assault.map").
@@ -41,8 +59,13 @@ namespace end_editor {
         // Where the winning copy is: the archive's file name, or the loose file's full path.
         std::string sourceOf(const std::string &path) const;
 
-        // All known paths for which `keep` returns true, in path order.
-        std::vector<std::string> list(const std::function<bool(const std::string &)> &keep) const;
+        // Calls `visit` with every known path, in path order.
+        template<class F>
+        void forEachPath(F &&visit) const {
+            for(const auto &item: this->sources) {
+                visit(item.first);
+            }
+        }
 
       private:
         struct Source {

@@ -128,16 +128,16 @@ namespace end_editor {
         this->animationsIndexed = true;
         // Stand-alone animation files start with the animation chunk; reading their first
         // bytes is enough to learn which skeleton they move.
-        for(const auto &path: this->files.list(isW3dPath)) {
-            std::string head;
-            if(!this->files.readPrefix(path, w3dHeaderPeekSize, head)) {
-                continue;
+        std::string head;  // one buffer for every file
+        this->files.forEachPath([&](const std::string &path) {
+            if(!isW3dPath(path) || !this->files.readPrefix(path, w3dHeaderPeekSize, head)) {
+                return;
             }
             const auto kind = peekW3dKind(head);
             if(kind.kind == W3dFileKind::animationFile && !kind.hierarchy.empty()) {
                 this->animationFilesByHierarchy.emplace(lower(kind.hierarchy), path);
             }
-        }
+        });
     }
 
     std::string ModelLoader::findTexture(const std::string &textureName) const {

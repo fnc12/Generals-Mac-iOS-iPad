@@ -473,19 +473,19 @@ namespace end_editor {
             }
             this->listMaps();
             this->roadTypes.clear();
-            for(const auto &text: this->files.readAll("data/ini/roads.ini")) {
+            this->files.readEach("data/ini/roads.ini", [&](const std::string &text) {
                 for(auto &type: parseRoadTypes(text)) {  // the first copy wins
                     if(this->roadKind(type.name) == 0) {
                         this->roadTypes.push_back(std::move(type));
                     }
                 }
-            }
+            });
             for(const auto &type: this->roadTypes) {
                 this->storage->insert(RoadTypeRow{0, type.name, type.bridge});
             }
             this->storage->remove_all<FactionRow>();
             this->factionNames.clear();
-            for(const auto &text: this->files.readAll("data/ini/playertemplate.ini")) {
+            this->files.readEach("data/ini/playertemplate.ini", [&](const std::string &text) {
                 for(auto &faction: parsePlayableFactions(text)) {  // the first copy wins
                     if(std::find(this->factionNames.begin(), this->factionNames.end(), faction.name) ==
                        this->factionNames.end()) {
@@ -493,7 +493,7 @@ namespace end_editor {
                         this->storage->insert(FactionRow{0, faction.name, faction.side});
                     }
                 }
-            }
+            });
             this->writePlay();  // the default app follows the game
             this->setStatus("ready",
                             std::to_string(scan.objects.size()) + " objects from " +
@@ -645,22 +645,24 @@ namespace end_editor {
     }
 
     void EditorCore::listMaps() {
-        const auto paths = this->files.list([](const std::string &path) {
-            return path.rfind("maps/", 0) == 0 && path.size() > 4 && path.compare(path.size() - 4, 4, ".map") == 0;
-        });
-        for(const auto &path: paths) {
-            MapListRow row;
+        MapListRow row;  // one row for every map: its strings keep their buffers
+        this->files.forEachPath([&](const std::string &path) {
+            if(path.rfind("maps/", 0) != 0 || path.size() <= 4 || path.compare(path.size() - 4, 4, ".map") != 0) {
+                return;
+            }
             row.path = path;
             const auto original = this->files.originalPath(path);
             // "Maps/Alpine Assault/Alpine Assault.map" -> "Alpine Assault"
             const auto slash = original.rfind('/');
             const auto folderStart = original.rfind('/', slash == std::string::npos || slash == 0 ? 0 : slash - 1);
-            row.name = slash == std::string::npos || folderStart == std::string::npos || folderStart >= slash
-                           ? original
-                           : original.substr(folderStart + 1, slash - folderStart - 1);
+            if(slash == std::string::npos || folderStart == std::string::npos || folderStart >= slash) {
+                row.name = original;
+            } else {
+                row.name.assign(original, folderStart + 1, slash - folderStart - 1);
+            }
             row.source = this->files.sourceOf(path);
             this->storage->insert(row);
-        }
+        });
         // The game's user maps: Maps/<name>/<name>.map (MapCache::loadMapsFromDisk), opened by
         // their path on disk.
         std::error_code error;

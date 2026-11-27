@@ -55,11 +55,10 @@ namespace end_editor {
                 // The first Terrain.ini wins; older copies (base Generals under Zero Hour) fill
                 // in the names it lacks, which some shipped maps still use.
                 std::map<std::string, std::string> types;
-                const auto copies = this->files.readAll("data/ini/terrain.ini");
-                for(const auto &text: copies) {
+                const auto copies = this->files.readEach("data/ini/terrain.ini", [&](const std::string &text) {
                     types.merge(parseTerrainTypes(text));
-                }
-                if(copies.empty()) {
+                });
+                if(copies == 0) {
                     this->scene.warnings.push_back("Data/INI/Terrain.ini not found");
                 }
                 std::vector<Image> images;

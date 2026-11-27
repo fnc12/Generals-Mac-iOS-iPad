@@ -362,7 +362,7 @@ TEST_CASE("Terrain.ini copies of later folders fill in missing names") {
     std::vector<std::string> warnings;
     std::string error;
     REQUIRE(files.mount({mod, base}, warnings, error));
-    CHECK(files.readAll("data/ini/terrain.ini").size() == 2);
+    CHECK(files.readEach("data/ini/terrain.ini", [](const std::string &) {}) == 2);
     const auto scene = buildMapScene(parsed(testMap()), files, nullptr);
     CHECK(scene.warnings.empty());
     // Grass came from the first copy: its texture is green, not the placeholder.

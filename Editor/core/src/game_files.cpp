@@ -78,21 +78,6 @@ namespace end_editor {
         }
     }
 
-    std::vector<std::string> GameFiles::readAll(const std::string &path) const {
-        std::vector<std::string> result;
-        std::string bytes;
-        if(this->read(path, bytes)) {
-            result.push_back(std::move(bytes));
-        }
-        const auto range = this->shadowed.equal_range(path);
-        for(auto it = range.first; it != range.second; ++it) {
-            if(this->readSource(it->second, UINT32_MAX, bytes)) {
-                result.push_back(std::move(bytes));
-            }
-        }
-        return result;
-    }
-
     bool GameFiles::readPrefix(const std::string &path, std::uint32_t maxBytes, std::string &out) const {
         const auto found = this->sources.find(path);
         if(found == this->sources.end()) {
@@ -135,15 +120,5 @@ namespace end_editor {
             return this->archives[std::size_t(found->second.archive)].path().filename().string();
         }
         return found->second.looseFile.string();
-    }
-
-    std::vector<std::string> GameFiles::list(const std::function<bool(const std::string &)> &keep) const {
-        std::vector<std::string> result;
-        for(const auto &item: this->sources) {
-            if(keep(item.first)) {
-                result.push_back(item.first);
-            }
-        }
-        return result;
     }
 }
