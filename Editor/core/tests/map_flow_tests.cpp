@@ -108,12 +108,15 @@ namespace {
         }
         std::string property(std::int64_t id, const std::string& key) {
             using namespace sqlite_orm;
-            for (const auto& row: this->reader->iterate<MapPropertyRow>(
-                     where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key),
-                     limit(1))) {
-                return row.type + ":" + row.value;
+            const auto rows =
+                this->reader->select(columns(&MapPropertyRow::type, &MapPropertyRow::value),
+                                     where(c(&MapPropertyRow::objectId) == id && c(&MapPropertyRow::key) == key),
+                                     limit(1));
+            if (rows.empty()) {
+                return "<none>";
             }
-            return "<none>";
+            const auto& [type, value] = rows.front();
+            return type + ":" + value;
         }
         std::vector<MapLinkRow> links() {
             return this->reader->get_all<MapLinkRow>(sqlite_orm::order_by(&MapLinkRow::id));
