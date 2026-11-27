@@ -997,31 +997,52 @@ enum UICheck {
             check("⌥-drag turns it", state.yaw != yawBefore)
             // Scroll events as the devices make them (CGEvent, dispatched by the window): a trackpad's
             // two-finger swipe (pixel units, continuous: precise deltas) pans; ⌘ with it, or a mouse
-            // wheel (line units), zooms.
-            @MainActor func scroll(units: CGScrollEventUnit, continuous: Bool, by delta: Int32, flags: CGEventFlags = []) {
+            // wheel (line units), zooms around the ground under the cursor.
+            @discardableResult @MainActor func scroll(units: CGScrollEventUnit, continuous: Bool, by delta: Int32, flags: CGEventFlags = [],
+                                   at viewPoint: CGPoint? = nil) -> CGPoint? {
                 guard let event = CGEvent(scrollWheelEvent2Source: nil, units: units, wheelCount: 2, wheel1: delta,
-                                          wheel2: delta / 2, wheel3: 0) else { return }
+                                          wheel2: delta / 2, wheel3: 0) else { return nil }
                 event.setIntegerValueField(.scrollWheelEventIsContinuous, value: continuous ? 1 : 0)
                 event.flags = flags
-                let at = window.convertPoint(toScreen: windowPoint(center))
+                let at = window.convertPoint(toScreen: windowPoint(viewPoint ?? center))
                 event.location = CGPoint(x: at.x, y: (NSScreen.screens.first?.frame.height ?? 0) - at.y)
-                if let ns = NSEvent(cgEvent: event) { window.sendEvent(ns) }
+                guard let ns = NSEvent(cgEvent: event) else { return nil }
+                window.sendEvent(ns)
+                // Where the event really is (the posted location can land a few points off the
+                // asked one): the view point the app saw.
+                let local = view.convert(ns.locationInWindow, from: nil)
+                return CGPoint(x: local.x, y: view.bounds.height - local.y)
             }
             var camTarget = state.target, camDistance = state.distance
             scroll(units: .pixel, continuous: true, by: -40)
             await settle()
             check("a two-finger swipe pans (target \(camTarget) -> \(state.target)) and does not zoom",
                   state.target != camTarget && state.distance == camDistance)
-            camTarget = state.target
-            scroll(units: .line, continuous: false, by: -3)
+            // Off the middle of the view, so a zoom around the middle would move the ground under it.
+            let aside = CGPoint(x: view.bounds.width * 0.3, y: view.bounds.height * 0.75)
+            @MainActor func zoomKeepsGround(_ what: String, _ zoom: () -> CGPoint?) async {
+                // A wheel event of 0 lines first: it changes nothing and tells where events posted
+                // there land (a few points off the asked place).
+                guard let at = scroll(units: .line, continuous: false, by: 0, at: aside) else {
+                    return check("\(what): the scroll event was posted", false)
+                }
+                await settle()
+                let distance = state.distance, groundBefore = ground(at)
+                let landed = zoom()
+                await settle()
+                let groundAfter = ground(landed ?? at)
+                let drift = groundBefore.flatMap { b in groundAfter.map { simd_distance(SIMD2(b.x, b.y), SIMD2($0.x, $0.y)) } }
+                check("\(what) zooms (distance \(distance) -> \(state.distance)) around the ground under the cursor "
+                      + "(it moved \(drift.map { String(format: "%.2f", $0) } ?? "?") of \(String(format: "%.0f", distance)))",
+                      state.distance != distance && (drift ?? .infinity) < max(distance * 0.002, 0.5))
+            }
+            // Back to where the view looked before the swipe, so the point aside is on the map.
+            state.target = camTarget
             await settle()
-            check("a mouse wheel zooms (distance \(camDistance) -> \(state.distance)) and does not pan",
-                  state.distance != camDistance && state.target == camTarget)
-            camDistance = state.distance
-            scroll(units: .pixel, continuous: true, by: 40, flags: .maskCommand)
-            await settle()
-            check("⌘ with a two-finger swipe zooms (distance \(camDistance) -> \(state.distance))",
-                  state.distance != camDistance && state.target == camTarget)
+            await zoomKeepsGround("a mouse wheel") { scroll(units: .line, continuous: false, by: -3, at: aside) }
+            await zoomKeepsGround("⌘ with a two-finger swipe") {
+                scroll(units: .pixel, continuous: true, by: 40, flags: .maskCommand, at: aside)
+            }
             _ = distanceBefore
 
             // Save Map As: File > Save Map As… opens the sheet, Cancel closes it.
