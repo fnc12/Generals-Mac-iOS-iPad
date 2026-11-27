@@ -48,6 +48,8 @@ thumbs.db
 /CMakeUserPresets.json
 /.cache
 .clang-format
+# The editor is formatted with sqlite_orm's style (Editor/format.sh).
+!/Editor/.clang-format
 /Dependencies/MaxSDK/maxsdk
 /tmp/
 

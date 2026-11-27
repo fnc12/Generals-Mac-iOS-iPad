@@ -51,6 +51,12 @@ build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Gener
 Editor/macos/build.sh
 ```
 
+Code style: the C and C++ sources (`core/`, `macos/bridge.h`) are formatted with clang-format and
+`Editor/.clang-format`, a copy of sqlite_orm's (v1.9.1). `Editor/format.sh` formats them in place;
+`Editor/format.sh --check` changes nothing and fails when a file is not formatted (what CI can
+run). It uses Homebrew's LLVM clang-format (`brew install llvm`), or the one in `CLANG_FORMAT`.
+The store is read and written only through sqlite_orm (`core/src/storage.h`), no SQL text.
+
 The tests make their own small archives, W3D files, textures and maps (plain and
 RefPack-compressed, `core/tests/test_map_writer.h`) and need no game data. The core links zlib
 when CMake finds it (always on macOS); without it the rare "ZL" compressed maps are reported as
