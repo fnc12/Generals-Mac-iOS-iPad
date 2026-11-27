@@ -73,11 +73,14 @@ namespace end_editor {
         if(auto previous = this->storage->get_pointer<StatusRow>(1)) {
             this->revision = previous->revision;
         }
-        if(auto previous = this->storage->get_pointer<ModelRow>(1)) {
-            this->revision = std::max(this->revision, previous->revision);
+        // Only the revisions of the last session's model and map rows, not their blobs.
+        using namespace sqlite_orm;
+        for(const auto modelRevision: this->storage->iterate(select(&ModelRow::revision, where(c(&ModelRow::id) == 1)))) {
+            this->revision = std::max(this->revision, modelRevision);
         }
-        if(auto previous = this->storage->get_pointer<MapRow>(1)) {
-            this->revision = std::max({this->revision, previous->revision, previous->modelRevision});
+        for(const auto &[mapRevision, modelRevision]: this->storage->iterate(
+                select(columns(&MapRow::revision, &MapRow::modelRevision), where(c(&MapRow::id) == 1)))) {
+            this->revision = std::max({this->revision, mapRevision, modelRevision});
         }
         this->setStatus("idle", "", "", 0);
         this->setModelState("", "idle", "");
@@ -585,20 +588,28 @@ namespace end_editor {
     }
 
     void EditorCore::runPlayAnimation(const std::string &name) {
-        auto row = this->storage->get_pointer<ModelRow>(1);
-        if(!row || row->state != "ready" || !this->model.error.empty() || this->model.parts.empty()) {
+        using namespace sqlite_orm;
+        // The model row's state and message, not the pose blob that is replaced anyway.
+        std::optional<std::string> message;
+        for(auto &&[state, text]: this->storage->iterate(
+                select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1)))) {
+            if(state == "ready") {
+                message = std::move(text);
+            }
+        }
+        if(!message || !this->model.error.empty() || this->model.parts.empty()) {
             return;
         }
         std::string error;
         const auto pose = this->loader->pose(this->model, name, error);
-        row->animation = error.empty() ? name : "";
-        row->message = error.empty() ? row->message : error;
-        row->frameCount = int(pose.frameCount);
-        row->frameRate = int(pose.frameRate);
-        row->pose = toBlob(pose.matrices);
-        row->visible = toBlob(pose.visible);
-        row->revision = ++this->revision;
-        this->storage->replace(*row);
+        this->storage->update_all(set(c(&ModelRow::animation) = error.empty() ? name : std::string(),
+                                      c(&ModelRow::message) = error.empty() ? *message : error,
+                                      c(&ModelRow::frameCount) = int(pose.frameCount),
+                                      c(&ModelRow::frameRate) = int(pose.frameRate),
+                                      c(&ModelRow::pose) = toBlob(pose.matrices),
+                                      c(&ModelRow::visible) = toBlob(pose.visible),
+                                      c(&ModelRow::revision) = ++this->revision),
+                                  where(c(&ModelRow::id) == 1));
     }
 
     void EditorCore::setMapState(const std::string &path, const std::string &state, const std::string &message) {
@@ -686,10 +697,9 @@ namespace end_editor {
             this->storage->remove_all<MapListRow>();
             this->listMaps();
             // Only the list changed: the status revision stays (a client re-reads everything on it).
-            if(auto status = this->storage->get_pointer<StatusRow>(1)) {
-                status->mapListRevision = ++this->mapListRevision;
-                this->storage->replace(*status);
-            }
+            using namespace sqlite_orm;
+            this->storage->update_all(set(c(&StatusRow::mapListRevision) = ++this->mapListRevision),
+                                      where(c(&StatusRow::id) == 1));
             return true;
         });
     }
@@ -910,11 +920,11 @@ namespace end_editor {
                 }
                 this->storage->replace(row);
             }
-            if(auto map = this->storage->get_pointer<MapRow>(1)) {
-                map->modelsLoaded = int(this->nextMapModel);
-                map->modelRevision = ++this->revision;
-                this->storage->replace(*map);
-            }
+            // Two numbers of the map row: its blobs are not read and written again.
+            using namespace sqlite_orm;
+            this->storage->update_all(set(c(&MapRow::modelsLoaded) = int(this->nextMapModel),
+                                          c(&MapRow::modelRevision) = ++this->revision),
+                                      where(c(&MapRow::id) == 1));
             return true;
         });
         this->mapModelJobQueued = this->nextMapModel < this->mapModels.size();
@@ -969,20 +979,22 @@ namespace end_editor {
     }
 
     void EditorCore::updateMapEditState(const std::string &message) {
-        auto row = this->storage->get_pointer<MapRow>(1);
-        if(!row || !this->document) {
+        if(!this->document) {
             return;
         }
-        row->objectRevision = ++this->revision;
-        row->undoCount = int(this->document->undoCount());
-        row->redoCount = int(this->document->redoCount());
-        row->edited = this->document->edited();
-        row->lastObject = this->document->lastChangedId();
-        row->editMessage = message;
-        row->modelCount = int(this->mapModelIds.size());
-        row->objectCount = int(std::count_if(this->document->objects().begin(), this->document->objects().end(),
-                                             [](const auto &entry) { return entry.id != 0 && !entry.removed; }));
-        this->storage->replace(*row);
+        // The editing columns of the map row only: its blobs are not read and written again.
+        using namespace sqlite_orm;
+        const auto objectCount = int(std::count_if(this->document->objects().begin(), this->document->objects().end(),
+                                                   [](const auto &entry) { return entry.id != 0 && !entry.removed; }));
+        this->storage->update_all(set(c(&MapRow::objectRevision) = ++this->revision,
+                                      c(&MapRow::undoCount) = int(this->document->undoCount()),
+                                      c(&MapRow::redoCount) = int(this->document->redoCount()),
+                                      c(&MapRow::edited) = this->document->edited(),
+                                      c(&MapRow::lastObject) = this->document->lastChangedId(),
+                                      c(&MapRow::editMessage) = message,
+                                      c(&MapRow::modelCount) = int(this->mapModelIds.size()),
+                                      c(&MapRow::objectCount) = objectCount),
+                                  where(c(&MapRow::id) == 1));
     }
 
     void EditorCore::runEditMap(const std::vector<std::string> &arguments) {
@@ -1115,18 +1127,16 @@ namespace end_editor {
         const bool saveAs = arguments.size() > 1 && arguments[1] == "as";
         const bool replace = arguments.size() > 2 && arguments[2] == "replace";
         const std::filesystem::path target(path);
+        using namespace sqlite_orm;
         std::error_code error;
-        const auto own = this->storage->get_pointer<MapRow>(1);
         // Save As into the Maps folder does not silently replace another map: the store says
         // which file is in the way, and the client asks before sending "replace".
-        if(saveAs && !replace && std::filesystem::exists(target, error) && (!own || own->savedPath != path)) {
+        if(saveAs && !replace && std::filesystem::exists(target, error) &&
+           this->storage->count<MapRow>(where(c(&MapRow::id) == 1 and c(&MapRow::savedPath) == path)) == 0) {
             const auto message = "error: " + target.parent_path().filename().string() +
                                  " already exists in the Maps folder; save again to replace it";
             this->storage->transaction([&] {
-                if(auto row = this->storage->get_pointer<MapRow>(1)) {
-                    row->saveConflict = path;
-                    this->storage->replace(*row);
-                }
+                this->storage->update_all(set(c(&MapRow::saveConflict) = path), where(c(&MapRow::id) == 1));
                 this->updateMapEditState(message);
                 this->editor.setNote(message, "error");
                 this->publishEditor();
@@ -1137,17 +1147,13 @@ namespace end_editor {
         std::string previewError;
         auto message = this->writeMapFiles(target, previewError);
         this->storage->transaction([&] {
-            if(auto row = this->storage->get_pointer<MapRow>(1)) {
-                row->saveConflict.clear();
-                this->storage->replace(*row);
-            }
             if(message.empty()) {
                 this->document->markSaved();
-                if(auto row = this->storage->get_pointer<MapRow>(1)) {
-                    row->savedPath = path;
-                    this->storage->replace(*row);
-                }
+                this->storage->update_all(set(c(&MapRow::saveConflict) = "", c(&MapRow::savedPath) = path),
+                                          where(c(&MapRow::id) == 1));
                 message = previewError.empty() ? "Saved " + path : previewError;
+            } else {
+                this->storage->update_all(set(c(&MapRow::saveConflict) = ""), where(c(&MapRow::id) == 1));
             }
             this->updateMapEditState(message);
             this->editor.setNote(message, message.rfind("error", 0) == 0 ? "error" : "info");
@@ -1306,9 +1312,12 @@ namespace end_editor {
                 this->play.pid = launched.pid;
                 this->play.exitCode = 0;
                 ++this->play.runs;
-                const auto row = this->storage->get_pointer<MapRow>(1);
-                message = "Playing " + (row ? row->name : std::string("the map")) + " in " +
-                          std::filesystem::path(app).filename().string();
+                using namespace sqlite_orm;
+                std::string name = "the map";
+                for(auto &&mapName: this->storage->iterate(select(&MapRow::name, where(c(&MapRow::id) == 1)))) {
+                    name = std::move(mapName);
+                }
+                message = "Playing " + name + " in " + std::filesystem::path(app).filename().string();
                 this->play.message = message;
             } else {
                 message = "error: " + launched.error;
