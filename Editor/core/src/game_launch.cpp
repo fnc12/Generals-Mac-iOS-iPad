@@ -72,7 +72,7 @@ namespace end_editor {
     std::optional<int> pollProcess(std::int64_t) {
         return 0;
     }
-    void stopProcess(std::int64_t) {}
+    void stopProcess(std::int64_t, bool) {}
 #else
     Launched launchProcess(const LaunchRequest &request) {
         std::vector<std::string> environment;
@@ -142,9 +142,14 @@ namespace end_editor {
         return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
     }
 
-    void stopProcess(std::int64_t pid) {
+    void stopProcess(std::int64_t pid, bool force) {
         if(pid > 0) {
-            ::kill(pid_t(pid), SIGTERM);
+            // The whole process group: it is the leader of its own session (POSIX_SPAWN_SETSID), and
+            // a launcher script may run the game as its child (GeneralsX's run.sh pipes its output).
+            const int signal = force ? SIGKILL : SIGTERM;
+            if(::kill(-pid_t(pid), signal) != 0) {
+                ::kill(pid_t(pid), signal);
+            }
         }
     }
 #endif

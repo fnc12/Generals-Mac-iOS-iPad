@@ -1206,6 +1206,7 @@ namespace end_editor {
         } else if(name == "play.stop") {
             if(this->play.state == "running") {
                 stopProcess(this->play.pid);
+                this->playStopAsked = std::chrono::steady_clock::now();
             }
         } else {
             return "error:unknown_command";
@@ -1223,8 +1224,14 @@ namespace end_editor {
         }
         const auto code = pollProcess(this->play.pid);
         if(!code) {
+            // A game that does not quit when asked (SIGTERM while it loads) is ended.
+            if(this->playStopAsked && std::chrono::steady_clock::now() - *this->playStopAsked > std::chrono::seconds(3)) {
+                stopProcess(this->play.pid, true);
+                this->playStopAsked.reset();
+            }
             return;
         }
+        this->playStopAsked.reset();
         this->play.state = "exited";
         this->play.exitCode = *code;
         this->play.message = "The game ended (exit code " + std::to_string(*code) + ")";
@@ -1251,10 +1258,22 @@ namespace end_editor {
         if(message.empty()) {
             // Play again restarts the test: the game the last Play started is closed first.
             if(this->play.state == "running") {
+                // Asked to quit; ended for good when it has not after 3 s.
                 stopProcess(this->play.pid);
-                for(int i = 0; i < 100 && !pollProcess(this->play.pid); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                bool ended = false;
+                for(int i = 0; i < 150 && !ended; ++i) {
+                    ended = pollProcess(this->play.pid).has_value();
+                    if(!ended) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    }
                 }
+                if(!ended) {
+                    stopProcess(this->play.pid, true);
+                    for(int i = 0; i < 50 && !pollProcess(this->play.pid); ++i) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    }
+                }
+                this->playStopAsked.reset();
             }
             LaunchRequest request;
             request.program = program;
@@ -1269,6 +1288,10 @@ namespace end_editor {
             if(this->gameFolders.size() > 1) {
                 request.environment.emplace_back("CNC_GENERALS_PATH", this->gameFolders[1].string());
             }
+            // Its user data folder is the one whose Maps folder has the test copy (the same one by
+            // default; GeneralsX reads GENERALSX_USER_DATA_DIR).
+            request.environment.emplace_back("GENERALSX_USER_DATA_DIR",
+                                             std::filesystem::path(this->userMapsFolder).parent_path().string());
             request.logPath = (std::filesystem::path(this->path).parent_path() / "play.log").string();
             const auto launched = launchProcess(request);
             std::string command = request.program;

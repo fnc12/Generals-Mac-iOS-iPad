@@ -9,7 +9,9 @@
 #include "storage.h"
 #include "terrain_ini.h"
 
+#include <chrono>
 #include <deque>
+#include <optional>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -128,5 +130,7 @@ namespace end_editor {
         std::vector<std::filesystem::path> gameFolders;  // map.save never writes inside them
         std::vector<std::string> factionNames;  // PlayerTemplate.ini's playable factions
         PlayRow play;  // the Play button's settings and its last run (the store's play row)
+        // play.stop asked the game to quit at this time; it is ended for good 3 s later.
+        std::optional<std::chrono::steady_clock::time_point> playStopAsked;
     };
 }

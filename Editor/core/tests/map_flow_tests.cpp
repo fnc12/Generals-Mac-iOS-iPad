@@ -584,18 +584,20 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
 
 namespace {
     // A stand-in for the game app: Fake.app/Contents/MacOS/run.sh writes the arguments it got (one
-    // per line), CNC_GENERALS_ZH_PATH and CNC_GENERALS_PATH to files next to the app, then waits
-    // `seconds` and exits with `code`.
-    std::filesystem::path makeFakeGame(const std::filesystem::path &folder, int seconds = 0, int code = 0) {
+    // per line), CNC_GENERALS_ZH_PATH, CNC_GENERALS_PATH and GENERALSX_USER_DATA_DIR to files next to the app, then waits
+    // `seconds` in a child process (like run.sh, which runs the game as its child) and exits with `code`.
+    std::filesystem::path makeFakeGame(const std::filesystem::path &folder, int seconds = 0, int code = 0,
+                                       bool ignoreTerm = false) {
         const auto app = folder / "Fake.app";
         std::filesystem::create_directories(app / "Contents" / "MacOS");
         const auto script = app / "Contents" / "MacOS" / "run.sh";
-        std::ofstream(script) << "#!/bin/sh\n"
+        std::ofstream(script) << "#!/bin/sh\n" << (ignoreTerm ? "trap '' TERM\n" : "")
                               << "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" << (folder / "args.txt").string() << "'\n"
-                              << "printf '%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" > '"
+                              << "printf '%s\\n%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" \"$GENERALSX_USER_DATA_DIR\" > '"
                               << (folder / "env.txt").string() << "'\n"
                               << "echo started $$ >> '" << (folder / "runs.txt").string() << "'\n"
-                              << "sleep " << seconds << "\nexit " << code << "\n";
+                              << "sleep " << seconds << " &\necho $! > '" << (folder / "child.txt").string()
+                              << "'\nwait $!\nexit " << code << "\n";
         std::filesystem::permissions(script, std::filesystem::perms::owner_all);
         return app;
     }
@@ -670,7 +672,10 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(lines(readFile(flow.saved / "args.txt")) ==
           std::vector<std::string>{"-testMap", testCopy.string(), "-testMapFaction", "FactionChina", "-testMapAI", "2",
                                    "-testMapAIDifficulty", "hard", "-testMapStart", "2"});
-    CHECK(lines(readFile(flow.saved / "env.txt")).front() == flow.folder.string());
+    const auto environment = lines(readFile(flow.saved / "env.txt"));
+    REQUIRE(environment.size() == 3);
+    CHECK(environment[0] == flow.folder.string());
+    CHECK(environment[2] == flow.saved.string());  // the user data folder whose Maps has the test copy
 }
 
 TEST_CASE("Flow: Play again closes the game the last Play started; play.stop closes it") {
@@ -690,6 +695,28 @@ TEST_CASE("Flow: Play again closes the game the last Play started; play.stop clo
     const auto stopped = waitForGame(flow);
     CHECK(stopped.state == "exited");
     CHECK(stopped.exitCode == 128 + SIGTERM);
+}
+
+TEST_CASE("Flow: a game that does not quit when asked is ended (Play again, play.stop)") {
+    Flow flow("flow-play-stubborn");
+    flow.send("maps.user\t" + (flow.saved / "Maps").string());
+    flow.send("play.app\t" + makeFakeGame(flow.saved, 30, 0, true).string());
+    flow.send("map.play");
+    const auto first = flow.reader->get<PlayRow>(1);
+    REQUIRE(first.state == "running");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));  // its trap is set
+    flow.send("map.play");
+    CHECK(flow.reader->get<PlayRow>(1).runs == 2);
+    CHECK(::kill(pid_t(first.pid), 0) != 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const auto child = std::stoi(readFile(flow.saved / "child.txt"));
+    CHECK(::kill(pid_t(child), 0) == 0);
+    flow.send("play.stop");
+    const auto stopped = waitForGame(flow, 10);
+    CHECK(stopped.state == "exited");
+    CHECK(stopped.exitCode == 128 + SIGKILL);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(::kill(pid_t(child), 0) != 0);  // the game the launcher script ran is gone too
 }
 
 TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions") {

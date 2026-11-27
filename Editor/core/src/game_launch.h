@@ -32,6 +32,6 @@ namespace end_editor {
     // nullopt while it runs; its exit code once it ended (128 + signal when killed by one).
     std::optional<int> pollProcess(std::int64_t pid);
 
-    // Asks it to quit (SIGTERM).
-    void stopProcess(std::int64_t pid);
+    // Asks it and the processes it started to quit (SIGTERM), or ends them (SIGKILL) when `force`.
+    void stopProcess(std::int64_t pid, bool force = false);
 }
