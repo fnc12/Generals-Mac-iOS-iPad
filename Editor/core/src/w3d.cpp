@@ -20,7 +20,11 @@ namespace end_editor {
             chunkTexture = 0x031,
             chunkTextureName = 0x032,
             chunkShaders = 0x029,
+            chunkVertexMaterials = 0x02A,
+            chunkVertexMaterial = 0x02B,
+            chunkVertexMaterialInfo = 0x02D,
             chunkMaterialPass = 0x038,
+            chunkVertexMaterialIds = 0x039,
             chunkShaderIds = 0x03A,
             chunkTextureStage = 0x048,
             chunkTextureIds = 0x049,
@@ -46,6 +50,20 @@ namespace end_editor {
         enum : std::uint16_t { channelX = 0, channelY = 1, channelZ = 2, channelQ = 6 };
         constexpr std::uint16_t flavorTimeCoded = 0;
         constexpr std::uint32_t timeCodeFlag = 0x80000000u;
+        constexpr std::uint32_t stage0MappingMask = 0x00FF0000u;  // W3DVERTMAT_STAGE0_MAPPING_MASK
+
+        // W3DVERTMAT_STAGE0_MAPPING_* values (w3d_file.h) that map the texture from the view
+        // direction (reflections) instead of the mesh's UVs.
+        bool isEnvironmentMapping(std::uint32_t mapping) {
+            switch(mapping) {
+                case 0x01: case 0x02: case 0x03:              // ENVIRONMENT, CHEAP_ENVIRONMENT, SCREEN
+                case 0x0C: case 0x0D: case 0x0E: case 0x0F:   // WS_CLASSIC_ENV, WS_ENVIRONMENT, GRID_*_ENV
+                case 0x12: case 0x13: case 0x14:              // BUMPENV, GRID_WS_*
+                    return true;
+                default:
+                    return false;
+            }
+        }
         constexpr std::size_t nameLength = 16;
 
         // All targets (x64, arm64) are little endian, like the files.
@@ -103,7 +121,14 @@ namespace end_editor {
         W3dMesh parseMesh(std::string_view data, std::vector<std::string> &warnings) {
             W3dMesh mesh;
             std::uint32_t triangleCount = 0;
-            bool passSeen = false;
+            // A material pass as stored; one of them is drawn (see below).
+            struct Pass {
+                std::vector<std::uint32_t> materialIds, shaderIds, textureIds;
+                std::vector<float> uvs;
+                bool hasStage = false;
+            };
+            std::vector<Pass> passes;
+            std::vector<std::uint32_t> materialMappings;  // stage-0 mapping of each vertex material
             forEachChunk(data, warnings, [&](const Chunk &chunk) {
                 switch(chunk.type) {
                     case chunkMeshHeader3:
@@ -150,33 +175,76 @@ namespace end_editor {
                             mesh.shaders.push_back(blendOfShader(chunk.data.substr(offset, 16)));
                         }
                         break;
-                    case chunkMaterialPass:
-                        // The preview draws the first pass and its first texture stage only.
-                        if(passSeen) {
-                            break;
-                        }
-                        passSeen = true;
-                        forEachChunk(chunk.data, warnings, [&](const Chunk &pass) {
-                            if(pass.type == chunkShaderIds) {
-                                mesh.triangleShaders = getArray<std::uint32_t>(pass.data, pass.data.size() / 4);
+                    case chunkVertexMaterials:
+                        forEachChunk(chunk.data, warnings, [&](const Chunk &material) {
+                            if(material.type != chunkVertexMaterial) {
                                 return;
                             }
-                            if(pass.type != chunkTextureStage || !mesh.uvs.empty()) {
-                                return;
-                            }
-                            forEachChunk(pass.data, warnings, [&](const Chunk &stage) {
-                                if(stage.type == chunkTextureIds) {
-                                    mesh.triangleTextures = getArray<std::uint32_t>(stage.data, stage.data.size() / 4);
-                                } else if(stage.type == chunkStageTexcoords) {
-                                    mesh.uvs = getArray<float>(stage.data, stage.data.size() / 4);
+                            std::uint32_t attributes = 0;
+                            forEachChunk(material.data, warnings, [&](const Chunk &field) {
+                                if(field.type == chunkVertexMaterialInfo && field.data.size() >= 4) {
+                                    attributes = get<std::uint32_t>(field.data, 0);
                                 }
                             });
+                            materialMappings.push_back((attributes & stage0MappingMask) >> 16);
                         });
                         break;
+                    case chunkMaterialPass: {
+                        Pass pass;
+                        forEachChunk(chunk.data, warnings, [&](const Chunk &field) {
+                            if(field.type == chunkVertexMaterialIds) {
+                                pass.materialIds = getArray<std::uint32_t>(field.data, field.data.size() / 4);
+                            } else if(field.type == chunkShaderIds) {
+                                pass.shaderIds = getArray<std::uint32_t>(field.data, field.data.size() / 4);
+                            } else if(field.type == chunkTextureStage && !pass.hasStage) {
+                                // The preview draws the first texture stage only.
+                                pass.hasStage = true;
+                                forEachChunk(field.data, warnings, [&](const Chunk &stage) {
+                                    if(stage.type == chunkTextureIds) {
+                                        pass.textureIds = getArray<std::uint32_t>(stage.data, stage.data.size() / 4);
+                                    } else if(stage.type == chunkStageTexcoords) {
+                                        pass.uvs = getArray<float>(stage.data, stage.data.size() / 4);
+                                    }
+                                });
+                            }
+                        });
+                        passes.push_back(std::move(pass));
+                        break;
+                    }
                     default:
                         break;
                 }
             });
+
+            // The preview draws one pass. Many buildings (3427 meshes in the retail data) start with
+            // an environment-mapped reflection pass (a sky such as LAKEDUSK.tga) and lay the real
+            // texture over it in an alpha-blended second pass: draw the first pass that is not a
+            // reflection, and draw it opaque, since the reflection it was blended onto is gone.
+            const auto isReflection = [&](const Pass &pass) {
+                return std::any_of(pass.materialIds.begin(), pass.materialIds.end(), [&](std::uint32_t id) {
+                    return id < materialMappings.size() && isEnvironmentMapping(materialMappings[id]);
+                });
+            };
+            std::size_t drawn = 0;
+            while(drawn < passes.size() && isReflection(passes[drawn])) {
+                ++drawn;
+            }
+            if(drawn == passes.size()) {
+                drawn = 0;  // reflections only: keep the first, as before
+            }
+            if(drawn < passes.size()) {
+                auto &pass = passes[drawn];
+                mesh.triangleShaders = std::move(pass.shaderIds);
+                mesh.triangleTextures = std::move(pass.textureIds);
+                mesh.uvs = std::move(pass.uvs);
+                if(drawn > 0) {
+                    for(const std::uint32_t id: mesh.triangleShaders) {
+                        if(id < mesh.shaders.size() && mesh.shaders[id] == W3dBlend::alphaBlend) {
+                            mesh.shaders[id] = W3dBlend::opaque;
+                        }
+                    }
+                }
+            }
 
             // Drop what does not fit together instead of letting a renderer read out of bounds.
             const std::size_t vertexCount = mesh.positions.size() / 3;
