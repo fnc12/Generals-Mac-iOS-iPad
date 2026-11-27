@@ -37,6 +37,7 @@
 #include "Common/GameEngine.h"
 #include "Common/GameState.h"
 #include "Common/Recorder.h"
+#include "Common/TestMap.h"
 #include "Common/GameUtility.h"
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
@@ -512,6 +513,11 @@ void GameClient::update()
 			else if (TheGlobalData->m_loadReplayGame.isNotEmpty())
 			{
 				TheRecorder->loadQueuedReplay();
+			}
+			// GeneralsX @feature fnc12 27/11/2026 -testMap: the map starts right after the intro.
+			else if (TestMap::isRequested())
+			{
+				TestMap::startQueued();
 			}
 		}
 	}

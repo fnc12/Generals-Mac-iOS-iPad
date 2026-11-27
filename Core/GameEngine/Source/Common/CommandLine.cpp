@@ -34,6 +34,7 @@
 #include "Common/CommandLine.h"
 #include "Common/CRCDebug.h"
 #include "Common/LocalFileSystem.h"
+#include "Common/TestMap.h"
 #include "Common/version.h"
 #include "Common/WorkingDirectory.h"
 #include "GameClient/ClientInstance.h"
@@ -1216,6 +1217,89 @@ Int parseLooseWins(char *args[], int num)
 	return 1;
 }
 
+// GeneralsX @feature fnc12 27/11/2026 -testMap and its options: start a map straight from the
+// command line (see Common/TestMap.h). Parsed at startup: a test run may start while the game
+// already runs, so it is a second instance.
+Int parseTestMap(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.map = args[1];
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+		rts::ClientInstance::setMultiInstance(TRUE);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapFaction(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.faction = args[1];
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapAI(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.aiCount = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapAIDifficulty(char *args[], int num)
+{
+	if (num > 1)
+	{
+		const AsciiString difficulty = args[1];
+		if (difficulty.compareNoCase("easy") == 0)
+			TestMap::s_settings.aiDifficulty = 0;
+		else if (difficulty.compareNoCase("hard") == 0 || difficulty.compareNoCase("brutal") == 0)
+			TestMap::s_settings.aiDifficulty = 2;
+		else
+			TestMap::s_settings.aiDifficulty = 1;
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapStart(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.startPosition = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapSeed(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.seed = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
+Int parseTestMapFrames(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.frames = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
 // Initial Params are parsed before Windows Creation.
 // Note that except for TheGlobalData, no other global objects exist yet when these are parsed.
 static CommandLineParam paramsForStartup[] =
@@ -1253,6 +1337,15 @@ static CommandLineParam paramsForStartup[] =
 #if RTS_ZEROHOUR
 	{ "-generalsAssetPath", parseGeneralsAssetPath },
 #endif
+
+	// GeneralsX @feature fnc12 27/11/2026 Start a map at once, as a skirmish or a mission (Common/TestMap.h)
+	{ "-testMap", parseTestMap },
+	{ "-testMapFaction", parseTestMapFaction },
+	{ "-testMapAI", parseTestMapAI },
+	{ "-testMapAIDifficulty", parseTestMapAIDifficulty },
+	{ "-testMapStart", parseTestMapStart },
+	{ "-testMapFrames", parseTestMapFrames },
+	{ "-testMapSeed", parseTestMapSeed },
 };
 
 // Parsed on its own, before GameData.ini is loaded, so the mod's archives are mounted

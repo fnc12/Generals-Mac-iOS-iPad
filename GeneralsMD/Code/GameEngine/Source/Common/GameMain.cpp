@@ -31,6 +31,7 @@
 #include "Common/FramePacer.h"
 #include "Common/GameEngine.h"
 #include "Common/ReplaySimulation.h"
+#include "Common/TestMap.h"
 
 
 /**
@@ -48,6 +49,11 @@ Int GameMain()
 	if (!TheGlobalData->m_simulateReplays.empty())
 	{
 		exitcode = ReplaySimulation::simulateReplays(TheGlobalData->m_simulateReplays, TheGlobalData->m_simulateReplayJobs);
+	}
+	// GeneralsX @feature fnc12 27/11/2026 -headless -testMap: load the map, run its frames and exit.
+	else if (TheGlobalData->m_headless && TestMap::isRequested())
+	{
+		exitcode = TestMap::runHeadless();
 	}
 	else
 	{
