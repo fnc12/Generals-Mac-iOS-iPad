@@ -17,8 +17,10 @@ include(FetchContent)
 # sqlite_orm is header only; SOURCE_SUBDIR points at a folder without a CMakeLists.txt so its own
 # build (which needs find_package(SQLite3)) is not added.
 FetchContent_Declare(sqlite_orm
-    URL https://github.com/fnc12/sqlite_orm/archive/refs/tags/v1.9.1.tar.gz
-    URL_HASH SHA256=de2db80e4f716a27c4e1f4cb8a356394e428676c98c90b0577b0431107d3cccf
+    # dev after v1.9.1 (2026-11-18): read-only open (connection_control::open_mode) and the
+    # multi_order_by binding fix (#1405) are not released yet.
+    URL https://github.com/fnc12/sqlite_orm/archive/a202bd11574abab0b8e720e5c4e5ae942bd7cd0c.tar.gz
+    URL_HASH SHA256=97a8518abb45446844d7a93654af86a0807d3faaee9ef595535e56afd3b27c1f
     SOURCE_SUBDIR do-not-build
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(sqlite_orm)
