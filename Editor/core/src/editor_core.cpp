@@ -63,11 +63,13 @@ namespace end_editor {
         // Only the revisions of the last session's model and map rows, not their blobs.
         using namespace sqlite_orm;
         for (const auto modelRevision:
-             this->storage->iterate(select(&ModelRow::revision, where(c(&ModelRow::id) == 1)))) {
+             this->storage->select(&ModelRow::revision, where(c(&ModelRow::id) == 1), limit(1))) {
             this->revision = std::max(this->revision, modelRevision);
         }
-        for (const auto& [mapRevision, modelRevision]: this->storage->iterate(
-                 select(columns(&MapRow::revision, &MapRow::modelRevision), where(c(&MapRow::id) == 1)))) {
+        for (const auto& [mapRevision, modelRevision]:
+             this->storage->select(columns(&MapRow::revision, &MapRow::modelRevision),
+                                   where(c(&MapRow::id) == 1),
+                                   limit(1))) {
             this->revision = std::max({this->revision, mapRevision, modelRevision});
         }
         this->setStatus("idle", "", "", 0);
@@ -515,8 +517,9 @@ namespace end_editor {
         using namespace sqlite_orm;
         // The model row's state and message, not the pose blob that is replaced anyway.
         std::optional<std::string> message;
-        for (auto&& [state, text]: this->storage->iterate(
-                 select(columns(&ModelRow::state, &ModelRow::message), where(c(&ModelRow::id) == 1)))) {
+        for (auto&& [state, text]: this->storage->select(columns(&ModelRow::state, &ModelRow::message),
+                                                         where(c(&ModelRow::id) == 1),
+                                                         limit(1))) {
             if (state == "ready") {
                 message = std::move(text);
             }
@@ -1288,7 +1291,7 @@ namespace end_editor {
                 ++this->play.runs;
                 using namespace sqlite_orm;
                 std::string name = "the map";
-                for (auto&& mapName: this->storage->iterate(select(&MapRow::name, where(c(&MapRow::id) == 1)))) {
+                for (auto&& mapName: this->storage->select(&MapRow::name, where(c(&MapRow::id) == 1), limit(1))) {
                     name = std::move(mapName);
                 }
                 message = "Playing " + name + " in " + std::filesystem::path(app).filename().string();
