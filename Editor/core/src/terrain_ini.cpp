@@ -9,8 +9,8 @@ namespace end_editor {
     namespace {
         std::string lower(std::string_view text) {
             std::string result(text);
-            for(auto &c: result) {
-                if(c >= 'A' && c <= 'Z') {
+            for (auto& c: result) {
+                if (c >= 'A' && c <= 'Z') {
                     c = char(c - 'A' + 'a');
                 }
             }
@@ -27,10 +27,10 @@ namespace end_editor {
         }
 
         std::string_view trim(std::string_view s) {
-            while(!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r')) {
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r')) {
                 s.remove_prefix(1);
             }
-            while(!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
                 s.remove_suffix(1);
             }
             return s;
@@ -46,24 +46,24 @@ namespace end_editor {
         // Calls `visit` with every top-level block, one after the other (one Block is reused);
         // these files have no nested blocks.
         template<class F>
-        void forEachBlock(std::string_view text, F &&visit) {
+        void forEachBlock(std::string_view text, F&& visit) {
             Block block;
             bool inside = false;
             std::size_t start = 0;
-            while(start <= text.size()) {
+            while (start <= text.size()) {
                 auto end = text.find('\n', start);
-                if(end == std::string_view::npos) {
+                if (end == std::string_view::npos) {
                     end = text.size();
                 }
                 auto line = text.substr(start, end - start);
                 start = end + 1;
                 line = trim(line.substr(0, std::min(line.find(';'), line.find("//"))));
-                if(line.empty()) {
+                if (line.empty()) {
                     continue;
                 }
                 const auto equals = line.find('=');
-                if(!inside) {
-                    if(equals != std::string_view::npos) {
+                if (!inside) {
+                    if (equals != std::string_view::npos) {
                         continue;
                     }
                     const auto space = line.find_first_of(" \t");
@@ -71,8 +71,8 @@ namespace end_editor {
                     block.name = space == std::string_view::npos ? std::string_view() : trim(line.substr(space));
                     block.fields.clear();
                     inside = true;
-                } else if(equals == std::string_view::npos) {
-                    if(equalsNoCase(line, "end")) {
+                } else if (equals == std::string_view::npos) {
+                    if (equalsNoCase(line, "end")) {
                         visit(block);
                         inside = false;
                     }
@@ -80,20 +80,20 @@ namespace end_editor {
                     block.fields.emplace_back(trim(line.substr(0, equals)), trim(line.substr(equals + 1)));
                 }
             }
-            if(inside) {  // a block the file does not close
+            if (inside) {  // a block the file does not close
                 visit(block);
             }
         }
 
         // "R:200 G:200 B:200 A:255" -> 0..1 values; missing components keep their defaults.
         template<std::size_t N>
-        void readColor(std::string_view view, std::array<float, N> &out) {
+        void readColor(std::string_view view, std::array<float, N>& out) {
             const std::string value(view);  // atof needs the terminating zero
             const char names[] = {'R', 'G', 'B', 'A'};
-            for(std::size_t i = 0; i < N; ++i) {
+            for (std::size_t i = 0; i < N; ++i) {
                 const char name[] = {names[i], ':', '\0'};
                 const auto at = value.find(name);
-                if(at != std::string::npos) {
+                if (at != std::string::npos) {
                     out[i] = float(std::atof(value.c_str() + at + 2)) / 255.0f;
                 }
             }
@@ -102,12 +102,12 @@ namespace end_editor {
 
     std::map<std::string, std::string> parseTerrainTypes(std::string_view text) {
         std::map<std::string, std::string> result;
-        forEachBlock(text, [&](const Block &block) {
-            if(!equalsNoCase(block.keyword, "terrain")) {
+        forEachBlock(text, [&](const Block& block) {
+            if (!equalsNoCase(block.keyword, "terrain")) {
                 return;
             }
-            for(const auto &[key, value]: block.fields) {
-                if(equalsNoCase(key, "texture")) {
+            for (const auto& [key, value]: block.fields) {
+                if (equalsNoCase(key, "texture")) {
                     result[lower(block.name)] = value;
                 }
             }
@@ -117,9 +117,9 @@ namespace end_editor {
 
     std::vector<RoadType> parseRoadTypes(std::string_view text) {
         std::vector<RoadType> result;
-        forEachBlock(text, [&](const Block &block) {
+        forEachBlock(text, [&](const Block& block) {
             const bool bridge = equalsNoCase(block.keyword, "bridge");
-            if((bridge || equalsNoCase(block.keyword, "road")) && !block.name.empty()) {
+            if ((bridge || equalsNoCase(block.keyword, "road")) && !block.name.empty()) {
                 result.push_back(RoadType{std::string(block.name), bridge});
             }
         });
@@ -128,20 +128,20 @@ namespace end_editor {
 
     std::vector<Faction> parsePlayableFactions(std::string_view text) {
         std::vector<Faction> result;
-        forEachBlock(text, [&](const Block &block) {
-            if(!equalsNoCase(block.keyword, "playertemplate") || block.name.empty()) {
+        forEachBlock(text, [&](const Block& block) {
+            if (!equalsNoCase(block.keyword, "playertemplate") || block.name.empty()) {
                 return;
             }
             bool playable = false;
             std::string_view side;
-            for(const auto &[key, value]: block.fields) {
-                if(equalsNoCase(key, "playableside")) {
+            for (const auto& [key, value]: block.fields) {
+                if (equalsNoCase(key, "playableside")) {
                     playable = equalsNoCase(value, "yes");
-                } else if(equalsNoCase(key, "side")) {
+                } else if (equalsNoCase(key, "side")) {
                     side = value;
                 }
             }
-            if(playable) {
+            if (playable) {
                 result.push_back(Faction{std::string(block.name), std::string(side)});
             }
         });
@@ -149,27 +149,27 @@ namespace end_editor {
     }
 
     WaterLook parseWaterLook(std::string_view text, int timeOfDay) {
-        static const char *const times[] = {"morning", "afternoon", "evening", "night"};
+        static const char* const times[] = {"morning", "afternoon", "evening", "night"};
         const std::string_view wanted = timeOfDay >= 1 && timeOfDay <= 4 ? times[timeOfDay - 1] : "afternoon";
         WaterLook look;
-        forEachBlock(text, [&](const Block &block) {
-            if(equalsNoCase(block.keyword, "waterset") && equalsNoCase(block.name, wanted)) {
-                for(const auto &[key, value]: block.fields) {
-                    if(equalsNoCase(key, "watertexture")) {
+        forEachBlock(text, [&](const Block& block) {
+            if (equalsNoCase(block.keyword, "waterset") && equalsNoCase(block.name, wanted)) {
+                for (const auto& [key, value]: block.fields) {
+                    if (equalsNoCase(key, "watertexture")) {
                         look.texture = value;
-                    } else if(equalsNoCase(key, "diffusecolor")) {
+                    } else if (equalsNoCase(key, "diffusecolor")) {
                         readColor(value, look.diffuse);
-                    } else if(equalsNoCase(key, "transparentdiffusecolor")) {
+                    } else if (equalsNoCase(key, "transparentdiffusecolor")) {
                         readColor(value, look.transparentDiffuse);
-                    } else if(equalsNoCase(key, "waterrepeatcount")) {
+                    } else if (equalsNoCase(key, "waterrepeatcount")) {
                         look.repeatCount = float(std::atof(std::string(value).c_str()));
                     }
                 }
-            } else if(equalsNoCase(block.keyword, "watertransparency")) {
-                for(const auto &[key, value]: block.fields) {
-                    if(equalsNoCase(key, "standingwatertexture")) {
+            } else if (equalsNoCase(block.keyword, "watertransparency")) {
+                for (const auto& [key, value]: block.fields) {
+                    if (equalsNoCase(key, "standingwatertexture")) {
                         look.standingTexture = value;
-                    } else if(equalsNoCase(key, "standingwatercolor")) {
+                    } else if (equalsNoCase(key, "standingwatercolor")) {
                         readColor(value, look.standingColor);
                     }
                 }

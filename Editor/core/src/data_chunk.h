@@ -27,8 +27,8 @@ namespace end_editor {
     };
     using Dict = std::vector<DictValue>;
 
-    const DictValue *findDictValue(const Dict &dict, std::string_view key);
-    const char *dictTypeName(DictValue::Type type);
+    const DictValue* findDictValue(const Dict& dict, std::string_view key);
+    const char* dictTypeName(DictValue::Type type);
 
     // Reader of the engine's DataChunk files (DataChunk.cpp): a "CkMp" table of contents that maps
     // name ids to names, then chunks of {uint32 name id, uint16 version, int32 size, data}.
@@ -42,12 +42,12 @@ namespace end_editor {
             std::string name;
             std::uint16_t version = 0;
             std::size_t start = 0;  // first data byte (the 10-byte header is just before it)
-            std::size_t end = 0;    // one past the last data byte
+            std::size_t end = 0;  // one past the last data byte
         };
         static constexpr std::size_t headerBytes = 10;  // name id, version, size
 
         // Opens the next chunk inside the current one (or at the top level). Returns false at the end.
-        bool openChunk(Chunk &chunk);
+        bool openChunk(Chunk& chunk);
         // Skips what is left of the innermost open chunk and closes it.
         void closeChunk();
         std::size_t left() const;
@@ -68,9 +68,9 @@ namespace end_editor {
         std::string readUnicodeString();  // UTF-16 in the file, UTF-8 here
         Dict readDict();
 
-        const std::string &nameOf(std::uint32_t id) const;
+        const std::string& nameOf(std::uint32_t id) const;
         // The table of contents (name id -> name) and where it ends (the first chunk header).
-        const std::map<std::uint32_t, std::string> &nameTable() const {
+        const std::map<std::uint32_t, std::string>& nameTable() const {
             return this->names;
         }
         std::size_t tableEnd() const {

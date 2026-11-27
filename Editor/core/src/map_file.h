@@ -47,7 +47,7 @@ namespace end_editor {
 
     struct MapObject {
         float x = 0, y = 0, z = 0;  // z: height above the ground
-        float angle = 0;            // radians about Z
+        float angle = 0;  // radians about Z
         std::int32_t flags = 0;
         std::string templateName;
         Dict properties;
@@ -142,8 +142,8 @@ namespace end_editor {
 
     // Parses a .map file (compressed or not). Returns false and sets `error` when the file cannot
     // be read at all; damaged or unexpected parts that can be skipped become warnings.
-    bool parseMap(std::string_view bytes, MapFile &map, std::string &error);
+    bool parseMap(std::string_view bytes, MapFile& map, std::string& error);
 
     // Height of the ground at a world position (bilinear over the height map, in world units).
-    float groundHeight(const MapFile &map, float x, float y);
+    float groundHeight(const MapFile& map, float x, float y);
 }

@@ -6,10 +6,10 @@
 namespace end_editor {
 
     namespace {
-        void appendUtf8(std::string &out, std::uint32_t c) {
-            if(c < 0x80) {
+        void appendUtf8(std::string& out, std::uint32_t c) {
+            if (c < 0x80) {
                 out.push_back(char(c));
-            } else if(c < 0x800) {
+            } else if (c < 0x800) {
                 out.push_back(char(0xC0 | (c >> 6)));
                 out.push_back(char(0x80 | (c & 0x3F)));
             } else {
@@ -21,7 +21,7 @@ namespace end_editor {
     }
 
     std::string DictValue::toString() const {
-        switch(this->type) {
+        switch (this->type) {
             case boolean:
                 return this->intValue ? "true" : "false";
             case integer:
@@ -29,10 +29,10 @@ namespace end_editor {
             case real: {
                 std::string text = std::to_string(this->realValue);
                 // "1.500000" -> "1.5"
-                while(text.size() > 1 && text.back() == '0' && text.find('.') != std::string::npos) {
+                while (text.size() > 1 && text.back() == '0' && text.find('.') != std::string::npos) {
                     text.pop_back();
                 }
-                if(!text.empty() && text.back() == '.') {
+                if (!text.empty() && text.back() == '.') {
                     text.pop_back();
                 }
                 return text;
@@ -44,17 +44,17 @@ namespace end_editor {
         return {};
     }
 
-    const DictValue *findDictValue(const Dict &dict, std::string_view key) {
-        for(const auto &value: dict) {
-            if(value.key == key) {
+    const DictValue* findDictValue(const Dict& dict, std::string_view key) {
+        for (const auto& value: dict) {
+            if (value.key == key) {
                 return &value;
             }
         }
         return nullptr;
     }
 
-    const char *dictTypeName(DictValue::Type type) {
-        switch(type) {
+    const char* dictTypeName(DictValue::Type type) {
+        switch (type) {
             case DictValue::boolean:
                 return "bool";
             case DictValue::integer:
@@ -70,15 +70,15 @@ namespace end_editor {
     }
 
     DataChunkReader::DataChunkReader(std::string_view bytes) : data(bytes) {
-        if(bytes.size() < 8 || bytes.substr(0, 4) != "CkMp") {
+        if (bytes.size() < 8 || bytes.substr(0, 4) != "CkMp") {
             throw ChunkError("not a chunk file (no CkMp header)");
         }
         this->position = 4;
         const auto count = this->readInt();
-        if(count < 0 || std::size_t(count) > bytes.size()) {
+        if (count < 0 || std::size_t(count) > bytes.size()) {
             throw ChunkError("bad table of contents");
         }
-        for(std::int32_t i = 0; i < count; ++i) {
+        for (std::int32_t i = 0; i < count; ++i) {
             const auto length = this->readByte();
             auto name = this->readBytes(length);
             const auto id = std::uint32_t(this->readInt());
@@ -87,9 +87,9 @@ namespace end_editor {
         this->tocEnd = this->position;
     }
 
-    const std::string &DataChunkReader::nameOf(std::uint32_t id) const {
+    const std::string& DataChunkReader::nameOf(std::uint32_t id) const {
         const auto found = this->names.find(id);
-        if(found == this->names.end()) {
+        if (found == this->names.end()) {
             throw ChunkError("unknown name id " + std::to_string(id));
         }
         return found->second;
@@ -101,14 +101,14 @@ namespace end_editor {
     }
 
     void DataChunkReader::need(std::size_t count) const {
-        if(count > this->left()) {
+        if (count > this->left()) {
             throw ChunkError(this->open.empty() ? std::string("file ends early")
                                                 : "read past the end of chunk " + this->open.back().name);
         }
     }
 
-    bool DataChunkReader::openChunk(Chunk &chunk) {
-        if(this->left() < headerBytes) {
+    bool DataChunkReader::openChunk(Chunk& chunk) {
+        if (this->left() < headerBytes) {
             return false;
         }
         const auto id = std::uint32_t(this->readInt());
@@ -116,7 +116,7 @@ namespace end_editor {
         std::memcpy(&version, this->data.data() + this->position, 2);
         this->position += 2;
         const auto size = this->readInt();
-        if(size < 0 || std::size_t(size) > this->left()) {
+        if (size < 0 || std::size_t(size) > this->left()) {
             throw ChunkError("chunk " + std::to_string(id) + " is larger than its parent");
         }
         chunk.name = this->nameOf(id);
@@ -128,7 +128,7 @@ namespace end_editor {
     }
 
     void DataChunkReader::closeChunk() {
-        if(this->open.empty()) {
+        if (this->open.empty()) {
             return;
         }
         this->position = std::max(this->position, this->open.back().end);
@@ -136,7 +136,7 @@ namespace end_editor {
     }
 
     void DataChunkReader::closeChunksTo(std::size_t depth) {
-        while(this->open.size() > depth) {
+        while (this->open.size() > depth) {
             this->closeChunk();
         }
     }
@@ -184,9 +184,9 @@ namespace end_editor {
         this->position += 2;
         const auto raw = this->readBytes(std::size_t(length) * 2);
         std::string result;
-        for(std::size_t i = 0; i + 1 < raw.size(); i += 2) {
+        for (std::size_t i = 0; i + 1 < raw.size(); i += 2) {
             std::uint32_t c = std::uint8_t(raw[i]) | (std::uint32_t(std::uint8_t(raw[i + 1])) << 8);
-            if(c >= 0xD800 && c <= 0xDFFF) {
+            if (c >= 0xD800 && c <= 0xDFFF) {
                 c = 0xFFFD;  // the game has no surrogate pairs
             }
             appendUtf8(result, c);
@@ -201,11 +201,11 @@ namespace end_editor {
         this->position += 2;
         Dict dict;
         dict.reserve(count);
-        for(std::uint16_t i = 0; i < count; ++i) {
+        for (std::uint16_t i = 0; i < count; ++i) {
             const auto keyAndType = std::uint32_t(this->readInt());
             DictValue value;
             value.key = this->nameOf(keyAndType >> 8);
-            switch(keyAndType & 0xFF) {
+            switch (keyAndType & 0xFF) {
                 case DictValue::boolean:
                     value.type = DictValue::boolean;
                     value.intValue = this->readByte() ? 1 : 0;

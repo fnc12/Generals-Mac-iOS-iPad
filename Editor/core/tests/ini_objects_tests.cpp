@@ -6,7 +6,7 @@ using namespace end_editor;
 
 namespace {
     // Written in the style of the game's object INI files (made up, not copied).
-    constexpr const char *sampleIni = R"(
+    constexpr const char* sampleIni = R"(
 ;------------------------------------------------------------------------------
 Object TestBoat
   ; *** ART Parameters ***
@@ -81,7 +81,7 @@ TEST_CASE("Object blocks and their fields") {
     REQUIRE(result.warnings.empty());
     REQUIRE(result.objects.size() == 4);
 
-    const auto &boat = result.objects[0];
+    const auto& boat = result.objects[0];
     CHECK(boat.name == "TestBoat");
     CHECK(boat.definition == "Object");
     CHECK(boat.parent.empty());
@@ -106,10 +106,10 @@ TEST_CASE("Object blocks and their fields") {
 TEST_CASE("Reskins and child objects inherit missing fields") {
     auto objects = parseObjects(sampleIni, "test.ini").objects;
     resolveInheritance(objects);
-    const auto &red = objects[1];
+    const auto& red = objects[1];
     CHECK(red.side == "Civilian");
     CHECK(red.model == "TBoatRed");  // its own model is kept
-    const auto &child = objects[2];
+    const auto& child = objects[2];
     CHECK(child.side == "America");  // its own side is kept
     CHECK(child.model == "TBoatRed");  // from the parent
     CHECK(child.muzzleFlashes == "GunFX RocketFX");  // from the grandparent

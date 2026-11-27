@@ -23,19 +23,19 @@ namespace end_editor {
     class BigArchive {
       public:
         // Returns nullopt and fills `error` when the file is not a valid archive.
-        static std::optional<BigArchive> open(const std::filesystem::path &path, std::string &error);
+        static std::optional<BigArchive> open(const std::filesystem::path& path, std::string& error);
 
-        const std::filesystem::path &path() const {
+        const std::filesystem::path& path() const {
             return this->filePath;
         }
-        const std::vector<BigEntry> &entries() const {
+        const std::vector<BigEntry>& entries() const {
             return this->fileEntries;
         }
 
         // Reads one entry's bytes. Returns false on an I/O error.
-        bool read(const BigEntry &entry, std::string &out) const;
+        bool read(const BigEntry& entry, std::string& out) const;
         // Reads at most the first `maxBytes` bytes of an entry.
-        bool readPrefix(const BigEntry &entry, std::uint32_t maxBytes, std::string &out) const;
+        bool readPrefix(const BigEntry& entry, std::uint32_t maxBytes, std::string& out) const;
 
       private:
         std::filesystem::path filePath;

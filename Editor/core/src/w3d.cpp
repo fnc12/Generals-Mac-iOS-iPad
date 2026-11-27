@@ -55,10 +55,17 @@ namespace end_editor {
         // W3DVERTMAT_STAGE0_MAPPING_* values (w3d_file.h) that map the texture from the view
         // direction (reflections) instead of the mesh's UVs.
         bool isEnvironmentMapping(std::uint32_t mapping) {
-            switch(mapping) {
-                case 0x01: case 0x02: case 0x03:              // ENVIRONMENT, CHEAP_ENVIRONMENT, SCREEN
-                case 0x0C: case 0x0D: case 0x0E: case 0x0F:   // WS_CLASSIC_ENV, WS_ENVIRONMENT, GRID_*_ENV
-                case 0x12: case 0x13: case 0x14:              // BUMPENV, GRID_WS_*
+            switch (mapping) {
+                case 0x01:
+                case 0x02:
+                case 0x03:  // ENVIRONMENT, CHEAP_ENVIRONMENT, SCREEN
+                case 0x0C:
+                case 0x0D:
+                case 0x0E:
+                case 0x0F:  // WS_CLASSIC_ENV, WS_ENVIRONMENT, GRID_*_ENV
+                case 0x12:
+                case 0x13:
+                case 0x14:  // BUMPENV, GRID_WS_*
                     return true;
                 default:
                     return false;
@@ -70,14 +77,14 @@ namespace end_editor {
         template<class T>
         T get(std::string_view data, std::size_t offset) {
             T value{};
-            if(offset + sizeof(T) <= data.size()) {
+            if (offset + sizeof(T) <= data.size()) {
                 std::memcpy(&value, data.data() + offset, sizeof(T));
             }
             return value;
         }
 
         std::string getName(std::string_view data, std::size_t offset, std::size_t length) {
-            if(offset >= data.size()) {
+            if (offset >= data.size()) {
                 return {};
             }
             const auto field = data.substr(offset, length);
@@ -91,12 +98,12 @@ namespace end_editor {
 
         // Splits `data` into chunks. Returns false (and adds a warning) when a chunk overruns.
         template<class F>
-        bool forEachChunk(std::string_view data, std::vector<std::string> &warnings, F &&visit) {
+        bool forEachChunk(std::string_view data, std::vector<std::string>& warnings, F&& visit) {
             std::size_t offset = 0;
-            while(offset + 8 <= data.size()) {
+            while (offset + 8 <= data.size()) {
                 const auto type = get<std::uint32_t>(data, offset);
                 const auto size = get<std::uint32_t>(data, offset + 4) & 0x7FFFFFFFu;  // top bit: has sub-chunks
-                if(offset + 8 + std::uint64_t(size) > data.size()) {
+                if (offset + 8 + std::uint64_t(size) > data.size()) {
                     char text[64];
                     std::snprintf(text, sizeof(text), "chunk 0x%X overruns its parent", unsigned(type));
                     warnings.push_back(text);
@@ -112,13 +119,13 @@ namespace end_editor {
         std::vector<T> getArray(std::string_view data, std::size_t count, std::size_t stride = sizeof(T)) {
             count = std::min(count, data.size() / stride);
             std::vector<T> result(count);
-            for(std::size_t i = 0; i < count; ++i) {
+            for (std::size_t i = 0; i < count; ++i) {
                 result[i] = get<T>(data, i * stride);
             }
             return result;
         }
 
-        W3dMesh parseMesh(std::string_view data, std::vector<std::string> &warnings) {
+        W3dMesh parseMesh(std::string_view data, std::vector<std::string>& warnings) {
             W3dMesh mesh;
             std::uint32_t triangleCount = 0;
             // A material pass as stored; one of them is drawn (see below).
@@ -129,8 +136,8 @@ namespace end_editor {
             };
             std::vector<Pass> passes;
             std::vector<std::uint32_t> materialMappings;  // stage-0 mapping of each vertex material
-            forEachChunk(data, warnings, [&](const Chunk &chunk) {
-                switch(chunk.type) {
+            forEachChunk(data, warnings, [&](const Chunk& chunk) {
+                switch (chunk.type) {
                     case chunkMeshHeader3:
                         mesh.attributes = get<std::uint32_t>(chunk.data, 4);
                         mesh.name = getName(chunk.data, 8, nameLength);
@@ -149,21 +156,21 @@ namespace end_editor {
                     case chunkTriangles: {
                         const std::size_t count = chunk.data.size() / 32;
                         mesh.indices.resize(count * 3);
-                        for(std::size_t i = 0; i < count; ++i) {
-                            for(std::size_t k = 0; k < 3; ++k) {
+                        for (std::size_t i = 0; i < count; ++i) {
+                            for (std::size_t k = 0; k < 3; ++k) {
                                 mesh.indices[i * 3 + k] = get<std::uint32_t>(chunk.data, i * 32 + k * 4);
                             }
                         }
                         break;
                     }
                     case chunkTextures:
-                        forEachChunk(chunk.data, warnings, [&](const Chunk &texture) {
-                            if(texture.type != chunkTexture) {
+                        forEachChunk(chunk.data, warnings, [&](const Chunk& texture) {
+                            if (texture.type != chunkTexture) {
                                 return;
                             }
                             std::string name;
-                            forEachChunk(texture.data, warnings, [&](const Chunk &field) {
-                                if(field.type == chunkTextureName) {
+                            forEachChunk(texture.data, warnings, [&](const Chunk& field) {
+                                if (field.type == chunkTextureName) {
                                     name = getName(field.data, 0, field.data.size());
                                 }
                             });
@@ -171,18 +178,18 @@ namespace end_editor {
                         });
                         break;
                     case chunkShaders:
-                        for(std::size_t offset = 0; offset + 16 <= chunk.data.size(); offset += 16) {
+                        for (std::size_t offset = 0; offset + 16 <= chunk.data.size(); offset += 16) {
                             mesh.shaders.push_back(blendOfShader(chunk.data.substr(offset, 16)));
                         }
                         break;
                     case chunkVertexMaterials:
-                        forEachChunk(chunk.data, warnings, [&](const Chunk &material) {
-                            if(material.type != chunkVertexMaterial) {
+                        forEachChunk(chunk.data, warnings, [&](const Chunk& material) {
+                            if (material.type != chunkVertexMaterial) {
                                 return;
                             }
                             std::uint32_t attributes = 0;
-                            forEachChunk(material.data, warnings, [&](const Chunk &field) {
-                                if(field.type == chunkVertexMaterialInfo && field.data.size() >= 4) {
+                            forEachChunk(material.data, warnings, [&](const Chunk& field) {
+                                if (field.type == chunkVertexMaterialInfo && field.data.size() >= 4) {
                                     attributes = get<std::uint32_t>(field.data, 0);
                                 }
                             });
@@ -191,18 +198,18 @@ namespace end_editor {
                         break;
                     case chunkMaterialPass: {
                         Pass pass;
-                        forEachChunk(chunk.data, warnings, [&](const Chunk &field) {
-                            if(field.type == chunkVertexMaterialIds) {
+                        forEachChunk(chunk.data, warnings, [&](const Chunk& field) {
+                            if (field.type == chunkVertexMaterialIds) {
                                 pass.materialIds = getArray<std::uint32_t>(field.data, field.data.size() / 4);
-                            } else if(field.type == chunkShaderIds) {
+                            } else if (field.type == chunkShaderIds) {
                                 pass.shaderIds = getArray<std::uint32_t>(field.data, field.data.size() / 4);
-                            } else if(field.type == chunkTextureStage && !pass.hasStage) {
+                            } else if (field.type == chunkTextureStage && !pass.hasStage) {
                                 // The preview draws the first texture stage only.
                                 pass.hasStage = true;
-                                forEachChunk(field.data, warnings, [&](const Chunk &stage) {
-                                    if(stage.type == chunkTextureIds) {
+                                forEachChunk(field.data, warnings, [&](const Chunk& stage) {
+                                    if (stage.type == chunkTextureIds) {
                                         pass.textureIds = getArray<std::uint32_t>(stage.data, stage.data.size() / 4);
-                                    } else if(stage.type == chunkStageTexcoords) {
+                                    } else if (stage.type == chunkStageTexcoords) {
                                         pass.uvs = getArray<float>(stage.data, stage.data.size() / 4);
                                     }
                                 });
@@ -220,26 +227,26 @@ namespace end_editor {
             // an environment-mapped reflection pass (a sky such as LAKEDUSK.tga) and lay the real
             // texture over it in an alpha-blended second pass: draw the first pass that is not a
             // reflection, and draw it opaque, since the reflection it was blended onto is gone.
-            const auto isReflection = [&](const Pass &pass) {
+            const auto isReflection = [&](const Pass& pass) {
                 return std::any_of(pass.materialIds.begin(), pass.materialIds.end(), [&](std::uint32_t id) {
                     return id < materialMappings.size() && isEnvironmentMapping(materialMappings[id]);
                 });
             };
             std::size_t drawn = 0;
-            while(drawn < passes.size() && isReflection(passes[drawn])) {
+            while (drawn < passes.size() && isReflection(passes[drawn])) {
                 ++drawn;
             }
-            if(drawn == passes.size()) {
+            if (drawn == passes.size()) {
                 drawn = 0;  // reflections only: keep the first, as before
             }
-            if(drawn < passes.size()) {
-                auto &pass = passes[drawn];
+            if (drawn < passes.size()) {
+                auto& pass = passes[drawn];
                 mesh.triangleShaders = std::move(pass.shaderIds);
                 mesh.triangleTextures = std::move(pass.textureIds);
                 mesh.uvs = std::move(pass.uvs);
-                if(drawn > 0) {
-                    for(const std::uint32_t id: mesh.triangleShaders) {
-                        if(id < mesh.shaders.size() && mesh.shaders[id] == W3dBlend::alphaBlend) {
+                if (drawn > 0) {
+                    for (const std::uint32_t id: mesh.triangleShaders) {
+                        if (id < mesh.shaders.size() && mesh.shaders[id] == W3dBlend::alphaBlend) {
                             mesh.shaders[id] = W3dBlend::opaque;
                         }
                     }
@@ -249,59 +256,60 @@ namespace end_editor {
             // Drop what does not fit together instead of letting a renderer read out of bounds.
             const std::size_t vertexCount = mesh.positions.size() / 3;
             mesh.positions.resize(vertexCount * 3);
-            if(mesh.normals.size() != vertexCount * 3) {
+            if (mesh.normals.size() != vertexCount * 3) {
                 mesh.normals.assign(vertexCount * 3, 0.0f);
             }
-            if(mesh.uvs.size() != vertexCount * 2) {
+            if (mesh.uvs.size() != vertexCount * 2) {
                 mesh.uvs.clear();
             }
-            if(mesh.boneIds.size() != vertexCount) {
+            if (mesh.boneIds.size() != vertexCount) {
                 mesh.boneIds.clear();
             }
-            const bool badIndex = std::any_of(mesh.indices.begin(), mesh.indices.end(),
-                                              [&](std::uint32_t index) { return index >= vertexCount; });
-            if(badIndex) {
+            const bool badIndex = std::any_of(mesh.indices.begin(), mesh.indices.end(), [&](std::uint32_t index) {
+                return index >= vertexCount;
+            });
+            if (badIndex) {
                 warnings.push_back("mesh " + mesh.fullName() + ": triangle index out of range");
                 mesh.indices.clear();
             }
             const std::size_t triangles = mesh.indices.size() / 3;
-            if(triangleCount != 0 && triangleCount != triangles && !badIndex) {
+            if (triangleCount != 0 && triangleCount != triangles && !badIndex) {
                 warnings.push_back("mesh " + mesh.fullName() + ": triangle count differs from the header");
             }
-            if(mesh.triangleTextures.size() == 1) {
+            if (mesh.triangleTextures.size() == 1) {
                 const std::uint32_t only = mesh.triangleTextures[0];  // a copy: assign() reallocates
                 mesh.triangleTextures.assign(triangles, only);
             }
-            if(mesh.triangleTextures.size() != triangles) {
+            if (mesh.triangleTextures.size() != triangles) {
                 mesh.triangleTextures.clear();
             }
-            if(mesh.triangleShaders.size() == 1) {
+            if (mesh.triangleShaders.size() == 1) {
                 const std::uint32_t only = mesh.triangleShaders[0];
                 mesh.triangleShaders.assign(triangles, only);
             }
-            if(mesh.triangleShaders.size() != triangles) {
+            if (mesh.triangleShaders.size() != triangles) {
                 mesh.triangleShaders.clear();
             }
             return mesh;
         }
 
-        W3dHierarchy parseHierarchy(std::string_view data, std::vector<std::string> &warnings) {
+        W3dHierarchy parseHierarchy(std::string_view data, std::vector<std::string>& warnings) {
             W3dHierarchy hierarchy;
-            forEachChunk(data, warnings, [&](const Chunk &chunk) {
-                if(chunk.type == chunkHierarchyHeader) {
+            forEachChunk(data, warnings, [&](const Chunk& chunk) {
+                if (chunk.type == chunkHierarchyHeader) {
                     hierarchy.name = getName(chunk.data, 4, nameLength);
-                } else if(chunk.type == chunkPivots) {
+                } else if (chunk.type == chunkPivots) {
                     constexpr std::size_t stride = 60;  // W3dPivotStruct
-                    for(std::size_t offset = 0; offset + stride <= chunk.data.size(); offset += stride) {
+                    for (std::size_t offset = 0; offset + stride <= chunk.data.size(); offset += stride) {
                         W3dPivot pivot;
                         pivot.name = getName(chunk.data, offset, nameLength);
                         const auto parent = get<std::uint32_t>(chunk.data, offset + 16);
                         pivot.parent = parent == 0xFFFFFFFFu ? -1 : int(parent);
-                        for(std::size_t k = 0; k < 3; ++k) {
+                        for (std::size_t k = 0; k < 3; ++k) {
                             pivot.translation[k] = get<float>(chunk.data, offset + 20 + k * 4);
                         }
                         // offset + 32: Euler angles, the same orientation as the quaternion
-                        for(std::size_t k = 0; k < 4; ++k) {
+                        for (std::size_t k = 0; k < 4; ++k) {
                             pivot.rotation[k] = get<float>(chunk.data, offset + 44 + k * 4);
                         }
                         hierarchy.pivots.push_back(std::move(pivot));
@@ -311,25 +319,26 @@ namespace end_editor {
             return hierarchy;
         }
 
-        void addSubObjects(std::string_view data, std::vector<W3dSubObject> &out, std::vector<std::string> &warnings) {
-            forEachChunk(data, warnings, [&](const Chunk &chunk) {
-                if(chunk.type == chunkHlodSubObject) {
-                    out.push_back(W3dSubObject{get<std::uint32_t>(chunk.data, 0), getName(chunk.data, 4, nameLength * 2)});
+        void addSubObjects(std::string_view data, std::vector<W3dSubObject>& out, std::vector<std::string>& warnings) {
+            forEachChunk(data, warnings, [&](const Chunk& chunk) {
+                if (chunk.type == chunkHlodSubObject) {
+                    out.push_back(
+                        W3dSubObject{get<std::uint32_t>(chunk.data, 0), getName(chunk.data, 4, nameLength * 2)});
                 }
             });
         }
 
-        W3dHlod parseHlod(std::string_view data, std::vector<std::string> &warnings) {
+        W3dHlod parseHlod(std::string_view data, std::vector<std::string>& warnings) {
             W3dHlod hlod;
             std::string_view topLod;
             std::vector<W3dSubObject> aggregates;
-            forEachChunk(data, warnings, [&](const Chunk &chunk) {
-                if(chunk.type == chunkHlodHeader) {
+            forEachChunk(data, warnings, [&](const Chunk& chunk) {
+                if (chunk.type == chunkHlodHeader) {
                     hlod.name = getName(chunk.data, 8, nameLength);
                     hlod.hierarchy = getName(chunk.data, 24, nameLength);
-                } else if(chunk.type == chunkHlodLodArray) {
+                } else if (chunk.type == chunkHlodLodArray) {
                     topLod = chunk.data;  // arrays go from the least to the most detailed
-                } else if(chunk.type == chunkHlodAggregateArray) {
+                } else if (chunk.type == chunkHlodAggregateArray) {
                     addSubObjects(chunk.data, aggregates, warnings);
                 }
             });
@@ -339,98 +348,102 @@ namespace end_editor {
         }
 
         // Makes the per-pivot arrays of `animation` large enough for `pivot`.
-        void reservePivot(W3dAnimation &animation, std::size_t pivot) {
-            if(animation.translation.size() <= pivot) {
+        void reservePivot(W3dAnimation& animation, std::size_t pivot) {
+            if (animation.translation.size() <= pivot) {
                 animation.translation.resize(pivot + 1);
                 animation.rotation.resize(pivot + 1);
                 animation.visible.resize(pivot + 1);
             }
         }
 
-        std::vector<float> &translationOf(W3dAnimation &animation, std::size_t pivot) {
+        std::vector<float>& translationOf(W3dAnimation& animation, std::size_t pivot) {
             reservePivot(animation, pivot);
-            auto &values = animation.translation[pivot];
-            if(values.empty()) {
+            auto& values = animation.translation[pivot];
+            if (values.empty()) {
                 values.assign(std::size_t(animation.frameCount) * 3, 0.0f);
             }
             return values;
         }
 
-        std::vector<float> &rotationOf(W3dAnimation &animation, std::size_t pivot) {
+        std::vector<float>& rotationOf(W3dAnimation& animation, std::size_t pivot) {
             reservePivot(animation, pivot);
-            auto &values = animation.rotation[pivot];
-            if(values.empty()) {
+            auto& values = animation.rotation[pivot];
+            if (values.empty()) {
                 values.resize(std::size_t(animation.frameCount) * 4);
-                for(std::size_t f = 0; f < animation.frameCount; ++f) {
+                for (std::size_t f = 0; f < animation.frameCount; ++f) {
                     values[f * 4 + 3] = 1.0f;
                 }
             }
             return values;
         }
 
-        std::vector<std::uint8_t> &visibleOf(W3dAnimation &animation, std::size_t pivot) {
+        std::vector<std::uint8_t>& visibleOf(W3dAnimation& animation, std::size_t pivot) {
             reservePivot(animation, pivot);
-            auto &values = animation.visible[pivot];
-            if(values.empty()) {
+            auto& values = animation.visible[pivot];
+            if (values.empty()) {
                 values.assign(animation.frameCount, 1);
             }
             return values;
         }
 
         // Writes `count` floats for one frame into the right place of a channel.
-        void storeFrame(W3dAnimation &animation, std::uint16_t type, std::size_t pivot, std::uint32_t frame,
-                        const float *values, std::size_t count) {
-            if(type == channelQ && count == 4) {
-                auto &target = rotationOf(animation, pivot);
+        void storeFrame(W3dAnimation& animation,
+                        std::uint16_t type,
+                        std::size_t pivot,
+                        std::uint32_t frame,
+                        const float* values,
+                        std::size_t count) {
+            if (type == channelQ && count == 4) {
+                auto& target = rotationOf(animation, pivot);
                 std::copy(values, values + 4, target.begin() + std::ptrdiff_t(frame) * 4);
-            } else if(type <= channelZ && count == 1) {
+            } else if (type <= channelZ && count == 1) {
                 translationOf(animation, pivot)[std::size_t(frame) * 3 + type] = values[0];
             }
             // Euler channels (XR, YR, ZR) are not used by the engine's raw animations.
         }
 
-        void parseRawChannel(W3dAnimation &animation, std::string_view data, std::vector<std::string> &warnings) {
+        void parseRawChannel(W3dAnimation& animation, std::string_view data, std::vector<std::string>& warnings) {
             const auto first = get<std::uint16_t>(data, 0);
             const auto last = get<std::uint16_t>(data, 2);
             const auto vectorLength = get<std::uint16_t>(data, 4);
             const auto type = get<std::uint16_t>(data, 6);
             const auto pivot = get<std::uint16_t>(data, 8);
-            if(last < first || vectorLength == 0 || vectorLength > 4) {
+            if (last < first || vectorLength == 0 || vectorLength > 4) {
                 return;
             }
             // The exporter sometimes wrote extra data at the end, so the size is checked, not matched.
             const std::size_t frames = std::size_t(last - first) + 1;
-            if(12 + frames * vectorLength * 4 > data.size()) {
+            if (12 + frames * vectorLength * 4 > data.size()) {
                 warnings.push_back("animation " + animation.name + ": short channel");
                 return;
             }
-            if(type != channelQ && type > channelZ) {
+            if (type != channelQ && type > channelZ) {
                 return;
             }
             // Frames outside [first, last] keep the identity the arrays start with.
-            if(type == channelQ) {
+            if (type == channelQ) {
                 rotationOf(animation, pivot);
             } else {
                 translationOf(animation, pivot);
             }
-            for(std::size_t i = 0; i < frames && first + i < animation.frameCount; ++i) {
+            for (std::size_t i = 0; i < frames && first + i < animation.frameCount; ++i) {
                 float values[4];
-                for(std::size_t k = 0; k < vectorLength; ++k) {
+                for (std::size_t k = 0; k < vectorLength; ++k) {
                     values[k] = get<float>(data, 12 + (i * vectorLength + k) * 4);
                 }
                 storeFrame(animation, type, pivot, std::uint32_t(first + i), values, vectorLength);
             }
         }
 
-        void parseRawBitChannel(W3dAnimation &animation, std::string_view data) {
+        void parseRawBitChannel(W3dAnimation& animation, std::string_view data) {
             const auto first = get<std::uint16_t>(data, 0);
             const auto last = get<std::uint16_t>(data, 2);
             const auto pivot = get<std::uint16_t>(data, 6);
             const auto defaultValue = get<std::uint8_t>(data, 8);
-            auto &visible = visibleOf(animation, pivot);
-            for(std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
+            auto& visible = visibleOf(animation, pivot);
+            for (std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
                 std::uint8_t value = defaultValue ? 1 : 0;
-                if(frame >= first && frame <= last) {
+                if (frame >= first && frame <= last) {
                     const std::size_t bit = frame - first;
                     value = (get<std::uint8_t>(data, 9 + bit / 8) >> (bit % 8)) & 1;
                 }
@@ -440,35 +453,41 @@ namespace end_editor {
 
         // A time-coded channel: packets of [time code, value...]; values between two packets are
         // interpolated unless the second packet has the "binary movement" flag.
-        void parseTimeCodedChannel(W3dAnimation &animation, std::string_view data, std::vector<std::string> &warnings) {
+        void parseTimeCodedChannel(W3dAnimation& animation, std::string_view data, std::vector<std::string>& warnings) {
             const auto count = get<std::uint32_t>(data, 0);
             const auto pivot = get<std::uint16_t>(data, 4);
             const auto vectorLength = get<std::uint8_t>(data, 6);
             const auto type = get<std::uint8_t>(data, 7);
-            if(count == 0 || vectorLength == 0 || vectorLength > 4) {
+            if (count == 0 || vectorLength == 0 || vectorLength > 4) {
                 return;
             }
             const std::size_t packet = std::size_t(vectorLength) + 1;
-            if(8 + std::uint64_t(count) * packet * 4 > data.size()) {
+            if (8 + std::uint64_t(count) * packet * 4 > data.size()) {
                 warnings.push_back("animation " + animation.name + ": short time-coded channel");
                 return;
             }
-            if(type != channelQ && type > channelZ) {
+            if (type != channelQ && type > channelZ) {
                 return;
             }
-            const auto timeAt = [&](std::size_t i) { return get<std::uint32_t>(data, 8 + i * packet * 4) & ~timeCodeFlag; };
-            const auto flagAt = [&](std::size_t i) { return (get<std::uint32_t>(data, 8 + i * packet * 4) & timeCodeFlag) != 0; };
-            const auto valueAt = [&](std::size_t i, std::size_t k) { return get<float>(data, 8 + (i * packet + 1 + k) * 4); };
+            const auto timeAt = [&](std::size_t i) {
+                return get<std::uint32_t>(data, 8 + i * packet * 4) & ~timeCodeFlag;
+            };
+            const auto flagAt = [&](std::size_t i) {
+                return (get<std::uint32_t>(data, 8 + i * packet * 4) & timeCodeFlag) != 0;
+            };
+            const auto valueAt = [&](std::size_t i, std::size_t k) {
+                return get<float>(data, 8 + (i * packet + 1 + k) * 4);
+            };
 
             std::size_t index = 0;
-            for(std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
-                while(index + 1 < count && timeAt(index + 1) <= frame) {
+            for (std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
+                while (index + 1 < count && timeAt(index + 1) <= frame) {
                     ++index;
                 }
                 float values[4];
                 const bool hold = index + 1 >= count || flagAt(index + 1) || frame <= timeAt(index);
-                if(hold) {
-                    for(std::size_t k = 0; k < vectorLength; ++k) {
+                if (hold) {
+                    for (std::size_t k = 0; k < vectorLength; ++k) {
                         values[k] = valueAt(index, k);
                     }
                 } else {
@@ -476,19 +495,19 @@ namespace end_editor {
                     const float t1 = float(timeAt(index + 1));
                     const float ratio = t1 > t0 ? (float(frame) - t0) / (t1 - t0) : 0.0f;
                     float dot = 0.0f;
-                    for(std::size_t k = 0; k < vectorLength; ++k) {
+                    for (std::size_t k = 0; k < vectorLength; ++k) {
                         dot += valueAt(index, k) * valueAt(index + 1, k);
                     }
                     // Quaternions take the short way round.
                     const float sign = (type == channelQ && dot < 0.0f) ? -1.0f : 1.0f;
                     float length = 0.0f;
-                    for(std::size_t k = 0; k < vectorLength; ++k) {
+                    for (std::size_t k = 0; k < vectorLength; ++k) {
                         values[k] = valueAt(index, k) + (sign * valueAt(index + 1, k) - valueAt(index, k)) * ratio;
                         length += values[k] * values[k];
                     }
-                    if(type == channelQ && length > 0.0f) {
+                    if (type == channelQ && length > 0.0f) {
                         const float scale = 1.0f / std::sqrt(length);
-                        for(auto &value: values) {
+                        for (auto& value: values) {
                             value *= scale;
                         }
                     }
@@ -497,36 +516,36 @@ namespace end_editor {
             }
         }
 
-        void parseTimeCodedBitChannel(W3dAnimation &animation, std::string_view data) {
+        void parseTimeCodedBitChannel(W3dAnimation& animation, std::string_view data) {
             const auto count = get<std::uint32_t>(data, 0);
             const auto pivot = get<std::uint16_t>(data, 4);
-            if(count == 0 || 8 + std::uint64_t(count) * 4 > data.size()) {
+            if (count == 0 || 8 + std::uint64_t(count) * 4 > data.size()) {
                 return;
             }
-            auto &visible = visibleOf(animation, pivot);
+            auto& visible = visibleOf(animation, pivot);
             std::size_t index = 0;
-            for(std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
-                while(index + 1 < count && (get<std::uint32_t>(data, 8 + (index + 1) * 4) & ~timeCodeFlag) <= frame) {
+            for (std::uint32_t frame = 0; frame < animation.frameCount; ++frame) {
+                while (index + 1 < count && (get<std::uint32_t>(data, 8 + (index + 1) * 4) & ~timeCodeFlag) <= frame) {
                     ++index;
                 }
                 visible[frame] = (get<std::uint32_t>(data, 8 + index * 4) & timeCodeFlag) ? 1 : 0;
             }
         }
 
-        W3dAnimation parseAnimation(std::string_view data, bool compressed, std::vector<std::string> &warnings) {
+        W3dAnimation parseAnimation(std::string_view data, bool compressed, std::vector<std::string>& warnings) {
             W3dAnimation animation;
             std::uint16_t flavor = flavorTimeCoded;
-            forEachChunk(data, warnings, [&](const Chunk &chunk) {
-                switch(chunk.type) {
+            forEachChunk(data, warnings, [&](const Chunk& chunk) {
+                switch (chunk.type) {
                     case chunkAnimationHeader:
                     case chunkCompressedAnimationHeader:
                         animation.name = getName(chunk.data, 4, nameLength);
                         animation.hierarchy = getName(chunk.data, 20, nameLength);
                         animation.frameCount = std::min<std::uint32_t>(get<std::uint32_t>(chunk.data, 36), 100000);
-                        if(compressed) {
+                        if (compressed) {
                             animation.frameRate = get<std::uint16_t>(chunk.data, 40);
                             flavor = get<std::uint16_t>(chunk.data, 42);
-                            if(flavor != flavorTimeCoded) {
+                            if (flavor != flavorTimeCoded) {
                                 warnings.push_back("animation " + animation.name +
                                                    ": adaptive-delta compression is not supported");
                             }
@@ -541,12 +560,12 @@ namespace end_editor {
                         parseRawBitChannel(animation, chunk.data);
                         break;
                     case chunkCompressedAnimationChannel:
-                        if(flavor == flavorTimeCoded) {
+                        if (flavor == flavorTimeCoded) {
                             parseTimeCodedChannel(animation, chunk.data, warnings);
                         }
                         break;
                     case chunkCompressedBitChannel:
-                        if(flavor == flavorTimeCoded) {
+                        if (flavor == flavorTimeCoded) {
                             parseTimeCodedBitChannel(animation, chunk.data);
                         }
                         break;
@@ -554,7 +573,7 @@ namespace end_editor {
                         break;
                 }
             });
-            if(animation.frameRate == 0) {
+            if (animation.frameRate == 0) {
                 animation.frameRate = 30;
             }
             return animation;
@@ -564,12 +583,12 @@ namespace end_editor {
             return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         }
 
-        Matrix4 multiply(const Matrix4 &a, const Matrix4 &b) {
+        Matrix4 multiply(const Matrix4& a, const Matrix4& b) {
             Matrix4 r{};
-            for(int column = 0; column < 4; ++column) {
-                for(int row = 0; row < 4; ++row) {
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
                     float sum = 0.0f;
-                    for(int k = 0; k < 4; ++k) {
+                    for (int k = 0; k < 4; ++k) {
                         sum += a[k * 4 + row] * b[column * 4 + k];
                     }
                     r[column * 4 + row] = sum;
@@ -579,7 +598,7 @@ namespace end_editor {
         }
 
         // Translation followed by rotation: T(t) * R(q).
-        Matrix4 translateRotate(const float *t, const float *q) {
+        Matrix4 translateRotate(const float* t, const float* q) {
             const float x = q[0], y = q[1], z = q[2], w = q[3];
             Matrix4 m = identity();
             m[0] = 1 - 2 * (y * y + z * z);
@@ -605,13 +624,13 @@ namespace end_editor {
         const bool alphaTest = get<std::uint8_t>(shader, 12) != 0;
         enum { destZero = 0, destOne = 1, destSrcColor = 2, destOneMinusSrcAlpha = 5 };
         enum { srcZero = 0, srcOne = 1, srcSrcAlpha = 2 };
-        if(destination == destOne) {
+        if (destination == destOne) {
             return W3dBlend::additive;
         }
-        if(destination == destOneMinusSrcAlpha && source == srcSrcAlpha) {
+        if (destination == destOneMinusSrcAlpha && source == srcSrcAlpha) {
             return W3dBlend::alphaBlend;
         }
-        if(destination == destSrcColor || (source == srcZero && destination != destZero)) {
+        if (destination == destSrcColor || (source == srcZero && destination != destZero)) {
             return W3dBlend::multiply;
         }
         return alphaTest ? W3dBlend::alphaTest : W3dBlend::opaque;
@@ -619,8 +638,8 @@ namespace end_editor {
 
     W3dFile parseW3d(std::string_view bytes) {
         W3dFile file;
-        forEachChunk(bytes, file.warnings, [&](const Chunk &chunk) {
-            switch(chunk.type) {
+        forEachChunk(bytes, file.warnings, [&](const Chunk& chunk) {
+            switch (chunk.type) {
                 case chunkMesh:
                     file.meshes.push_back(parseMesh(chunk.data, file.warnings));
                     break;
@@ -645,11 +664,11 @@ namespace end_editor {
 
     W3dFileKind peekW3dKind(std::string_view firstBytes) {
         W3dFileKind result;
-        if(firstBytes.size() < 8) {
+        if (firstBytes.size() < 8) {
             return result;
         }
         const auto type = get<std::uint32_t>(firstBytes, 0);
-        switch(type) {
+        switch (type) {
             case chunkMesh:
                 result.kind = W3dFileKind::meshFile;
                 break;
@@ -671,32 +690,35 @@ namespace end_editor {
         return result;
     }
 
-    std::vector<Matrix4> poseHierarchy(const W3dHierarchy &hierarchy, const W3dAnimation *animation,
-                                       std::uint32_t frame, std::vector<std::uint8_t> *visible) {
+    std::vector<Matrix4> poseHierarchy(const W3dHierarchy& hierarchy,
+                                       const W3dAnimation* animation,
+                                       std::uint32_t frame,
+                                       std::vector<std::uint8_t>* visible) {
         const std::size_t count = hierarchy.pivots.size();
         std::vector<Matrix4> world(count, identity());
-        if(visible) {
+        if (visible) {
             visible->assign(count, 1);
         }
-        if(animation && animation->frameCount > 0) {
+        if (animation && animation->frameCount > 0) {
             frame = std::min(frame, animation->frameCount - 1);
         } else {
             animation = nullptr;
         }
         // Pivot 0 is the root: the engine puts the object's own transform there.
-        for(std::size_t p = 1; p < count; ++p) {
-            const auto &pivot = hierarchy.pivots[p];
-            const Matrix4 parent = pivot.parent >= 0 && std::size_t(pivot.parent) < p ? world[std::size_t(pivot.parent)]
-                                                                                       : identity();
+        for (std::size_t p = 1; p < count; ++p) {
+            const auto& pivot = hierarchy.pivots[p];
+            const Matrix4 parent =
+                pivot.parent >= 0 && std::size_t(pivot.parent) < p ? world[std::size_t(pivot.parent)] : identity();
             Matrix4 local = translateRotate(pivot.translation.data(), pivot.rotation.data());
-            if(animation && p < animation->translation.size()) {
+            if (animation && p < animation->translation.size()) {
                 const float zero[3] = {0, 0, 0};
                 const float none[4] = {0, 0, 0, 1};
-                const auto &t = animation->translation[p];
-                const auto &q = animation->rotation[p];
-                local = multiply(local, translateRotate(t.empty() ? zero : &t[std::size_t(frame) * 3],
-                                                        q.empty() ? none : &q[std::size_t(frame) * 4]));
-                if(visible && !animation->visible[p].empty()) {
+                const auto& t = animation->translation[p];
+                const auto& q = animation->rotation[p];
+                local = multiply(local,
+                                 translateRotate(t.empty() ? zero : &t[std::size_t(frame) * 3],
+                                                 q.empty() ? none : &q[std::size_t(frame) * 4]));
+                if (visible && !animation->visible[p].empty()) {
                     (*visible)[p] = animation->visible[p][frame];
                 }
             }

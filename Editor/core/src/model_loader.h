@@ -59,7 +59,7 @@ namespace end_editor {
     struct ModelPose {
         std::uint32_t frameCount = 1;
         std::uint32_t frameRate = 30;
-        std::vector<Matrix4> matrices;      // frameCount * bones
+        std::vector<Matrix4> matrices;  // frameCount * bones
         std::vector<std::uint8_t> visible;  // frameCount * bones
     };
 
@@ -67,7 +67,7 @@ namespace end_editor {
     // current model so that switching animations does not read them again.
     class ModelLoader {
       public:
-        explicit ModelLoader(const GameFiles &files) : files(files) {}
+        explicit ModelLoader(const GameFiles& files) : files(files) {}
 
         // What the object's Draw module keeps hidden (ObjectInfo::muzzleFlashes and
         // ::hiddenSubObjects, space separated).
@@ -77,20 +77,20 @@ namespace end_editor {
         };
 
         // `listAnimations` false skips looking for animation files (the map view needs none).
-        LoadedModel load(const std::string &modelName, const Hiding &hiding = {}, bool listAnimations = true);
+        LoadedModel load(const std::string& modelName, const Hiding& hiding = {}, bool listAnimations = true);
 
         // Pose of `model` for an animation from model.animations; the bind pose (one frame)
         // when `animationName` is empty or unknown.
-        ModelPose pose(const LoadedModel &model, const std::string &animationName, std::string &error);
+        ModelPose pose(const LoadedModel& model, const std::string& animationName, std::string& error);
 
-        static std::string modelPath(const std::string &name);
+        static std::string modelPath(const std::string& name);
 
       private:
-        const W3dFile *parsedFile(const std::string &path);
+        const W3dFile* parsedFile(const std::string& path);
         void indexAnimationFiles();
-        std::string findTexture(const std::string &textureName) const;
+        std::string findTexture(const std::string& textureName) const;
 
-        const GameFiles &files;
+        const GameFiles& files;
         std::map<std::string, std::unique_ptr<W3dFile>> cache;  // path -> parsed (or empty when missing)
         bool animationsIndexed = false;
         std::multimap<std::string, std::string> animationFilesByHierarchy;  // lower-case hierarchy -> path

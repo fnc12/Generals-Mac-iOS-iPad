@@ -16,9 +16,9 @@ namespace end_editor {
     constexpr int mapPreviewSize = 128;
 
     // RGBA8, rows from south (y = 0) to north. `tileColors`: MapScene::tileColors.
-    std::vector<std::uint8_t> renderMapPreview(const MapFile &map, const std::vector<std::array<float, 3>> &tileColors);
+    std::vector<std::uint8_t> renderMapPreview(const MapFile& map, const std::vector<std::array<float, 3>>& tileColors);
 
     // An uncompressed 32-bit TGA (type 2, origin bottom left, TGA 2 footer), the layout of the
     // previews the game ships. `rgba` rows from the bottom.
-    std::string encodeTga(int width, int height, const std::vector<std::uint8_t> &rgba);
+    std::string encodeTga(int width, int height, const std::vector<std::uint8_t>& rgba);
 }

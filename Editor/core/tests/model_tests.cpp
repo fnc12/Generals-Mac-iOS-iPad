@@ -24,27 +24,29 @@ namespace {
     }
 
     // Translation column of a column-major matrix.
-    std::array<float, 3> origin(const Matrix4 &m) {
+    std::array<float, 3> origin(const Matrix4& m) {
         return {m[12], m[13], m[14]};
     }
 
     // A tank-like model: a chassis on the root, a turret on bone 1, a separate animation file
     // and a texture that exists both as .tga and .dds.
-    void makeModelFolder(const std::filesystem::path &folder) {
-        const std::string modelFile = squareMesh("CHASSIS", "TBOX", "TBox.tga") +
-                                      squareMesh("TURRET", "TBOX", "TBox.tga") +
-                                      squareMesh("FLASH", "TBOX", "", w3d::meshFlagHidden) +
-                                      hierarchy("TBOX_SKL", twoBones(false)) +
-                                      hlod("TBOX", "TBOX_SKL", {{0, "TBOX.CHASSIS"}, {1, "TBOX.TURRET"}, {1, "TBOX.FLASH"}});
+    void makeModelFolder(const std::filesystem::path& folder) {
+        const std::string modelFile =
+            squareMesh("CHASSIS", "TBOX", "TBox.tga") + squareMesh("TURRET", "TBOX", "TBox.tga") +
+            squareMesh("FLASH", "TBOX", "", w3d::meshFlagHidden) + hierarchy("TBOX_SKL", twoBones(false)) +
+            hlod("TBOX", "TBOX_SKL", {{0, "TBOX.CHASSIS"}, {1, "TBOX.TURRET"}, {1, "TBOX.FLASH"}});
         const std::string animationFile =
-            container(0x200, {animationHeader("TBOX_TURN", "TBOX_SKL", 3, false),
-                              rawChannel(0, 1, 0, 2, 1, {0, 1, 2})});
+            container(0x200,
+                      {animationHeader("TBOX_TURN", "TBOX_SKL", 3, false), rawChannel(0, 1, 0, 2, 1, {0, 1, 2})});
         writeBig(folder / "W3D.big", {{"Art\\W3D\\TBox.w3d", modelFile}, {"Art\\W3D\\TBox_Turn.w3d", animationFile}});
-        writeBig(folder / "Textures.big",
-                 {{"Art\\Textures\\TBox.tga", tga(1, 1, {0, 0, 255, 255})}, {"Art\\Textures\\TBox.dds", solidDds(0x07E0)}});
-        writeBig(folder / "INI.big", {{"Data\\INI\\Object\\Box.ini", "Object Box\n  Draw = W3DModelDraw M\n"
-                                                                       "    DefaultConditionState\n      Model = TBox\n"
-                                                                       "    End\n  End\nEnd\n"}});
+        writeBig(
+            folder / "Textures.big",
+            {{"Art\\Textures\\TBox.tga", tga(1, 1, {0, 0, 255, 255})}, {"Art\\Textures\\TBox.dds", solidDds(0x07E0)}});
+        writeBig(folder / "INI.big",
+                 {{"Data\\INI\\Object\\Box.ini",
+                   "Object Box\n  Draw = W3DModelDraw M\n"
+                   "    DefaultConditionState\n      Model = TBox\n"
+                   "    End\n  End\nEnd\n"}});
     }
 }
 
@@ -52,7 +54,7 @@ TEST_CASE("W3D mesh") {
     const auto file = parseW3d(squareMesh("HULL", "BOAT", "Boat.tga"));
     REQUIRE(file.warnings.empty());
     REQUIRE(file.meshes.size() == 1);
-    const auto &mesh = file.meshes[0];
+    const auto& mesh = file.meshes[0];
     CHECK(mesh.fullName() == "BOAT.HULL");
     CHECK(mesh.vertexCount() == 4);
     CHECK(mesh.indices == std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3});
@@ -66,7 +68,7 @@ TEST_CASE("W3D: a reflection pass under the real texture is skipped") {
     // CBTownHs01 and 3426 other retail meshes: LAKEDUSK.tga reflection first, the house over it.
     const auto file = parseW3d(reflectedSquareMesh("HOUSE", "TOWN", "lakedusk.tga", "house.tga"));
     REQUIRE(file.meshes.size() == 1);
-    const auto &mesh = file.meshes[0];
+    const auto& mesh = file.meshes[0];
     CHECK(mesh.triangleTextures == std::vector<std::uint32_t>{1, 1});
     CHECK(mesh.textures[1] == "house.tga");
     CHECK(mesh.uvs == std::vector<float>{0, 0, 1, 0, 1, 1, 0, 1});
@@ -89,17 +91,20 @@ TEST_CASE("W3D shaders become blend modes") {
 
 TEST_CASE("What the Draw module hides when idle") {
     // bones: root, TURRET, MUZZLEFX01 (under the turret), GUN (under the turret)
-    const std::vector<TestPivot> bones = {
-        TestPivot{"ROOTTRANSFORM", 0xFFFFFFFFu, {0, 0, 0}, {0, 0, 0, 1}},
-        TestPivot{"TURRET", 0, {0, 0, 1}, {0, 0, 0, 1}},
-        TestPivot{"MUZZLEFX01", 1, {1, 0, 0}, {0, 0, 0, 1}},
-        TestPivot{"GUN", 1, {1, 0, 0}, {0, 0, 0, 1}}};
+    const std::vector<TestPivot> bones = {TestPivot{"ROOTTRANSFORM", 0xFFFFFFFFu, {0, 0, 0}, {0, 0, 0, 1}},
+                                          TestPivot{"TURRET", 0, {0, 0, 1}, {0, 0, 0, 1}},
+                                          TestPivot{"MUZZLEFX01", 1, {1, 0, 0}, {0, 0, 0, 1}},
+                                          TestPivot{"GUN", 1, {1, 0, 0}, {0, 0, 0, 1}}};
     const std::string file = squareMesh("HULL", "HIDER", "ZHCHider.tga") + squareMesh("TURRET", "HIDER", "a.tga") +
                              squareMesh("FLASH", "HIDER", "a.tga", 0, shader(1, 1, false)) +
                              squareMesh("GUNFX01", "HIDER", "a.tga") + squareMesh("HOUSECOLOR01", "HIDER", "a.tga") +
                              hierarchy("HIDER_SKL", bones) +
-                             hlod("HIDER", "HIDER_SKL",
-                                  {{0, "HIDER.HULL"}, {1, "HIDER.TURRET"}, {2, "HIDER.FLASH"}, {3, "HIDER.GUNFX01"},
+                             hlod("HIDER",
+                                  "HIDER_SKL",
+                                  {{0, "HIDER.HULL"},
+                                   {1, "HIDER.TURRET"},
+                                   {2, "HIDER.FLASH"},
+                                   {3, "HIDER.GUNFX01"},
                                    {0, "HIDER.HOUSECOLOR01"}});
     const auto folder = makeTempFolder("hiding");
     writeBig(folder / "W3D.big", {{"Art\\W3D\\Hider.w3d", file}});
@@ -108,10 +113,10 @@ TEST_CASE("What the Draw module hides when idle") {
     std::string error;
     REQUIRE(files.mount({folder}, warnings, error));
     ModelLoader loader(files);
-    const auto hiddenParts = [&](const ModelLoader::Hiding &hiding) {
+    const auto hiddenParts = [&](const ModelLoader::Hiding& hiding) {
         std::vector<std::string> names;
-        for(const auto &part: loader.load("Hider", hiding).parts) {
-            if(part.hidden) {
+        for (const auto& part: loader.load("Hider", hiding).parts) {
+            if (part.hidden) {
                 names.push_back(part.mesh);
             }
         }
@@ -165,10 +170,11 @@ TEST_CASE("Bones: base pose, then animation translation, then rotation") {
     }
     SECTION("an animated move happens in the bone's own (turned) frame") {
         const auto file = parseW3d(hierarchy("SKL", twoBones(true)) +
-                                   container(0x200, {animationHeader("A", "SKL", 2, false),
-                                                     rawChannel(0, 1, 1, 1, 1, {5})}));  // X = 5 on frame 1 only
+                                   container(0x200,
+                                             {animationHeader("A", "SKL", 2, false),
+                                              rawChannel(0, 1, 1, 1, 1, {5})}));  // X = 5 on frame 1 only
         REQUIRE(file.animations.size() == 1);
-        const auto &animation = file.animations[0];
+        const auto& animation = file.animations[0];
         CHECK(animation.hierarchy == "SKL");
         const auto frame0 = poseHierarchy(file.hierarchies[0], &animation, 0);
         const auto frame1 = poseHierarchy(file.hierarchies[0], &animation, 1);
@@ -182,20 +188,22 @@ TEST_CASE("Bones: base pose, then animation translation, then rotation") {
 
 TEST_CASE("Animation channels") {
     SECTION("time-coded keys are interpolated, a binary key holds the previous value") {
-        const auto file = parseW3d(container(
-            0x280, {animationHeader("A", "SKL", 8, true),
-                    timeCodedChannel(0, 1, {{0, 0.0f}, {4, 8.0f}, {6u | 0x80000000u, 100.0f}})}));
+        const auto file =
+            parseW3d(container(0x280,
+                               {animationHeader("A", "SKL", 8, true),
+                                timeCodedChannel(0, 1, {{0, 0.0f}, {4, 8.0f}, {6u | 0x80000000u, 100.0f}})}));
         REQUIRE(file.animations.size() == 1);
-        const auto &x = file.animations[0].translation.at(1);
-        CHECK(x[2 * 3] == Approx(4));   // frame 2: halfway from 0 to 8
-        CHECK(x[4 * 3] == Approx(8));   // frame 4: the key
-        CHECK(x[5 * 3] == Approx(8));   // frame 5: held, the next key is binary
+        const auto& x = file.animations[0].translation.at(1);
+        CHECK(x[2 * 3] == Approx(4));  // frame 2: halfway from 0 to 8
+        CHECK(x[4 * 3] == Approx(8));  // frame 4: the key
+        CHECK(x[5 * 3] == Approx(8));  // frame 5: held, the next key is binary
         CHECK(x[7 * 3] == Approx(100));  // after the last key
     }
     SECTION("visibility bits") {
         // frames 1..3 stored, bits 0b101 -> frame 1 on, 2 off, 3 on; outside: default (off)
-        const auto file = parseW3d(container(0x200, {animationHeader("A", "SKL", 5, false), rawBitChannel(1, 1, 3, 0, 0b101)}));
-        const auto &visible = file.animations.at(0).visible.at(1);
+        const auto file =
+            parseW3d(container(0x200, {animationHeader("A", "SKL", 5, false), rawBitChannel(1, 1, 3, 0, 0b101)}));
+        const auto& visible = file.animations.at(0).visible.at(1);
         CHECK(visible == std::vector<std::uint8_t>{0, 1, 0, 1, 0});
     }
     SECTION("the first bytes of a file tell an animation and its skeleton") {

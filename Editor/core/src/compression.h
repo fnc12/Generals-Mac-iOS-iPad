@@ -12,9 +12,9 @@ namespace end_editor {
 
     // Unpacks `bytes` into `out`; data without a known tag is copied as is. Returns false and
     // sets `error` for damaged or unsupported data.
-    bool decompressGameData(std::string_view bytes, std::string &out, std::string &error);
+    bool decompressGameData(std::string_view bytes, std::string& out, std::string& error);
 
     // RefPack stream (the payload after the 8-byte wrapper, starting with the 0x10FB-style
     // header). Bounds checked: a damaged stream fails instead of reading or writing outside.
-    bool decodeRefPack(std::string_view stream, std::string &out, std::string &error);
+    bool decodeRefPack(std::string_view stream, std::string& out, std::string& error);
 }
