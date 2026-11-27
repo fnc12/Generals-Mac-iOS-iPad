@@ -497,6 +497,7 @@ struct ModelPreviewPanel: View {
                 }
                 .labelsHidden()
                 .disabled(editor.animations.isEmpty)
+                .accessibilityIdentifier("preview.animation")
                 Button {
                     if playback.playing {
                         playback.pausedFrame = playback.frame(count: preview.frameCount, rate: preview.frameRate)
@@ -509,6 +510,7 @@ struct ModelPreviewPanel: View {
                     Image(systemName: playback.playing ? "pause.fill" : "play.fill")
                 }
                 .disabled(preview.frameCount <= 1)
+                .accessibilityIdentifier("preview.playPause")
                 Menu {
                     ForEach(GifFormat.allCases) { format in
                         Button(format.title) { exportGif(preview, format: format) }
@@ -519,6 +521,7 @@ struct ModelPreviewPanel: View {
                 .fixedSize()
                 .help("One cycle of the selected animation, from the current view")
                 .disabled(preview.frameCount <= 1 || exporting)
+                .accessibilityIdentifier("preview.exportGif")
                 if exporting { ProgressView().controlSize(.small) }
             }
             if !exportMessage.isEmpty {
@@ -526,6 +529,7 @@ struct ModelPreviewPanel: View {
             }
             HStack {
                 Toggle("Hidden parts", isOn: $playback.showHidden).toggleStyle(.checkbox)
+                    .accessibilityIdentifier("preview.hiddenParts")
                 Spacer()
                 Text(editor.modelMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }

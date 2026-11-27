@@ -1293,9 +1293,12 @@ struct MapScreen: View {
             PlacementBar().disabled(!editor.canEditMap)
             HStack(spacing: 12) {
                 Toggle("Models", isOn: $state.showModels).toggleStyle(.checkbox)
+                    .accessibilityIdentifier("map.showModels")
                 Toggle("Markers", isOn: $state.showMarkers).toggleStyle(.checkbox)
+                    .accessibilityIdentifier("map.showMarkers")
                     .help("Waypoints and their links, roads, sounds and objects whose model is missing")
                 Toggle("Water", isOn: $state.showWater).toggleStyle(.checkbox)
+                    .accessibilityIdentifier("map.showWater")
                 Spacer()
                 if editor.mapModelCount > 0 && editor.mapModelsLoaded < editor.mapModelCount {
                     ProgressView(value: Double(editor.mapModelsLoaded), total: Double(editor.mapModelCount))
@@ -1358,6 +1361,7 @@ struct PlacementBar: View {
                     Text(String(format: "%.0f°", state.angle)).monospacedDigit().frame(width: 40, alignment: .trailing)
                 }
                 .help("Angle of placed objects")
+                .accessibilityIdentifier("placement.angle")
             case "road", "bridge":
                 let bridge = state.tool == "bridge"
                 Picker(bridge ? "Bridge" : "Road", selection: Binding(get: { state.roadType }, set: {
@@ -1376,9 +1380,12 @@ struct PlacementBar: View {
             Spacer()
             Button { editor.send("map.undo") } label: { Image(systemName: "arrow.uturn.backward") }
                 .disabled(editor.mapEdit.undoCount == 0).help("Undo (⌘Z)")
+                .accessibilityIdentifier("placement.undo")
             Button { editor.send("map.redo") } label: { Image(systemName: "arrow.uturn.forward") }
                 .disabled(editor.mapEdit.redoCount == 0).help("Redo (⇧⌘Z)")
+                .accessibilityIdentifier("placement.redo")
             Button("Save As…") { editor.saveMapAs() }.help("Save the map with its edits and preview (⇧⌘S)")
+                .accessibilityIdentifier("placement.saveAs")
             if editor.mapEdit.edited { Text("Edited").font(.caption).foregroundStyle(.orange) }
             if !state.note.isEmpty {
                 Text(state.note).font(.caption)
@@ -1509,6 +1516,7 @@ private struct SelectionForm: View {
                         Text("°")
                         Stepper("", onIncrement: { editor.send("edit.rotate\t15") },
                                 onDecrement: { editor.send("edit.rotate\t-15") }).labelsHidden()
+                            .accessibilityIdentifier("inspector.angleStep")
                     }
                 }
                 LabeledContent("Height") {
@@ -1544,12 +1552,15 @@ private struct SelectionForm: View {
                 ForEach(Self.flags, id: \.0) { key, label in
                     Toggle(label, isOn: Binding(get: { shared(key)?.value == "true" },
                                                 set: { set(key, "bool", $0 ? "true" : "false") }))
+                        .accessibilityIdentifier("inspector.flag." + key)
                 }
                 HStack {
                     if objects.count == 2 && objects.allSatisfy({ $0.kind == "waypoint" }) {
                         Button("Link Waypoints") { editor.send("waypoint.link") }
+                            .accessibilityIdentifier("inspector.link")
                     }
                     Button("Delete", role: .destructive) { editor.send("edit.delete") }
+                        .accessibilityIdentifier("inspector.delete")
                 }
             }
             Section(single ? "Properties" : "Properties of \(first.templateName)") {
@@ -1565,22 +1576,25 @@ private struct SelectionForm: View {
                                 Image(systemName: "minus.circle")
                             }
                             .buttonStyle(.borderless).help("Remove \(property.key)")
+                            .accessibilityIdentifier("inspector.remove." + property.key)
                         }
                     }
                 }
                 HStack(spacing: 4) {
-                    TextField("key", text: $newKey).frame(width: 110)
+                    TextField("key", text: $newKey).frame(width: 110).accessibilityIdentifier("inspector.newKey")
                     Picker("", selection: $newType) {
                         ForEach(["string", "int", "real", "bool", "unicode"], id: \.self) { Text($0).tag($0) }
                     }
                     .labelsHidden().frame(width: 80)
-                    TextField("value", text: $newValue)
+                    .accessibilityIdentifier("inspector.newType")
+                    TextField("value", text: $newValue).accessibilityIdentifier("inspector.newValue")
                     Button("Add") {
                         set(newKey, newType, newValue)
                         newKey = ""
                         newValue = ""
                     }
                     .disabled(newKey.isEmpty)
+                    .accessibilityIdentifier("inspector.add")
                 }
             }
         }

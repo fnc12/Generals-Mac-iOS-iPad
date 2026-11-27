@@ -18,7 +18,7 @@ mkdir -p "$APP/Contents/MacOS"
 swiftc -O -parse-as-library \
     -import-objc-header "$HERE/bridge.h" \
     -I "$HERE/../core/include" \
-    "$HERE/Main.swift" "$HERE/ModelPreview.swift" "$HERE/GifExport.swift" "$HERE/MapView.swift" "$HERE/PerfHarness.swift" "$HERE/UICheck.swift" \
+    "$HERE/Main.swift" "$HERE/ModelPreview.swift" "$HERE/GifExport.swift" "$HERE/MapView.swift" "$HERE/PerfHarness.swift" "$HERE/UICheck.swift" "$HERE/Play.swift" \
     -L "$CORE_BUILD/lib" -lend_editor_core -lsqlite3 -lz -lc++ \
     -o "$APP/Contents/MacOS/END Editor"
 
