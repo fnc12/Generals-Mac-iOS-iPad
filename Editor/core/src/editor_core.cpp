@@ -931,6 +931,7 @@ namespace end_editor {
         row.flags = placed.flags;
         row.owner = placed.owner;
         row.color = int(placed.color);
+        row.start = placed.start;
         if (!placed.model.empty()) {
             // One map_models row per distinct model and hidden parts, in first-use order.
             auto [it, added] =

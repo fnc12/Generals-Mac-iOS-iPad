@@ -1,5 +1,7 @@
 #include "map_scene.h"
 
+#include "map_document.h"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -402,19 +404,25 @@ namespace end_editor {
             return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
         }
 
-        // Player color (0xRRGGBB) of the side that owns `team`, white when none.
+        // Player color (0xRRGGBB) of the side that owns `team`; a start position's team that no side
+        // owns, its start position's color; white when none.
         std::uint32_t ownerColor(const MapFile& map, const std::string& team) {
             if (team.empty()) {
                 return 0xFFFFFF;
             }
             std::string owner;
+            bool found = false;
             for (const auto& dict: map.teams) {
                 const auto* name = findDictValue(dict, "teamName");
                 const auto* teamOwner = findDictValue(dict, "teamOwner");
                 if (name && teamOwner && name->text() == team) {
                     owner = teamOwner->text();
+                    found = true;
                     break;
                 }
+            }
+            if (!found) {
+                return startPositionColor(startPositionOfTeam(team));
             }
             for (const auto& side: map.sides) {
                 const auto* name = findDictValue(side.player, "playerName");
@@ -544,6 +552,10 @@ namespace end_editor {
             placed.kind = "bridge";
         } else if (findDictValue(object.properties, "waypointID")) {
             placed.kind = "waypoint";
+            placed.start = startPositionOf(object);
+            if (placed.start != 0) {
+                placed.color = startPositionColor(placed.start);
+            }
         } else if (info && !info->model.empty()) {
             placed.kind = "model";
             placed.model = info->model;

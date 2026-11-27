@@ -139,7 +139,10 @@ replacements, particle effects, LODs other than the most detailed one.
   standing water texture and color.
 - Objects: templates resolved against the INI (W3DTreeDraw's `ModelName` too), drawn with their
   models in the bind pose, instanced, turned by their angle, standing on the ground plus their
-  height offset, in their owner's player color. Models load after the map shows, a slice per
+  height offset, in their owner's player color. A start waypoint (`Player_<n>_Start`) has a
+  "Start n" label over it (with the Markers), drawn in the map's own frames so it follows the camera
+  exactly; start position n has one color of eight (`startPositionColor`, written by the core into
+  `map_objects.color` and `map_players.color`): its label, its waypoint and the objects it owns. Models load after the map shows, a slice per
   update. Waypoints, road and bridge points, sounds and objects without a model are markers.
 - Camera: drag pans, ⌥-drag (or ⌘-drag) turns and tilts, scroll or pinch zooms, the rotate
   gesture turns. A click selects the nearest object under the cursor (box test in its own
@@ -355,6 +358,7 @@ Every user-facing feature and what checks it. Keep this table when adding a feat
 | Select all | ⌘A | core, ui ("⌘A selected all … objects") |
 | Place an object, the picker | right click or ⌃-click; the bar's object button | core (Flow: a right click with no object chosen asks for one), ui ("the picker's row … is clicked", "⌃-click placed a second one", "the bar's object button is clicked", "Esc closed it") |
 | Start positions as owners (teamStart<N>) | bar and inspector pop-ups | core (Map players: a multiplayer map's start positions…, Flow: a multiplayer map's start positions own objects…), maps (--edit-maps: one object owned by teamStart1 per multiplayer map), game (Catch2 StartPositionOwner; -headless start_owned_* counts), ui ("the Owner pop-up lists the start positions", "the inspector's Owner pop-up chose Start 1", "it is Start 1's") |
+| Start labels and colors: "Start N" over each start waypoint, start N's color on its label, waypoint and objects; the inspector's Start position | open a multiplayer map; Markers checkbox; click a start waypoint | core (Start positions: waypoint and team names, and one color each; Flow: a multiplayer map's start positions own objects… (colors); Flow: a start waypoint renamed or moved…), ui ("the map's start waypoints … named Player_N_Start", "each start position has its own color", "the map framed / after a pan / a turn / a zoom: … start labels, each at its waypoint's projected point", "each label is drawn in its start's color", "… behind the camera: … none for the waypoint behind the camera", "Markers off: no start labels …, their pixels gone", "a click on Player_1_Start: the inspector shows \"Start 1\"", "Start 1's object is drawn in Start 1's color") |
 | Placement owner | bar pop-up | core (Map players, placement.owner), ui ("the placement bar's Owner pop-up chose …", "owned by the chosen team") |
 | Placement angle | bar stepper | core, ui ("the bar's angle stepper is clicked up", "and down again") |
 | Move the selection | drag a selected object | core (Flow: a drag on the selection moves it), maps, ui ("the drag moved both by the same offset", "on the ground there") |

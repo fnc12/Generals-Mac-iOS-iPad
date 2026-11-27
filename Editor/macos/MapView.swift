@@ -23,12 +23,24 @@ struct MapObjectItem: Identifiable, Hashable {
     let flags: Int
     let modelId: Int64
     let owner: String
-    let color: UInt32       // 0xRRGGBB
+    let color: UInt32       // 0xRRGGBB; a start waypoint's is its start position's color
+    /// A start waypoint ("Player_<n>_Start"): n, the start position it marks; else 0.
+    var start = 0
 
     func at(_ position: SIMD3<Float>) -> MapObjectItem {
         MapObjectItem(id: id, templateName: templateName, kind: kind, position: position, height: height, angle: angle,
-                      flags: flags, modelId: modelId, owner: owner, color: color)
+                      flags: flags, modelId: modelId, owner: owner, color: color, start: start)
     }
+}
+
+/// A start waypoint's label ("Start 2") as the map view last drew it, in view points (origin top
+/// left): `anchor` is the waypoint's top, the label's pointer touches it.
+struct StartLabel: Equatable {
+    let start: Int
+    let object: Int64
+    let color: UInt32
+    let anchor: CGPoint
+    let frame: CGRect
 }
 
 /// A line the map draws between two objects (map_links): a waypoint link, a road or bridge segment.
@@ -440,6 +452,25 @@ vertex float4 lineVertex(uint id [[vertex_id]], device const packed_float3 *poin
 fragment float4 lineFragment(constant PartUniforms &part [[buffer(3)]]) {
     return part.baseColor;
 }
+
+// A label drawn in view space: corners x0 y0 x1 y1 in clip space, premultiplied texture.
+struct LabelOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex LabelOut labelVertex(uint id [[vertex_id]], constant float4 &rect [[buffer(0)]]) {
+    float2 uv = float2(id & 1, id >> 1);
+    LabelOut out;
+    out.position = float4(mix(rect.x, rect.z, uv.x), mix(rect.y, rect.w, uv.y), 0, 1);
+    out.uv = uv;
+    return out;
+}
+
+fragment float4 labelFragment(LabelOut in [[stage_in]], texture2d<float> label [[texture(0)]],
+                              sampler s [[sampler(0)]]) {
+    return label.sample(s, in.uv);
+}
 """
 
 private struct MapUniforms {
@@ -472,6 +503,8 @@ final class MapRenderer: NSObject, MTKViewDelegate {
     private var terrainPipeline: MTLRenderPipelineState!
     private var waterPipeline: MTLRenderPipelineState!
     private var linePipeline: MTLRenderPipelineState!
+    private var labelPipeline: MTLRenderPipelineState!
+    private var labelSampler: MTLSamplerState!
     private var modelPipelines: [Int: MTLRenderPipelineState] = [:]  // by blend mode
     private var depthState: MTLDepthStencilState!
     private var readOnlyDepthState: MTLDepthStencilState!
@@ -522,6 +555,15 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         }
     }
     private var selectionSet: Set<Int64> = []
+    private struct LabelKey: Hashable {
+        let start: Int
+        let color: UInt32
+        let scale: CGFloat
+    }
+    /// A start label's picture (premultiplied RGBA, `scale` pixels per point) and its size in points.
+    private var labelTextures: [LabelKey: (texture: MTLTexture, size: CGSize)] = [:]
+    /// The start labels of the last frame drawn in the view (not of snapshots), what the UI check reads.
+    private(set) var startLabels: [StartLabel] = []
     /// Grows whenever what is drawn changes other than the camera (scene, models, batches).
     private var contentGeneration = 0
     /// What the last presented frame showed; a frame that would look the same is not drawn.
@@ -588,6 +630,14 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         waterPipeline = try device.makeRenderPipelineState(descriptor: alphaBlend(descriptor("waterVertex", "waterFragment",
                                                                                              layout: nil)))
         linePipeline = try device.makeRenderPipelineState(descriptor: descriptor("lineVertex", "lineFragment", layout: nil))
+        let label = descriptor("labelVertex", "labelFragment", layout: nil)
+        let labelAttachment = label.colorAttachments[0]!
+        labelAttachment.isBlendingEnabled = true
+        labelAttachment.sourceRGBBlendFactor = .one
+        labelAttachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        labelAttachment.sourceAlphaBlendFactor = .zero
+        labelAttachment.destinationAlphaBlendFactor = .one
+        labelPipeline = try device.makeRenderPipelineState(descriptor: label)
         let modelLayout = layout([(.float3, 0), (.float3, 12), (.float2, 24)], stride: 36)
         for blend in 0...4 {
             let model = descriptor("modelVertex", "modelFragment", layout: modelLayout)
@@ -631,6 +681,11 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         samplerDescriptor.tAddressMode = .clampToEdge
         samplerDescriptor.lodMaxClamp = 2
         terrainSampler = device.makeSamplerState(descriptor: samplerDescriptor)
+        // Labels are drawn texel for pixel.
+        let labelSamplerDescriptor = MTLSamplerDescriptor()
+        labelSamplerDescriptor.minFilter = .nearest
+        labelSamplerDescriptor.magFilter = .nearest
+        labelSampler = device.makeSamplerState(descriptor: labelSamplerDescriptor)
     }
 
     // MARK: Uploads
@@ -745,7 +800,7 @@ final class MapRenderer: NSObject, MTKViewDelegate {
     /// Markers: objects without a (loaded) model, colored by kind.
     private func markerColor(_ object: MapObjectItem) -> SIMD4<Float> {
         switch object.kind {
-        case "waypoint": return SIMD4(1, 0.85, 0.2, 1)
+        case "waypoint": return object.start > 0 ? Self.playerColor(object) : SIMD4(1, 0.85, 0.2, 1)
         case "road": return SIMD4(0.55, 0.55, 0.55, 1)
         case "bridge": return SIMD4(0.65, 0.45, 0.3, 1)
         case "model": return failedModels.contains(object.modelId) ? SIMD4(0.95, 0.3, 0.3, 1) : SIMD4(0.85, 0.85, 0.85, 1)
@@ -892,7 +947,8 @@ final class MapRenderer: NSObject, MTKViewDelegate {
               let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else { return }
         let started = CACurrentMediaTime()
         let size = view.drawableSize
-        encode(encoder, aspect: Float(size.width / max(size.height, 1)))
+        encode(encoder, aspect: Float(size.width / max(size.height, 1)), viewSize: view.bounds.size,
+               scale: size.width / max(view.bounds.width, 1), recordLabels: true)
         encoder.endEncoding()
         commands.present(drawable)
         commands.commit()
@@ -922,7 +978,7 @@ final class MapRenderer: NSObject, MTKViewDelegate {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.clearDepth = 1
         guard let encoder = commands.makeRenderCommandEncoder(descriptor: pass) else { return nil }
-        encode(encoder, aspect: Float(width) / Float(height))
+        encode(encoder, aspect: Float(width) / Float(height), viewSize: CGSize(width: width, height: height), scale: 1)
         encoder.endEncoding()
         commands.commit()
         commands.waitUntilCompleted()
@@ -951,7 +1007,9 @@ final class MapRenderer: NSObject, MTKViewDelegate {
                            params: SIMD4(max(scene.waterRepeat, 1) * 10, 0, 0, 0))
     }
 
-    private func encode(_ encoder: MTLRenderCommandEncoder, aspect: Float) {
+    /// `viewSize`: the view in points; `scale`: pixels per point (labels are drawn at that size).
+    private func encode(_ encoder: MTLRenderCommandEncoder, aspect: Float, viewSize: CGSize, scale: CGFloat,
+                        recordLabels: Bool = false) {
         guard !terrain.isEmpty else { return }
         rebuildBatches()
         var u = uniforms(aspect: aspect)
@@ -1070,6 +1128,103 @@ final class MapRenderer: NSObject, MTKViewDelegate {
                        ground + SIMD3(0, -6, 1), ground + SIMD3(0, 6, 1)]
         }
         lines(points, SIMD4(0.3, 1, 0.5, 1))
+
+        let labels = state.showMarkers ? placeStartLabels(viewSize: viewSize, scale: scale) : []
+        if recordLabels { startLabels = labels }
+        drawStartLabels(labels, encoder: encoder, viewSize: viewSize, scale: scale)
+    }
+
+    // MARK: Start labels
+
+    /// Where each start waypoint's label goes this frame: over the waypoint's marker, from the same
+    /// camera as the frame (so it moves with the map, not after it); none behind the camera.
+    /// Farther ones first, so nearer labels cover them.
+    private func placeStartLabels(viewSize: CGSize, scale: CGFloat) -> [StartLabel] {
+        var placed: [(depth: Float, label: StartLabel)] = []
+        let eye = state.eye
+        for stored in scene.objects where stored.start > 0 {
+            let object = displayed(stored)
+            let top = object.position + SIMD3(0, 0, 13)
+            guard let point = state.viewPoint(of: top, size: viewSize),
+                  let size = labelTexture(start: object.start, color: object.color, scale: scale)?.size else { continue }
+            // Whole pixels: the texture is drawn texel for pixel.
+            let anchor = CGPoint(x: (point.x * scale).rounded() / scale, y: (point.y * scale).rounded() / scale)
+            let frame = CGRect(x: anchor.x - size.width / 2, y: anchor.y - size.height, width: size.width, height: size.height)
+            placed.append((simd_distance(eye, top),
+                           StartLabel(start: object.start, object: object.id, color: object.color, anchor: anchor, frame: frame)))
+        }
+        return placed.sorted { $0.depth > $1.depth }.map(\.label)
+    }
+
+    private func drawStartLabels(_ labels: [StartLabel], encoder: MTLRenderCommandEncoder, viewSize: CGSize, scale: CGFloat) {
+        guard !labels.isEmpty, viewSize.width > 0, viewSize.height > 0 else { return }
+        encoder.setRenderPipelineState(labelPipeline)
+        encoder.setDepthStencilState(overlayDepthState)
+        encoder.setFragmentSamplerState(labelSampler, index: 0)
+        for label in labels {
+            guard let texture = labelTexture(start: label.start, color: label.color, scale: scale)?.texture else { continue }
+            let f = label.frame
+            var rect = SIMD4(Float(f.minX / viewSize.width) * 2 - 1, 1 - Float(f.minY / viewSize.height) * 2,
+                             Float(f.maxX / viewSize.width) * 2 - 1, 1 - Float(f.maxY / viewSize.height) * 2)
+            encoder.setVertexBytes(&rect, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            encoder.setFragmentTexture(texture, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
+    /// The label of start position `start`: a pill in its color with "Start" and a big number, and a
+    /// pointer down to the waypoint. Drawn once per start, color and scale.
+    private func labelTexture(start: Int, color: UInt32, scale: CGFloat) -> (texture: MTLTexture, size: CGSize)? {
+        let key = LabelKey(start: start, color: color, scale: scale)
+        if let cached = labelTextures[key] { return cached }
+        let fill = NSColor(srgbRed: CGFloat((color >> 16) & 0xFF) / 255, green: CGFloat((color >> 8) & 0xFF) / 255,
+                           blue: CGFloat(color & 0xFF) / 255, alpha: 1)
+        let luminance = 0.299 * fill.redComponent + 0.587 * fill.greenComponent + 0.114 * fill.blueComponent
+        let ink = luminance > 0.6 ? NSColor(white: 0.08, alpha: 1) : NSColor.white
+        let text = NSMutableAttributedString(string: "Start ", attributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: ink])
+        text.append(NSAttributedString(string: String(start), attributes: [
+            .font: NSFont.systemFont(ofSize: 19, weight: .heavy), .foregroundColor: ink]))
+        let textSize = text.size()
+        let pill = CGSize(width: ceil(textSize.width) + 18, height: 26)
+        let pointer: CGFloat = 7, outline: CGFloat = 1.5
+        let size = CGSize(width: pill.width + 2 * outline, height: pill.height + pointer + 2 * outline)
+        let width = Int(ceil(size.width * scale)), height = Int(ceil(size.height * scale))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        // Origin bottom left: the pointer's tip at the bottom middle, the pill above it.
+        let body = CGRect(x: outline, y: outline + pointer, width: pill.width, height: pill.height)
+        let shape = CGMutablePath()
+        shape.addRoundedRect(in: body, cornerWidth: pill.height / 2, cornerHeight: pill.height / 2)
+        shape.move(to: CGPoint(x: size.width / 2 - 6, y: body.minY + 1))
+        shape.addLine(to: CGPoint(x: size.width / 2, y: outline))
+        shape.addLine(to: CGPoint(x: size.width / 2 + 6, y: body.minY + 1))
+        shape.closeSubpath()
+        context.addPath(shape)
+        context.setStrokeColor(NSColor(white: 0, alpha: 0.75).cgColor)
+        context.setLineWidth(outline * 2)
+        context.setLineJoin(.round)
+        context.strokePath()
+        context.addPath(shape)
+        context.setFillColor(fill.cgColor)
+        context.fillPath()
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        text.draw(at: CGPoint(x: body.midX - textSize.width / 2, y: body.midY - textSize.height / 2))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let pixels = context.data else { return nil }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width, height: height,
+                                                                  mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels,
+                        bytesPerRow: width * 4)
+        let result = (texture, CGSize(width: CGFloat(width) / scale, height: CGFloat(height) / scale))
+        labelTextures[key] = result
+        return result
     }
 }
 
@@ -1347,7 +1502,7 @@ struct MapScreen: View {
             .padding(.vertical, 6)
             Text("Drag or two-finger swipe to pan, ⌥-drag to turn, pinch or mouse wheel to zoom at the cursor, click to select, ⇧-click or ⇧-drag to add. "
                  + "Right-click places, drag the selection to move it, [ ] turn it, Delete removes it, "
-                 + "⌘C ⌘V ⌘D copy, paste, duplicate, ⌘Z undoes")
+                 + "⌘C ⌘V ⌘D copy, paste, duplicate, ⌘Z undoes. \"Start N\" marks start positions")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.bottom, 4)
         }
         .inspector(isPresented: Binding(get: { !editor.mapSelection.isEmpty },
@@ -1537,7 +1692,21 @@ private struct SelectionForm: View {
         Form {
             Section(single ? first.templateName : "\(objects.count) objects") {
                 if single {
-                    LabeledContent("Kind", value: first.kind)
+                    if first.start > 0 {
+                        // A start waypoint: which start position it is, in its label's color.
+                        LabeledContent("Start position") {
+                            HStack(spacing: 6) {
+                                Circle().fill(Self.color(first.color)).frame(width: 12, height: 12)
+                                    .overlay(Circle().stroke(.black.opacity(0.6), lineWidth: 1))
+                                Text("Start \(first.start)").font(.title3.bold())
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("inspector.start")
+                        }
+                        .help("Player_\(first.start)_Start: whoever starts at start position \(first.start) begins here "
+                              + "and owns the objects of Start \(first.start)")
+                    }
+                    LabeledContent("Kind", value: first.start > 0 ? "waypoint, Start \(first.start)" : first.kind)
                     LabeledContent("Position", value: String(format: "%.1f, %.1f (ground + %.1f)", first.position.x,
                                                               first.position.y, first.height))
                     if let model = editor.mapModels.first(where: { $0.id == first.modelId }) {
@@ -1641,6 +1810,10 @@ private struct SelectionForm: View {
     }
 
     private static func degrees(_ radians: Float) -> String { String(format: "%.1f", radians * 180 / .pi) }
+    static func color(_ rgb: UInt32) -> Color {
+        Color(.sRGB, red: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255,
+              blue: Double(rgb & 0xFF) / 255)
+    }
 }
 
 /// Map list on the left, the map on the right.

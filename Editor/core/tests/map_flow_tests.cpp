@@ -3,6 +3,7 @@
 // the way the client does. No client logic is needed for any of these rules.
 #include "compression.h"
 #include "end_editor/editor_core_c.h"
+#include "map_document.h"
 #include "map_file.h"
 #include "map_preview.h"
 #include "storage.h"
@@ -455,11 +456,21 @@ TEST_CASE("Flow: a multiplayer map's start positions own objects; Start 1's are 
     CHECK(players[1].start == 1);
     CHECK(players[2].team == "teamStart2");
     CHECK(players[2].start == 2);
+    // Each start position has its color: its owner, its waypoint, the objects it owns.
+    CHECK(players[0].color == 0xFF0000);
+    CHECK(players[1].color == int(startPositionColor(1)));
+    CHECK(players[2].color == int(startPositionColor(2)));
+    CHECK(flow.object(1)->start == 0);
+    CHECK(flow.object(2)->start == 1);
+    CHECK(flow.object(2)->color == int(startPositionColor(1)));
+    CHECK(flow.object(3)->start == 2);
+    CHECK(flow.object(3)->color == int(startPositionColor(2)));
 
     flow.send("selection.set\t1");
     flow.send("selection.owner\tteamStart1");
     CHECK(flow.editor().noteKind != "error");
     CHECK(flow.object(1)->owner == "teamStart1");
+    CHECK(flow.object(1)->color == int(startPositionColor(1)));
     CHECK(flow.property(1, "originalOwner") == "string:teamStart1");
     const auto steps = flow.reader->get<MapRow>(1).undoCount;
     flow.send("selection.owner\tteamStart3");  // no third start position
@@ -474,6 +485,7 @@ TEST_CASE("Flow: a multiplayer map's start positions own objects; Start 1's are 
     const auto placed = flow.objects().back();
     CHECK(placed.templateName == "TestTank");
     CHECK(placed.owner == "teamStart2");
+    CHECK(placed.color == int(startPositionColor(2)));
 
     // Saved: originalOwner is the start position's team; nothing else of the tree, the other objects or the
     // other chunks changes (the SidesList gets no players).
@@ -947,4 +959,20 @@ TEST_CASE("Flow: Save Map As a name: into the user Maps folder, asking before it
         }
     }
     CHECK(names == std::vector<std::string>{"Mine", "Other"});
+}
+
+TEST_CASE("Flow: a start waypoint renamed or moved keeps the store's start and color current") {
+    Flow flow("flow-start-rename", 2);
+    REQUIRE(flow.object(3)->start == 2);
+    flow.send("selection.set\t3");
+    flow.send("selection.property\twaypointName\tstring\tPlayer_5_Start");
+    CHECK(flow.object(3)->start == 5);
+    CHECK(flow.object(3)->color == int(startPositionColor(5)));
+    flow.send("selection.property\twaypointName\tstring\tAmbush");
+    CHECK(flow.object(3)->start == 0);
+    CHECK(flow.object(3)->color == 0xFFFFFF);
+    flow.send("map.undo");
+    flow.send("map.undo");
+    CHECK(flow.object(3)->start == 2);
+    CHECK(flow.object(3)->color == int(startPositionColor(2)));
 }

@@ -148,24 +148,45 @@ namespace end_editor {
         }
     }
 
+    int startPositionOf(const MapObject& object) {
+        constexpr std::string_view prefix = "Player_", suffix = "_Start";
+        if (object.templateName != waypointTemplate) {
+            return 0;
+        }
+        const auto* name = findDictValue(object.properties, "waypointName");
+        if (!name) {
+            return 0;
+        }
+        const std::string_view text = name->text();
+        if (text.size() != prefix.size() + 1 + suffix.size() || !text.starts_with(prefix) || !text.ends_with(suffix)) {
+            return 0;
+        }
+        const char digit = text[prefix.size()];
+        return digit >= '1' && digit <= '0' + maxSlots ? digit - '0' : 0;
+    }
+
+    int startPositionOfTeam(std::string_view team) {
+        constexpr std::string_view prefix = "teamStart";
+        if (team.size() != prefix.size() + 1 || !team.starts_with(prefix)) {
+            return 0;
+        }
+        const char digit = team.back();
+        return digit >= '1' && digit <= '0' + maxSlots ? digit - '0' : 0;
+    }
+
+    std::uint32_t startPositionColor(int start) {
+        // Red, blue, green, yellow, orange, cyan, purple, pink: far apart, and none of them white
+        // (objects nobody owns) or the waypoint markers' gold.
+        static constexpr std::array<std::uint32_t, maxSlots>
+            colors{0xE8302A, 0x2F6BFF, 0x2DB84A, 0xF2E233, 0xFF8A1F, 0x22D3E6, 0xA347E6, 0xFF5FB8};
+        return start >= 1 && start <= maxSlots ? colors[std::size_t(start - 1)] : 0xFFFFFF;
+    }
+
     int mapStartPositions(const MapFile& map) {
         unsigned found = 0;  // bit n - 1: a "Player_<n>_Start" waypoint
-        constexpr std::string_view prefix = "Player_", suffix = "_Start";
         for (const auto& object: map.objects) {
-            if (object.templateName != waypointTemplate) {
-                continue;
-            }
-            const auto* name = findDictValue(object.properties, "waypointName");
-            if (!name) {
-                continue;
-            }
-            const std::string_view text = name->text();
-            if (text.size() == prefix.size() + 1 + suffix.size() && text.starts_with(prefix) &&
-                text.ends_with(suffix)) {
-                const char digit = text[prefix.size()];
-                if (digit >= '1' && digit <= '0' + maxSlots) {
-                    found |= 1u << (digit - '1');
-                }
+            if (const int start = startPositionOf(object)) {
+                found |= 1u << (start - 1);
             }
         }
         int positions = 0;
@@ -200,6 +221,7 @@ namespace end_editor {
             player.name = team.substr(4);  // "Start<n>"
             player.displayName = "Start " + std::to_string(start);
             player.team = std::move(team);
+            player.color = startPositionColor(start);
             player.start = start;
             players.push_back(std::move(player));
         });
