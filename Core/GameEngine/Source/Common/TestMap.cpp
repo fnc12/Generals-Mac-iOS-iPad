@@ -25,10 +25,12 @@
 #include "Common/GameEngine.h"
 #include "Common/GlobalData.h"
 #include "Common/MessageStream.h"
+#include "Common/MultiplayerSettings.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
 #include "Common/PlayerTemplate.h"
 #include "Common/RandomValue.h"
+#include "Common/Team.h"
 #include "GameClient/GameClient.h"
 #include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
@@ -36,12 +38,28 @@
 #include "GameNetwork/GameInfo.h"
 
 TestMap::Settings TestMap::s_settings;
+Int TestMap::s_startObjectsLocal = 0;
+Int TestMap::s_startObjects = 0;
+Int TestMap::s_startObjectsSkipped = 0;
+
+void TestMap::noteStartPositionObject(const Team *team)
+{
+	if (team == nullptr)
+	{
+		++s_startObjectsSkipped;
+		return;
+	}
+	++s_startObjects;
+	if (ThePlayerList && team->getControllingPlayer() == ThePlayerList->getLocalPlayer())
+		++s_startObjectsLocal;
+}
 
 TestMap::Settings::Settings()
 	: faction("FactionAmerica")
 	, aiCount(1)
 	, aiDifficulty(1)
 	, startPosition(1)
+	, color(-1)
 	, frames(300)
 	, seed(0)
 {
@@ -161,6 +179,7 @@ Bool TestMap::start(Bool toCommandList)
 
 	if (TheGameLogic->isInGame())
 		TheGameLogic->clearGameData(FALSE);
+	s_startObjectsLocal = s_startObjects = s_startObjectsSkipped = 0;
 
 	if (!md->m_isMultiplayer)
 	{
@@ -199,7 +218,12 @@ Bool TestMap::start(Bool toCommandList)
 	local.setState(SLOT_PLAYER, UnicodeString(L"Player"));
 	local.setPlayerTemplate(factionIndex(settings.faction));
 	local.setStartPos(startPosition);
-	local.setColor(-1);
+	// A color index the game does not have is random. The AI slots stay random: the game gives them
+	// colors nobody has taken (populateRandomSideAndColor).
+	Int color = settings.color;
+	if (color < 0 || TheMultiplayerSettings == nullptr || color >= TheMultiplayerSettings->getNumColors())
+		color = -1;
+	local.setColor(color);
 	TheSkirmishGameInfo->setSlot(0, local);
 	for (Int i = 1; i < MAX_SLOTS; ++i)
 	{
@@ -226,8 +250,8 @@ Bool TestMap::start(Bool toCommandList)
 	TheWritableGlobalData->m_mapName = md->m_fileName;
 	TheSkirmishGameInfo->startGame(0);
 
-	fprintf(stderr, "TEST_MAP start map='%s' mode=skirmish positions=%d faction=%s start=%d ai=%d difficulty=%d\n",
-		md->m_fileName.str(), positions, settings.faction.str(), startPosition + 1, aiCount, settings.aiDifficulty);
+	fprintf(stderr, "TEST_MAP start map='%s' mode=skirmish positions=%d faction=%s start=%d color=%d ai=%d difficulty=%d\n",
+		md->m_fileName.str(), positions, settings.faction.str(), startPosition + 1, color, aiCount, settings.aiDifficulty);
 	fflush(stderr);
 
 	InitRandom(TheSkirmishGameInfo->getSeed());
@@ -285,10 +309,11 @@ Int TestMap::runHeadless()
 	const PlayerTemplate *pt = localPlayer ? localPlayer->getPlayerTemplate() : nullptr;
 	// A mission may have no objects at all (a cinematic); a skirmish gives the local player its start.
 	const Bool ok = TheGameLogic->getFrame() >= frames && (!skirmish || localObjects > 0);
-	fprintf(stderr, "TEST_MAP %s frames=%u mode=%s players=%d loaded_objects=%d objects=%d local_objects=%d local_faction=%s\n",
+	fprintf(stderr, "TEST_MAP %s frames=%u mode=%s players=%d loaded_objects=%d objects=%d local_objects=%d local_faction=%s"
+		" start_owned_local=%d start_owned=%d start_owned_skipped=%d\n",
 		ok ? "ok" : "error", TheGameLogic->getFrame(), skirmish ? "skirmish" : "single_player",
 		ThePlayerList ? ThePlayerList->getPlayerCount() : 0, loadedObjects, objects, localObjects,
-		pt ? pt->getName().str() : "-");
+		pt ? pt->getName().str() : "-", s_startObjectsLocal, s_startObjects, s_startObjectsSkipped);
 	fflush(stderr);
 	return ok ? 0 : 1;
 }

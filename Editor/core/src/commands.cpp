@@ -186,6 +186,12 @@ namespace end_editor::commands {
                 }
                 return play(SetPlayFaction{std::string(argument)});
             }
+            if (name == "play.color") {
+                if (argument.empty()) {
+                    return fail("error:missing_argument", "play.color: missing argument");
+                }
+                return play(SetPlayColor{std::string(argument)});
+            }
             if (name == "play.ai" || name == "play.start") {
                 const auto number = parseInteger<int>(argument);
                 if (!number || *number < 0 || *number > 7) {

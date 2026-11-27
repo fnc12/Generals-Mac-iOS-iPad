@@ -40,14 +40,15 @@ namespace {
         return map;
     }
 
-    // A game folder with the test map, three object templates and a Roads.ini, and the core
-    // opened on it through the C ABI.
+    // A game folder with the test map (with `startWaypoints` start positions), three object
+    // templates, a Roads.ini, a PlayerTemplate.ini and Multiplayer.ini, and the core opened on it
+    // through the C ABI.
     class Flow {
       public:
-        explicit Flow(const std::string& name) {
+        explicit Flow(const std::string& name, int startWaypoints = 1) {
             this->folder = makeTempFolder(name);
             this->saved = makeTempFolder(name + "-saved");  // never inside the game folder
-            writeBig(this->folder / "MapsZH.big", {{"Maps\\Test Map\\Test Map.map", refPack(testMap())}});
+            writeBig(this->folder / "MapsZH.big", {{"Maps\\Test Map\\Test Map.map", refPack(testMap(startWaypoints))}});
             writeBig(
                 this->folder / "INIZH.big",
                 {{"Data\\INI\\Object\\Rocks.ini", "Object TestRock\nEnd\nObject TestTree\nEnd\nObject TestTank\nEnd\n"},
@@ -57,7 +58,13 @@ namespace {
                  {"Data\\INI\\PlayerTemplate.ini",
                   "PlayerTemplate FactionCivilian\n  Side = Civilian\n  PlayableSide = No\nEnd\n"
                   "PlayerTemplate FactionAmerica\n  Side = America\n  PlayableSide = Yes\nEnd\n"
-                  "; a comment\nPlayerTemplate FactionChina\n  Side = China\n  PlayableSide = Yes\nEnd\n"}});
+                  "; a comment\nPlayerTemplate FactionChina\n  Side = China\n  PlayableSide = Yes\nEnd\n"},
+                 {"Data\\INI\\Default\\Multiplayer.ini", "MultiplayerSettings\nEnd\n"},
+                 {"Data\\INI\\Multiplayer.ini",
+                  "MultiplayerSettings\n  ShowRandomColor = Yes\nEnd\n"
+                  "MultiplayerColor ColorGold\n  RGBColor = R:221 G:226 B:13\nEnd\n"
+                  "MultiplayerColor ColorRed\n  RGBColor = R:255 G:0 B:0\nEnd\n"
+                  "MultiplayerColor ColorBlue\n  RGBColor = R:67 G:104 B:254\nEnd\n"}});
             this->dbPath = (this->folder / "store.sqlite").string();
             REQUIRE(end_editor_initialize(this->dbPath.c_str()));
             this->reader.emplace(makeStorage(this->dbPath));
@@ -435,6 +442,79 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     CHECK(flow.object(3)->color == 0xFF0000);
 }
 
+TEST_CASE("Flow: a multiplayer map's start positions own objects; Start 1's are saved as teamStart1") {
+    Flow flow("flow-starts", 2);
+    // The map's own player, then one owner per start position (what the owner menus list).
+    const auto players = flow.reader->get_all<MapPlayerRow>(sqlite_orm::order_by(&MapPlayerRow::id));
+    REQUIRE(players.size() == 3);
+    CHECK(players[0].team == "teamPlyrRed");
+    CHECK(players[0].start == 0);
+    CHECK(players[1].name == "Start1");
+    CHECK(players[1].displayName == "Start 1");
+    CHECK(players[1].team == "teamStart1");
+    CHECK(players[1].start == 1);
+    CHECK(players[2].team == "teamStart2");
+    CHECK(players[2].start == 2);
+
+    flow.send("selection.set\t1");
+    flow.send("selection.owner\tteamStart1");
+    CHECK(flow.editor().noteKind != "error");
+    CHECK(flow.object(1)->owner == "teamStart1");
+    CHECK(flow.property(1, "originalOwner") == "string:teamStart1");
+    const auto steps = flow.reader->get<MapRow>(1).undoCount;
+    flow.send("selection.owner\tteamStart3");  // no third start position
+    CHECK(flow.editor().noteKind == "error");
+    CHECK(flow.reader->get<MapRow>(1).undoCount == steps);
+    CHECK(flow.object(1)->owner == "teamStart1");
+    // The placement tool places for a start position too.
+    flow.send("placement.owner\tteamStart2");
+    CHECK(flow.editor().team == "teamStart2");
+    flow.send("placement.template\tTestTank");
+    flow.send("map.click_right\t8\t8\t");
+    const auto placed = flow.objects().back();
+    CHECK(placed.templateName == "TestTank");
+    CHECK(placed.owner == "teamStart2");
+
+    // Saved: originalOwner is the start position's team; nothing else of the tree, the other objects or the
+    // other chunks changes (the SidesList gets no players).
+    flow.send("map.undo");
+    const auto file = flow.save("starts");
+    const auto original = parsed(testMap(2));
+    REQUIRE(file.objects.size() == original.objects.size());
+    CHECK(findDictValue(file.objects[0].properties, "originalOwner")->text() == "teamStart1");
+    REQUIRE(file.objects[0].properties.size() == original.objects[0].properties.size());
+    for (std::size_t i = 0; i < original.objects[0].properties.size(); ++i) {
+        const auto& before = original.objects[0].properties[i];
+        const auto& after = file.objects[0].properties[i];
+        CHECK(after.key == before.key);
+        if (before.key != "originalOwner") {
+            CHECK(after.data == before.data);
+        }
+    }
+    CHECK(file.objects[0].x == original.objects[0].x);
+    CHECK(file.objects[0].angle == original.objects[0].angle);
+    for (std::size_t i = 1; i < file.objectChunks.size(); ++i) {
+        CHECK(file.data.substr(file.objectChunks[i].header + 4,
+                               file.objectChunks[i].end - file.objectChunks[i].header - 4) ==
+              original.data.substr(original.objectChunks[i].header + 4,
+                                   original.objectChunks[i].end - original.objectChunks[i].header - 4));
+    }
+    REQUIRE(file.chunks.size() == original.chunks.size());
+    for (std::size_t i = 0; i < file.chunks.size(); ++i) {
+        if (file.chunks[i].name != "ObjectsList") {
+            CHECK(file.data.substr(file.chunks[i].header + 4, file.chunks[i].end - file.chunks[i].header - 4) ==
+                  original.data.substr(original.chunks[i].header + 4,
+                                       original.chunks[i].end - original.chunks[i].header - 4));
+        }
+    }
+
+    // Read back: the object belongs to start position 1 again.
+    flow.send("map.open\t" + (flow.saved / "starts.map").string());
+    REQUIRE(flow.reader->get<MapRow>(1).state == "ready");
+    CHECK(flow.object(1)->owner == "teamStart1");
+    CHECK(flow.reader->count<MapPlayerRow>(sqlite_orm::where(sqlite_orm::c(&MapPlayerRow::start) > 0)) == 2);
+}
+
 TEST_CASE("Flow: waypoints are placed as linked paths") {
     Flow flow("flow-waypoints");
     flow.send("placement.waypoint");
@@ -653,6 +733,7 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     flow.send("play.ai\t2");
     flow.send("play.difficulty\thard");
     flow.send("play.start\t2");
+    flow.send("play.color\tColorBlue");  // the game's color 2: Multiplayer.ini's third
     flow.send("placement.template\tTestTank");
     flow.send("map.click_right\t20\t30\t");
     const auto placed = flow.objects().size();
@@ -668,7 +749,8 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     const auto program = (app / "Contents" / "MacOS" / "run.sh").string();
     CHECK(play.command ==
           program + "\t-testMap\t" + testCopy.string() +
-              "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2");
+              "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2"
+              "\t-testMapColor\t2");
     CHECK(flow.editor().note.rfind("Playing Test Map in Fake.app", 0) == 0);
     // The test copy has the unsaved edit; the user's map stays unsaved and edited.
     const auto copy = parsed(readFile(testCopy));
@@ -697,6 +779,8 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
                                                                                "-testMapAIDifficulty",
                                                                                "hard",
                                                                                "-testMapStart",
+                                                                               "2",
+                                                                               "-testMapColor",
                                                                                "2"});
     const auto environment = lines(readFile(flow.saved / "env.txt"));
     REQUIRE(environment.size() == 3);
@@ -711,6 +795,7 @@ TEST_CASE("Flow: Play again closes the game the last Play started; play.stop clo
     flow.send("map.play");
     const auto first = flow.reader->get<PlayRow>(1);
     REQUIRE(first.state == "running");
+    CHECK(first.command.find("-testMapColor") == std::string::npos);  // Random: the game picks
     flow.send("map.play");
     const auto second = flow.reader->get<PlayRow>(1);
     CHECK(second.state == "running");
@@ -753,6 +838,7 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
     CHECK(play.aiCount == 1);
     CHECK(play.aiDifficulty == "medium");
     CHECK(play.startPosition == 1);
+    CHECK(play.color == "Random");
     CHECK(play.state == "idle");
     const char* home = std::getenv("HOME");
     REQUIRE(home);
@@ -769,6 +855,19 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
     }
     CHECK(factions == std::vector<std::string>{"FactionAmerica/America", "FactionChina/China"});
     CHECK(flow.refused("play.faction\tFactionCivilian") == "error:unknown_faction");
+    // Multiplayer.ini's colors, numbered like the game: what the color menu offers.
+    std::vector<std::string> colors;
+    for (const auto& row: flow.reader->iterate<PlayerColorRow>(sqlite_orm::order_by(&PlayerColorRow::id))) {
+        colors.push_back(std::to_string(row.index) + "/" + row.name + "/" + std::to_string(row.rgb));
+    }
+    CHECK(colors == std::vector<std::string>{"0/ColorGold/" + std::to_string(0xDDE20D),
+                                             "1/ColorRed/" + std::to_string(0xFF0000),
+                                             "2/ColorBlue/" + std::to_string(0x4368FE)});
+    CHECK(flow.refused("play.color\tColorPlaid") == "error:unknown_color");
+    CHECK(flow.editor().note == "No player color ColorPlaid in Multiplayer.ini");
+    CHECK(flow.reader->get<PlayRow>(1).color == "Random");
+    flow.send("play.color\tColorRed");
+    CHECK(flow.reader->get<PlayRow>(1).color == "ColorRed");
     CHECK(flow.editor().noteKind == "error");
     CHECK(flow.refused("play.ai\t9") == "error:bad_argument");
     CHECK(flow.refused("play.start\tx") == "error:bad_argument");
@@ -796,6 +895,7 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
     CHECK(play.aiCount == 0);
     CHECK(play.startPosition == 0);
     CHECK(play.aiDifficulty == "easy");
+    CHECK(play.color == "ColorRed");
     CHECK(play.state == "idle");
     CHECK(flow.refused("map.play") == "error:no_map");
 }

@@ -66,6 +66,9 @@ namespace end_editor::commands {
     struct SetPlayFaction {  // "play.faction\t<PlayerTemplate name | Random>"
         std::string faction;
     };
+    struct SetPlayColor {  // "play.color\t<MultiplayerColor name | Random>"
+        std::string color;
+    };
     struct SetPlayAiCount {  // "play.ai\t<0..7>"
         int count = 0;
     };
@@ -76,8 +79,8 @@ namespace end_editor::commands {
         std::string difficulty;
     };
     struct StopPlay {};  // "play.stop"
-    using PlaySetting =
-        std::variant<SetPlayApp, SetPlayFaction, SetPlayAiCount, SetPlayStart, SetPlayDifficulty, StopPlay>;
+    using PlaySetting = std::
+        variant<SetPlayApp, SetPlayFaction, SetPlayColor, SetPlayAiCount, SetPlayStart, SetPlayDifficulty, StopPlay>;
 
     // Edits of the open map and the editing state (MapEditor::run).
     // Direct edits (scripts and checks): "map.place\t<template>\t<x>\t<y>\t<angle>\t<team>",

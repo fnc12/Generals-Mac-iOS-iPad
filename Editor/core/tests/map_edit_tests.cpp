@@ -208,6 +208,74 @@ TEST_CASE("Map players: the SidesList players with a default team") {
     CHECK(neutral[0].displayName == "Neutral");
 }
 
+TEST_CASE("Map players: a multiplayer map's start positions follow the SidesList players") {
+    // One start position: a mission, its own players only.
+    CHECK(mapStartPositions(parsed(testMap())) == 1);
+    CHECK(mapPlayers(parsed(testMap())).size() == 1);
+    CHECK(mapTeams(parsed(testMap())) == std::vector<std::string>{"teamPlyrRed"});
+
+    const auto map = parsed(testMap(3));
+    CHECK(mapStartPositions(map) == 3);
+    const auto players = mapPlayers(map);
+    REQUIRE(players.size() == 4);
+    CHECK(players[0].team == "teamPlyrRed");
+    CHECK(players[0].start == 0);
+    for (int start = 1; start <= 3; ++start) {
+        const auto& player = players[std::size_t(start)];
+        CHECK(player.name == "Start" + std::to_string(start));
+        CHECK(player.displayName == "Start " + std::to_string(start));
+        CHECK(player.team == "teamStart" + std::to_string(start));
+        CHECK(player.start == start);
+        CHECK_FALSE(player.neutral);
+    }
+    CHECK(mapTeams(map) == std::vector<std::string>{"teamPlyrRed", "teamStart1", "teamStart2", "teamStart3"});
+
+    // Counted like the game's map cache: from Player_1_Start up to the first number missing, at
+    // most 8, only waypoints.
+    const auto waypoint = [](const std::string& name, const std::string& templateName = waypointTemplate) {
+        MapObject object;
+        object.templateName = templateName;
+        object.properties.push_back(DictValue{"waypointName", AsciiText{name}});
+        return object;
+    };
+    MapFile gaps;
+    for (const auto* name: {"Player_2_Start", "Player_1_Start", "Player_4_Start", "player_3_start"}) {
+        gaps.objects.push_back(waypoint(name));
+    }
+    gaps.objects.push_back(waypoint("Player_3_Start", "TestRock"));
+    CHECK(mapStartPositions(gaps) == 2);
+    MapFile many;
+    for (int n = 1; n <= 9; ++n) {
+        many.objects.push_back(waypoint("Player_" + std::to_string(n) + "_Start"));
+    }
+    many.objects.push_back(waypoint("Player_10_Start"));
+    CHECK(mapStartPositions(many) == 8);
+    CHECK(mapPlayers(many).size() == 8);
+    CHECK(mapStartPositions(MapFile{}) == 0);
+
+    // A SidesList that already has a start position's team keeps it once.
+    auto withStart = parsed(testMap(2));
+    withStart.teams.push_back(Dict{DictValue{"teamName", AsciiText{"teamStart2"}}});
+    CHECK(mapTeams(withStart) == std::vector<std::string>{"teamPlyrRed", "teamStart2", "teamStart1"});
+}
+
+TEST_CASE("Player colors: Multiplayer.ini's MultiplayerColor entries in file order") {
+    const auto colors = parsePlayerColors("OnlineChatColors\n  Default = R:255 G:255 B:255\nEnd\n"
+                                          "MultiplayerSettings\n  ShowRandomColor = Yes\nEnd\n"
+                                          "MultiplayerColor ColorGold\n  RGBColor = R:221 G:226 B:13\n"
+                                          "  TooltipName = Color:Gold\nEnd\n"
+                                          "; MultiplayerColor ColorNot\n"
+                                          "multiplayercolor ColorBlue ; a comment\n  RGBColor = R:67 G:104 B:254\nEND\n"
+                                          "MultiplayerColor ColorBare\nEnd\n");
+    REQUIRE(colors.size() == 3);
+    CHECK(colors[0].name == "ColorGold");
+    CHECK(colors[0].rgb == 0xDDE20D);
+    CHECK(colors[1].name == "ColorBlue");
+    CHECK(colors[1].rgb == 0x4368FE);
+    CHECK(colors[2].name == "ColorBare");
+    CHECK(colors[2].rgb == 0xFFFFFF);
+}
+
 TEST_CASE("EditorCore edits and saves the open map") {
     const auto folder = makeTempFolder("map-edit");
     writeBig(folder / "MapsZH.big", {{"Maps\\Test Map\\Test Map.map", refPack(testMap())}});

@@ -812,28 +812,34 @@ enum UICheck {
                 log("  first object at \(String(describing: pointOn(first.id))), selection \(editor.mapSelection.prefix(5)) (\(editor.mapSelection.count)), gesture '\(editor.mapGesture.kind)', note '\(editor.mapEditor.note)', windows \(NSApp.windows.filter(\.isVisible).map { "\(type(of: $0))" }), key \(String(describing: NSApp.keyWindow.map { type(of: $0) }))")
             }
             check("a click selected only the first object", editor.mapSelection == [first.id])
-            let typedHeight = await fill("Height", with: "25")
+            // Each field has the row's whole width: no title squeezed (and wrapped) next to it.
+            for (id, frameWidth) in [("inspector.angle", 60.0), ("inspector.height", 80.0), ("inspector.health", 60.0)] {
+                let width = field(id: id).map { windowFrame(of: $0.0).width } ?? 0
+                check("the inspector's \(id) field is \(Int(width)) wide of \(Int(frameWidth)), no title next to it",
+                      width >= frameWidth - 8)
+            }
+            let typedHeight = await fill("Height", id: "inspector.height", with: "25")
             check("height typed into the inspector", typedHeight)
             if !typedHeight { log(diagnostic) }
             await settle()
-            log("  height field now '\(field("Height")?.0.stringValue ?? "?")', responder "
+            log("  height field now '\(field(id: "inspector.height")?.0.stringValue ?? "?")', responder "
                 + "\(String(describing: window.firstResponder.map { type(of: $0) })), note '\(editor.mapEditor.note)'")
             await settle()
             check("the object is 25 above the ground", object(first.id).map { abs($0.height - 25) < 0.01 } == true)
-            check("health typed into the inspector", await fill("Health", with: "40"))
+            check("health typed into the inspector", await fill("Health", id: "inspector.health", with: "40"))
             await settle()
             check("its objectInitialHealth is 40",
                   editor.mapObjectProperties(of: first.id).contains { $0.key == "objectInitialHealth" && $0.value == "40" })
             @MainActor func property(_ key: String) -> MapObjectProperty? {
                 editor.mapObjectProperties(of: first.id).first { $0.key == key }
             }
-            check("angle typed into the inspector", await fill("Angle", with: "30"))
+            check("angle typed into the inspector", await fill("Angle", id: "inspector.angle", with: "30"))
             await settle()
             check("the object is turned to 30°", object(first.id).map { abs($0.angle - .pi / 6) < 0.001 } == true)
-            check("name typed into the inspector", await fill("Name", with: "UICheck"))
+            check("name typed into the inspector", await fill("Name", id: "inspector.name", with: "UICheck"))
             await settle()
             check("its objectName is UICheck", property("objectName")?.value == "UICheck")
-            check("script typed into the inspector", await fill("Script", with: "UICheckScript"))
+            check("script typed into the inspector", await fill("Script", id: "inspector.script", with: "UICheckScript"))
             await settle()
             check("its objectScriptAttachment is UICheckScript", property("objectScriptAttachment")?.value == "UICheckScript")
             let angleTyped = object(first.id)?.angle ?? 0
@@ -850,6 +856,18 @@ enum UICheck {
                 let picked = await pick(player.label, from: "inspector.owner")
                 await settle()
                 check("the inspector's Owner pop-up chose \(player.label)", picked && object(first.id)?.owner == player.team)
+                if !picked { log(diagnostic) }
+            }
+            // A multiplayer map's start positions are owners too: whoever starts at start position 1
+            // in the game owns the object (originalOwner teamStart1).
+            let startOne = editor.mapPlayers.first { $0.start == 1 }
+            check("the Owner pop-up lists the start positions: \(editor.mapPlayers.filter { $0.start > 0 }.map(\.label))",
+                  startOne?.label == "Start 1" && startOne?.team == "teamStart1")
+            if let startOne {
+                let picked = await pick(startOne.label, from: "inspector.owner")
+                await settle()
+                check("the inspector's Owner pop-up chose Start 1: owner teamStart1",
+                      picked && object(first.id)?.owner == "teamStart1" && property("originalOwner")?.value == "teamStart1")
                 if !picked { log(diagnostic) }
             }
             // A new property: its key and value typed, its type chosen in the pop-up, Add.
@@ -1099,6 +1117,9 @@ enum UICheck {
             check("it has \(expected) objects (\(editor.mapScene.objects.count))", editor.mapScene.objects.count == expected)
             check("the raised object is 25 above the ground",
                   editor.mapScene.objects.contains { $0.templateName == request.template && abs($0.height - 25) < 0.01 })
+            check("it is Start 1's (originalOwner teamStart1 saved and read back)",
+                  editor.mapScene.objects.contains { $0.templateName == request.template && abs($0.height - 25) < 0.01
+                      && $0.owner == "teamStart1" })
             check("the waypoint path and the road are there",
                   editor.mapScene.links.filter { $0.kind == "waypoint" }.count == linksBefore + 2
                   && editor.mapScene.links.contains { $0.kind == "road" })
@@ -1142,7 +1163,7 @@ enum UICheck {
             await settle()
             check("the store's AI difficulty is hard", editor.play.aiDifficulty == "hard")
             _ = await settingsShown()
-            check("the game app typed", await fill("Game app", with: request.app))
+            check("the game app typed", await fill("Game app", id: "play.app", with: request.app))
             await settle()
             check("the store's game app is \(request.app)", editor.play.app == request.app && editor.play.appResolved == request.app)
             _ = await settingsShown()
@@ -1151,12 +1172,20 @@ enum UICheck {
             check("Default: the app is ~/GeneralsX/Apps/GeneralsXZH.app", editor.play.app.isEmpty
                   && editor.play.appResolved.hasSuffix("/GeneralsX/Apps/GeneralsXZH.app"))
             _ = await settingsShown()
-            check("the game app typed again", await fill("Game app", with: request.app))
+            check("the game app typed again", await fill("Game app", id: "play.app", with: request.app))
             await settle()
             _ = await settingsShown()
             check("Faction: FactionChina chosen", await pick("FactionChina", from: "play.faction"))
             await settle()
             check("the store's faction is FactionChina", editor.play.faction == "FactionChina")
+            _ = await settingsShown()
+            // Multiplayer.ini's colors; the game's index is their order.
+            let blue = editor.playerColors.first { $0.name == "ColorBlue" }
+            log("  colors: " + editor.playerColors.map { "\($0.index) \($0.name)" }.joined(separator: ", "))
+            check("Color: Blue chosen", await pick("Blue", from: "play.color"))
+            await settle()
+            check("the store's color is ColorBlue (the game's color \(blue?.index ?? -1))",
+                  editor.play.color == "ColorBlue" && blue != nil)
             _ = await settingsShown()
             check("Start position: 2 chosen", await pick("2", from: "play.start"))
             await settle()
@@ -1193,7 +1222,7 @@ enum UICheck {
                   .appendingPathComponent("Contents/MacOS/run.sh").path)
             check("with -testMap on the test copy and the settings", Array(arguments.dropFirst()) == [
                 "-testMap", testCopy, "-testMapFaction", "FactionChina", "-testMapAI", "\(aiStart + 1)",
-                "-testMapAIDifficulty", "hard", "-testMapStart", "2"])
+                "-testMapAIDifficulty", "hard", "-testMapStart", "2", "-testMapColor", "\(blue?.index ?? -1)"])
             check("the test copy holds the unsaved edit, the map stays unsaved",
                   FileManager.default.fileExists(atPath: testCopy) && editor.mapEdit.edited && editor.mapEdit.savedPath == savedBeforePlay)
             // What the game says once its client runs (it prints this line when the map starts).

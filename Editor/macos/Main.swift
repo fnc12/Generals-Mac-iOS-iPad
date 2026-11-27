@@ -189,10 +189,10 @@ final class StoreReader {
 
     func mapPlayers() -> [MapPlayer] {
         var result: [MapPlayer] = []
-        rows("SELECT name, display_name, team, color, neutral FROM map_players ORDER BY neutral DESC, id") { s in
+        rows("SELECT name, display_name, team, color, neutral, start FROM map_players ORDER BY neutral DESC, id") { s in
             result.append(MapPlayer(name: Self.text(s, 0), displayName: Self.text(s, 1), team: Self.text(s, 2),
                                     color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 3)),
-                                    neutral: sqlite3_column_int(s, 4) != 0))
+                                    neutral: sqlite3_column_int(s, 4) != 0, start: Int(sqlite3_column_int(s, 5))))
         }
         return result
     }
@@ -408,6 +408,8 @@ final class EditorModel {
     /// The Play button's settings and last run (the play row), the playable factions.
     var play = PlayState()
     var factions: [FactionItem] = []
+    /// Multiplayer.ini's player colors, what play.color takes.
+    var playerColors: [PlayerColorItem] = []
     /// map.save_as found another map at its target (the map row's save_conflict).
     var saveConflict = ""
     /// The Save Map As sheet is up (⇧⌘S, the placement bar's Save As… button).
@@ -713,6 +715,7 @@ final class EditorModel {
                 maps = reader.maps()
                 roadTypes = reader.roadTypes()
                 factions = reader.factions()
+                playerColors = reader.playerColors()
                 modelName = ""
                 preview = PreviewModel()
                 animations = []

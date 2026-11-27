@@ -9,17 +9,29 @@
 
 namespace end_editor {
 
-    // A player of the map's SidesList and the team the editor gives the objects it owns.
+    // An owner an object of the map can have, and the team the editor gives the objects it owns: a
+    // player of the map's SidesList, or a start position of a multiplayer map.
     struct MapPlayer {
         std::string name;  // playerName ("" for the neutral player)
         std::string displayName;  // playerDisplayName
         std::string team;  // its default team: "team" + playerName
         std::uint32_t color = 0xFFFFFF;
         bool neutral = false;
+        // A start position (1.., name "Start<n>", team "teamStart<n>"), 0 a player of the SidesList.
+        // A multiplayer map's SidesList has no players of the game: GeneralsX's engine gives an
+        // object whose originalOwner is "teamStart<n>" to the player who starts at start position
+        // n, and leaves it out when nobody starts there (GameLogic.cpp, StartPositionOwner.h).
+        int start = 0;
     };
+    // The SidesList players that have their default team, then the start positions
+    // (mapStartPositions) on a map of two or more.
     std::vector<MapPlayer> mapPlayers(const MapFile& map);
-    // Every team of the SidesList (teamName), in file order.
+    // Every team of the SidesList (teamName), in file order, then the start positions' teams.
     std::vector<std::string> mapTeams(const MapFile& map);
+    // The map's start positions, like the game's map cache counts them: the waypoints
+    // "Player_1_Start", "Player_2_Start".. up to the first number missing, at most 8. A map of two
+    // or more is a multiplayer map (Play starts it as a skirmish).
+    int mapStartPositions(const MapFile& map);
 
     // The template name of waypoints (WorldBuilder's WaypointTool).
     inline constexpr const char* waypointTemplate = "*Waypoints/Waypoint";

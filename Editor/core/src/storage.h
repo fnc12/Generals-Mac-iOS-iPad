@@ -155,6 +155,9 @@ namespace end_editor {
         std::string team;  // the player's default team, what originalOwner names
         int color = 0xFFFFFF;
         bool neutral = false;
+        // A start position (1..: whoever starts there in the game owns the object), 0 a player of
+        // the map's SidesList (map_document.h, MapPlayer::start).
+        int start = 0;
     };
 
     // Textures of the map view: "terrain" (the atlas of all texture classes) and "water". RGBA8,
@@ -312,6 +315,15 @@ namespace end_editor {
         std::string side;  // e.g. "America"
     };
 
+    // The player colors of Multiplayer.ini (MultiplayerColor), what play.color takes. `index` is
+    // the game's color index (-testMapColor): the entries in the order the game reads them.
+    struct PlayerColorRow {
+        std::int64_t id = 0;
+        int index = 0;
+        std::string name;  // e.g. "ColorBlue"
+        int rgb = 0xFFFFFF;  // RGBColor, 0xRRGGBB
+    };
+
     // The Play button (map.play): its settings, kept across launches of the editor, and the
     // last test run. One row (id 1).
     struct PlayRow {
@@ -319,6 +331,7 @@ namespace end_editor {
         std::string app;  // the game app (or executable) as chosen; "" uses the default
         std::string appResolved;  // what map.play starts: the chosen app or the default one
         std::string faction = "FactionAmerica";  // the local player's faction, or "Random"
+        std::string color = "Random";  // the local player's color (a player_colors name), or "Random"
         int aiCount = 1;  // AI opponents (the game caps it at the map's start positions - 1)
         std::string aiDifficulty = "medium";  // "easy" | "medium" | "hard"
         int startPosition = 1;  // 1-based, 0 random
@@ -461,7 +474,8 @@ namespace end_editor {
                                        make_column("display_name", &MapPlayerRow::displayName),
                                        make_column("team", &MapPlayerRow::team),
                                        make_column("color", &MapPlayerRow::color),
-                                       make_column("neutral", &MapPlayerRow::neutral)),
+                                       make_column("neutral", &MapPlayerRow::neutral),
+                                       make_column("start", &MapPlayerRow::start)),
                             make_table("map_textures",
                                        make_column("id", &MapTextureRow::id, primary_key().autoincrement()),
                                        make_column("name", &MapTextureRow::name),
@@ -569,11 +583,17 @@ namespace end_editor {
                                        make_column("id", &FactionRow::id, primary_key().autoincrement()),
                                        make_column("name", &FactionRow::name),
                                        make_column("side", &FactionRow::side)),
+                            make_table("player_colors",
+                                       make_column("id", &PlayerColorRow::id, primary_key().autoincrement()),
+                                       make_column("idx", &PlayerColorRow::index),
+                                       make_column("name", &PlayerColorRow::name),
+                                       make_column("rgb", &PlayerColorRow::rgb)),
                             make_table("play",
                                        make_column("id", &PlayRow::id, primary_key()),
                                        make_column("app", &PlayRow::app),
                                        make_column("app_resolved", &PlayRow::appResolved),
                                        make_column("faction", &PlayRow::faction),
+                                       make_column("color", &PlayRow::color),
                                        make_column("ai_count", &PlayRow::aiCount),
                                        make_column("ai_difficulty", &PlayRow::aiDifficulty),
                                        make_column("start_position", &PlayRow::startPosition),

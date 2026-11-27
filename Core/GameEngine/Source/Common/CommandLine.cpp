@@ -1280,6 +1280,16 @@ Int parseTestMapStart(char *args[], int num)
 	return 1;
 }
 
+Int parseTestMapColor(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TestMap::s_settings.color = atoi(args[1]);
+		return 2;
+	}
+	return 1;
+}
+
 Int parseTestMapSeed(char *args[], int num)
 {
 	if (num > 1)
@@ -1344,6 +1354,7 @@ static CommandLineParam paramsForStartup[] =
 	{ "-testMapAI", parseTestMapAI },
 	{ "-testMapAIDifficulty", parseTestMapAIDifficulty },
 	{ "-testMapStart", parseTestMapStart },
+	{ "-testMapColor", parseTestMapColor },
 	{ "-testMapFrames", parseTestMapFrames },
 	{ "-testMapSeed", parseTestMapSeed },
 };

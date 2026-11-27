@@ -116,6 +116,11 @@ TEST_CASE("Commands: the Play button's settings") {
     CHECK(setting<SetPlayApp>("play.app\t").app.empty());
     CHECK(setting<SetPlayFaction>("play.faction\tFactionChina").faction == "FactionChina");
     CHECK(error("play.faction\t") == Error{"error:missing_argument", "play.faction: missing argument"});
+    CHECK(setting<SetPlayColor>("play.color\tColorBlue").color == "ColorBlue");
+    CHECK(setting<SetPlayColor>("play.color\tRandom").color == "Random");
+    for (const auto* bad: {"play.color\t", "play.color"}) {
+        CHECK(error(bad) == Error{"error:missing_argument", "play.color: missing argument"});
+    }
     CHECK(setting<SetPlayAiCount>("play.ai\t7").count == 7);
     CHECK(setting<SetPlayAiCount>("play.ai\t0").count == 0);
     CHECK(setting<SetPlayStart>("play.start\t2").position == 2);

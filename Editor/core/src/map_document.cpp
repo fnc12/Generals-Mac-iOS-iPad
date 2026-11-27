@@ -121,6 +121,60 @@ namespace end_editor {
         }
     }
 
+    namespace {
+        constexpr int maxSlots = 8;  // the game's MAX_SLOTS
+
+        bool hasTeam(const MapFile& map, std::string_view team) {
+            return std::any_of(map.teams.begin(), map.teams.end(), [&](const Dict& dict) {
+                const auto* teamName = findDictValue(dict, "teamName");
+                return teamName && teamName->text() == team;
+            });
+        }
+
+        // The start positions' owners, team "teamStart<n>" (n 1..), on a map of two or more start
+        // positions. One whose team the SidesList has already is left out.
+        template<class F>
+        void forEachStart(const MapFile& map, F&& visit) {
+            const auto positions = mapStartPositions(map);
+            if (positions < 2) {
+                return;
+            }
+            for (int start = 1; start <= positions; ++start) {
+                std::string team = "teamStart" + std::to_string(start);
+                if (!hasTeam(map, team)) {
+                    visit(start, std::move(team));
+                }
+            }
+        }
+    }
+
+    int mapStartPositions(const MapFile& map) {
+        unsigned found = 0;  // bit n - 1: a "Player_<n>_Start" waypoint
+        constexpr std::string_view prefix = "Player_", suffix = "_Start";
+        for (const auto& object: map.objects) {
+            if (object.templateName != waypointTemplate) {
+                continue;
+            }
+            const auto* name = findDictValue(object.properties, "waypointName");
+            if (!name) {
+                continue;
+            }
+            const std::string_view text = name->text();
+            if (text.size() == prefix.size() + 1 + suffix.size() && text.starts_with(prefix) &&
+                text.ends_with(suffix)) {
+                const char digit = text[prefix.size()];
+                if (digit >= '1' && digit <= '0' + maxSlots) {
+                    found |= 1u << (digit - '1');
+                }
+            }
+        }
+        int positions = 0;
+        while (positions < maxSlots && (found & (1u << positions))) {
+            ++positions;
+        }
+        return positions;
+    }
+
     std::vector<MapPlayer> mapPlayers(const MapFile& map) {
         std::vector<MapPlayer> players;
         for (const auto& side: map.sides) {
@@ -137,14 +191,18 @@ namespace end_editor {
             player.neutral = player.name.empty();
             // SidesList.cpp: every player has a default team named "team" + its name.
             player.team = "team" + player.name;
-            const bool hasTeam = std::any_of(map.teams.begin(), map.teams.end(), [&](const Dict& team) {
-                const auto* teamName = findDictValue(team, "teamName");
-                return teamName && teamName->text() == player.team;
-            });
-            if (hasTeam) {
+            if (hasTeam(map, player.team)) {
                 players.push_back(std::move(player));
             }
         }
+        forEachStart(map, [&](int start, std::string&& team) {
+            MapPlayer player;
+            player.name = team.substr(4);  // "Start<n>"
+            player.displayName = "Start " + std::to_string(start);
+            player.team = std::move(team);
+            player.start = start;
+            players.push_back(std::move(player));
+        });
         return players;
     }
 
@@ -155,6 +213,9 @@ namespace end_editor {
                 teams.emplace_back(name->text());
             }
         }
+        forEachStart(map, [&](int, std::string&& team) {
+            teams.push_back(std::move(team));
+        });
         return teams;
     }
 
