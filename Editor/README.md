@@ -283,8 +283,10 @@ Checked (27.11.2026, on this Mac unless said otherwise):
   copy loaded exactly 3 objects more than its untouched copy; 300 runs in about 14 minutes.
 - Replays with the rebuilt game: `scripts/qa/replays/run-replay-tests-macos.sh` — 3 of 3 pass
   (110, 155 and 220 CRC compares, all equal). The base game (`g_generals`) builds.
-- gui-sandbox VM: `--ui-check` on Tournament Desert, all 162 checks passed (the process is not
-  trusted for accessibility; no permission was needed). Play started the game in the VM (full
+- gui-sandbox VM: `--ui-check` on Tournament Desert: the last two runs passed all 163 checks (the
+  process is not trusted for accessibility; no permission was needed). Earlier runs found timing
+  flakes (a click while the inspector column was still animating, a popover toggled closed); the
+  check now waits for the layout and the controls instead of fixed delays. Play started the game in the VM (full
   screen, its Options.ini), which printed `TEST_MAP start map='…/maps/__editortest/__editortest.map'
   mode=skirmish positions=2 faction=FactionChina start=2 …` and created its swap chain: it went past
   its intro straight into the map. Nobody looked at the game's picture there; the check reads the

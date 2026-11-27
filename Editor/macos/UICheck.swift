@@ -595,6 +595,17 @@ enum UICheck {
                 return nil
             }
             @MainActor func object(_ id: Int64) -> MapObjectItem? { editor.mapScene.objects.first { $0.id == id } }
+            /// Until the map view keeps its size (the inspector column opens and closes animated, and a
+            /// point computed before that is somewhere else after it).
+            @MainActor func layoutSettled() async {
+                var last = view.bounds.size, stable = 0
+                let start = Date()
+                while stable < 3 && Date().timeIntervalSince(start) < 5 {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    stable = view.bounds.size == last ? stable + 1 : 0
+                    last = view.bounds.size
+                }
+            }
             @MainActor func drag(from start: NSPoint, by offset: CGFloat, modifiers: NSEvent.ModifierFlags = []) async {
                 PerfHarness.post(mouse: .leftMouseDown, at: start, window: window, modifiers: modifiers)
                 for step in 1...16 {
@@ -776,6 +787,7 @@ enum UICheck {
             post(key: "z", code: 6, modifiers: .command, window: window)
             await settle()
             check("⌘Z brought it back", selectedNow.allSatisfy { object($0) != nil })
+            await layoutSettled()
             if let one = selectedNow.first, let p = pointOn(one) {
                 click(at: windowPoint(p), window: window)
                 await settle(0.6)
@@ -790,6 +802,7 @@ enum UICheck {
             }
 
             // 8. The inspector: click the first object, type a height and a health, choose an owner.
+            await layoutSettled()
             if let p = pointOn(first.id) {
                 click(at: windowPoint(p), window: window)
             }
@@ -1085,9 +1098,16 @@ enum UICheck {
             // 12. Play settings: the AI stepper, the difficulty buttons, the game app typed, the Default
             // button, the faction and start pop-ups.
             @MainActor func settingsShown() async -> Bool {
-                if exists("play.faction") { return true }
-                press("toolbar.playSettings")
-                await wait("the Play settings", timeout: 5) { exists("play.faction") }
+                // The button toggles the popover: pressed again when the first press did not show it.
+                for _ in 0..<3 {
+                    if exists("play.faction") { return true }
+                    window.makeKeyAndOrderFront(nil)
+                    press("toolbar.playSettings")
+                    let start = Date()
+                    while !exists("play.faction") && Date().timeIntervalSince(start) < 4 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                }
                 return exists("play.faction")
             }
             check("the toolbar's Play Settings shows the settings", await settingsShown())
@@ -1188,7 +1208,9 @@ enum UICheck {
                   && thirdPid > 0 && kill(-pid_t(thirdPid), 0) != 0)
 
             // 14. The Play settings' Choose… and the sheet's Other Location… open their system panels.
-            if await settingsShown() {
+            let settingsUp = await settingsShown()
+            check("the Play settings are shown again", settingsUp)
+            if settingsUp {
                 check("Choose… is pressed", pressFromRunLoop("play.choose"))
                 let panel = await modalPanel()
                 check("Play settings > Choose… opened an app panel", panel is NSOpenPanel)
@@ -1228,6 +1250,7 @@ enum UICheck {
             check("the side \(sideName) (\(sideCount)) is clicked in the sidebar", clickElement("objects.side." + sideName))
             await settle(1)
             let ofSide = editor.objects.filter { $0.side == sideName }.count
+            await wait("the table of the side", timeout: 10) { objectTable(rows: ofSide) != nil }
             check("the table shows its \(ofSide) objects", objectTable(rows: ofSide) != nil)
             check("All objects is clicked", clickElement("objects.side.all"))
             await settle(1)
