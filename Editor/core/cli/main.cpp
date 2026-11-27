@@ -143,18 +143,17 @@ namespace {
                                 order_by(&RoadTypeRow::id),
                                 limit(1)));
     }
-    // Map paths in path order, those with `only` in them (all when it is empty). Read into a list
-    // before the maps are opened: a statement left open while the core writes would keep its
-    // connection on the old snapshot (and hold back the WAL checkpoint).
-    template<class... Conditions>
-    std::vector<std::string> mapPaths(const std::string& only, Conditions... conditions) {
-        std::vector<std::string> paths;
-        for (auto&& path: db->iterate(select(&MapListRow::path, conditions..., order_by(&MapListRow::path)))) {
-            if (path.find(only) != std::string::npos) {
-                paths.push_back(std::move(path));
-            }
-        }
-        return paths;
+    // Map paths in path order, those with `only` in them (instr() of "" is 1: all of them). The whole
+    // list is needed before the loops open the maps: a statement left open while the core writes
+    // would keep this connection on the old snapshot (and hold back the WAL checkpoint).
+    std::vector<std::string> mapPaths(const std::string& only) {
+        return db->select(&MapListRow::path, where(instr(&MapListRow::path, only) > 0), order_by(&MapListRow::path));
+    }
+    template<class Condition>
+    std::vector<std::string> mapPaths(const std::string& only, Condition condition) {
+        return db->select(&MapListRow::path,
+                          where(instr(&MapListRow::path, only) > 0 and std::move(condition)),
+                          order_by(&MapListRow::path));
     }
 
     bool send(const std::string& command) {
@@ -293,11 +292,8 @@ int main(int argc, char** argv) {
 
     if (allModels) {
         // Read into a list before the models are opened (see mapPaths()).
-        std::vector<std::string> models;
-        for (auto&& model: db->iterate(
-                 select(distinct(&ObjectRow::model), where(c(&ObjectRow::model) != ""), order_by(&ObjectRow::model)))) {
-            models.push_back(std::move(model));
-        }
+        const auto models =
+            db->select(distinct(&ObjectRow::model), where(c(&ObjectRow::model) != ""), order_by(&ObjectRow::model));
         std::map<std::string, int> errors;
         std::vector<std::string> failed;
         int ready = 0, withAnimations = 0, untextured = 0;
@@ -658,7 +654,7 @@ int main(int argc, char** argv) {
                   not like(&ObjectRow::kindOf, "%AIRCRAFT%")),
             multi_order_by(order_by(c(&ObjectRow::name) != "AmericaTankCrusader"), order_by(&ObjectRow::name)),
             limit(1)));
-        const auto paths = mapPaths(onlyMaps, where(c(&MapListRow::source) != "User maps"));
+        const auto paths = mapPaths(onlyMaps, c(&MapListRow::source) != "User maps");
         int index = 0;
         for (const auto& path: paths) {
             ++index;
