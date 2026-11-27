@@ -858,7 +858,7 @@ struct StatusText: View {
         case "ready":
             // Truncated: the toolbar keeps room for Play and its settings.
             Text(model.status.message).foregroundStyle(.secondary).help(model.status.gameDir)
-                .lineLimit(1).truncationMode(.tail).frame(maxWidth: 240)
+                .lineLimit(1).truncationMode(.tail).frame(maxWidth: 180)
         case "error": Text(model.status.message).foregroundStyle(.red)
         default: Text("No game folder open").foregroundStyle(.secondary)
         }

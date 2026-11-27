@@ -422,10 +422,24 @@ final class OrbitMTKView: MTKView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    private var lastPoint: NSPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        lastPoint = event.locationInWindow
+    }
+
+    // Deltas from the locations, not event.deltaX/Y (not every event source fills those).
     override func mouseDragged(with event: NSEvent) {
         guard let playback else { return }
-        playback.yaw -= Float(event.deltaX) * 0.01
-        playback.pitch = min(max(playback.pitch + Float(event.deltaY) * 0.01, -1.5), 1.5)
+        let point = event.locationInWindow
+        let last = lastPoint ?? point
+        lastPoint = point
+        playback.yaw -= Float(point.x - last.x) * 0.01
+        playback.pitch = min(max(playback.pitch + Float(last.y - point.y) * 0.01, -1.5), 1.5)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        lastPoint = nil
     }
 
     override func scrollWheel(with event: NSEvent) {

@@ -13,12 +13,14 @@ idea 13). macOS first; Windows (C#) and Linux (gtkmm) clients later. No Qt.
     `maps`, `map`, `map_textures`, `map_terrain`, `map_water`, `map_objects`,
     `map_object_properties`, `map_models`, `map_model_parts`, `map_model_textures`,
     `map_players`, `map_warnings`, and the user's editing state `map_editor`, `map_selection`,
-    `map_links`, `road_types` (`core/src/storage.h`).
+    `map_links`, `road_types`, and the Play button's `play` (its settings, kept across
+    sessions, and the last run) and `factions` (`core/src/storage.h`).
   - Client → core: tab separated commands through the C ABI
     (`core/include/end_editor/editor_core_c.h`): `game.open`, `model.open`, `model.animation`,
     `map.open`, `maps.user`, `map.place`, `map.move`, `map.rotate`, `map.delete`, `map.undo`,
-    `map.redo`, `map.save`, and the client's input: `map.press`/`drag`/`release`/`click_right`,
-    `edit.*`, `placement.*`, `selection.*`, `waypoint.link`, `note.clear`.
+    `map.redo`, `map.save`, `map.save_as`, `map.play`, `play.*`, and the client's input:
+    `map.press`/`drag`/`release`/`click_right`, `edit.*`, `placement.*`, `selection.*`,
+    `waypoint.link`, `note.clear`.
   - Editing state and rules live in the core too (`core/src/map_editor.h`): the placement tool,
     a right click waiting for an object, the selection, mouse gestures, the clipboard and the
     note shown to the user. The client turns events into commands, adding only what needs its
@@ -72,16 +74,22 @@ queue; for a machine nobody is watching, like the gui-sandbox VM):
 `END Editor --perf <zh> <base> <map path> <out.txt>` measures idle, a drag over the map and
 scrolling the map list and the object table: display-link frame intervals and missed vsyncs,
 map frames, model changes and main-thread busy and CPU time.
-`END Editor --ui-check <zh> <base> <map path> <template> <save name> <out.txt>` uses the window
-only as a user does: events on the views and clicks on the real controls (the map list's search
-field and row, the object picker's search field and row, the tool buttons, the inspector's
-fields, the Edit menu), never model properties. It starts with a right click while no object is
-chosen, then places, selects several, drags, turns, copies, pastes, duplicates, band-selects,
-deletes, raises an object and sets its health in the inspector, places waypoints and a road,
-undoes, redoes, saves and opens the saved map from the list; the exit code is the number of
-failed checks. Not driven: the owner pop-ups (SwiftUI's pop-up is no NSPopUpButton and its open
-menu runs its own event loop) and the system save panel (it runs out of process); the save uses
-the command the panel's Save button ends in.
+`END Editor --ui-check <zh> <base> <map path> <template> <save name> <game app> <out.txt>` uses
+the window only as a user does, never model properties: mouse and key events posted to the app's
+own queue at the places the views show things, clicks on the real controls, and for controls
+SwiftUI draws itself (pop-ups, buttons in forms and popovers, steppers, segments) the
+Accessibility API on the app's own process (AXUIElement, what VoiceOver uses: SwiftUI builds its
+accessibility tree only for such a client; requests to the own process are answered in place, so
+no permission is needed). A pop-up or menu is opened like that; once AppKit tracks its menu, the
+item is chosen the way AppKit does after a click on it. It walks every feature of the
+"Test coverage" table below that is marked "ui"; the exit code is the number of failed checks.
+Run in the gui-sandbox VM (the game app given is the one Play starts):
+
+```bash
+open -W -n "END Editor.app" --args --ui-check ~/generalszh-test/GeneralsZH \
+    ~/generalszh-test/home/GeneralsX/Generals "maps/tournament desert/tournament desert.map" \
+    AmericaTankCrusader UICheckStep6 ~/editor-step6/GeneralsXZH.app ~/editor-step6/ui.txt
+```
 
 ## What works (step 1)
 
@@ -228,4 +236,125 @@ types (angled, tight) and joining a new road to an existing end; landmark bridge
 objects); the preview is not drawn from the models or roads. A saved map was not started in a
 game here.
 
+## What works (step 6)
+
+- **Play** (toolbar ▶, ⌘R, Map > Play Map), like the World Editor's Test Map: the core writes the
+  open map with its unsaved edits to a test copy in the game's user Maps folder,
+  `Maps/__EditorTest/__EditorTest.map` (+ `.tga`; the user's own file and its "Edited" state are
+  not touched, the copy is not listed among the user's maps), and starts the game app on it:
+  `<app>/Contents/MacOS/run.sh -testMap <copy> -testMapFaction <f> -testMapAI <n>
+  -testMapAIDifficulty <easy|medium|hard> -testMapStart <n>`, with the editor's game folders as
+  `CNC_GENERALS_ZH_PATH` / `CNC_GENERALS_PATH` and `GENERALSX_USER_DATA_DIR` = the folder whose
+  `Maps` has the copy. The game runs on its own (own session; its output goes to `play.log` next to
+  the store); the `play` row says running / exited (exit code) / error. Play again closes the game
+  the last Play started (its whole process group: `run.sh` runs the game as its child; killed when it
+  does not quit within 3 s); Map > Stop Game closes it.
+- **Play Settings** (toolbar ⚙): faction (`PlayerTemplate.ini`'s playable factions, or Random),
+  start position (1–8 or random), AI opponents (0–7) and difficulty, the game app (Choose…,
+  Default = `~/GeneralsX/Apps/GeneralsXZH.app`, `GeneralsX.app` for the base game). The defaults
+  (FactionAmerica at position 1 against one medium AI) need no setup; the settings are stored by the
+  core and kept across sessions.
+- **The game** (`Core/GameEngine/Source/Common/TestMap.cpp`, release builds, Zero Hour and the base
+  game): `-testMap <map>` skips the intro, the shell map and the main menu and starts the map once
+  the client runs. A map with two or more start positions is a skirmish built from the options (the
+  local player at the start position, the AI opponents capped at the free positions, the default
+  cash, random colors and AI factions); any other map is started as a mission, like the debug-only
+  `-file`. The map's cache entry is read again first (the game's map cache compares only file sizes,
+  so a map saved over with a moved start waypoint kept its old start positions). `-testMapSeed` fixes
+  the random seed. With `-headless` it runs `-testMapFrames` logic frames (default 300), prints one
+  `TEST_MAP ok|error frames=… mode=skirmish|single_player players=… loaded_objects=… objects=…
+  local_objects=… local_faction=…` line and exits 0 only when the map started, ran every frame and
+  (skirmish) the local player owns objects. It is a second instance, so it starts while the game runs.
+- **Save Map As** is an in-app sheet: a name (`map.save_as <name>` → `<user Maps>/<name>/<name>.map`
+  and its 128×128 `.tga`), Save, Cancel, Replace when another map has that name (the core refuses
+  until asked again with `replace`; `map.save_conflict` names the file), Other Location… for the
+  system panel (any path, never into the game folders).
+- The map view: a trackpad two-finger swipe pans, ⌘ + swipe, a mouse wheel or pinch zooms (merged
+  from master); W3D environment-map passes are skipped in the preview (merged from master).
+
+Checked (27.11.2026, on this Mac unless said otherwise):
+- Core: `ctest` — 47 test cases, 1193 assertions, all pass (new: Play with a stand-in game app that
+  records its arguments and environment, Play again, a game that ignores SIGTERM and runs its work in
+  a child, Play settings and their persistence, Save Map As a name and the replace question).
+- Game: `scripts/qa/editor/run-play-smoke-macos.sh` with the rebuilt GeneralsXZH — all 150 maps of
+  the archives saved by the editor untouched and edited (an object moved, one turned, three
+  AmericaTankCrusader placed, a path of three waypoints, a road segment) loaded and ran 300 frames
+  headless with exit code 0: 150 of 150 passed (64 as skirmishes, 86 as missions), and every edited
+  copy loaded exactly 3 objects more than its untouched copy; 300 runs in about 14 minutes.
+- Replays with the rebuilt game: `scripts/qa/replays/run-replay-tests-macos.sh` — 3 of 3 pass
+  (110, 155 and 220 CRC compares, all equal). The base game (`g_generals`) builds.
+- gui-sandbox VM: `--ui-check` on Tournament Desert, all 162 checks passed (the process is not
+  trusted for accessibility; no permission was needed). Play started the game in the VM (full
+  screen, its Options.ini), which printed `TEST_MAP start map='…/maps/__editortest/__editortest.map'
+  mode=skirmish positions=2 faction=FactionChina start=2 …` and created its swap chain: it went past
+  its intro straight into the map. Nobody looked at the game's picture there; the check reads the
+  process, its arguments and its log. After the check no game process was left.
+
+Not done: Play on Windows and Linux (the core starts processes with posix_spawn; Windows reports
+"not supported yet"); an option to start the game windowed (it uses its Options.ini); the map cache
+problem above is fixed only for `-testMap` — the game's own map lists can still show stale start
+positions for a user map saved over with the same size.
+
 Next: terrain editing.
+
+## Test coverage
+
+Every user-facing feature and what checks it. Keep this table when adding a feature.
+
+- **core**: `ctest --test-dir build/editor-core` (`core/tests/*.cpp`; `map_flow_tests.cpp` drives user
+  flows through the same commands the client sends and reads the store like the client).
+- **maps**: `end-editor-cli <zh> --base <base> --roundtrip-maps <dir>` / `--edit-maps <dir>` over all 150
+  maps of the game's archives (real game data).
+- **game**: `scripts/qa/editor/run-play-smoke-macos.sh`: the game (headless, `-testMap`) starts every map
+  saved by the editor, untouched and edited.
+- **ui**: `END Editor --ui-check` in the gui-sandbox VM: only real input (posted mouse and key events on
+  the views, clicks and Accessibility presses on the real controls, menu items chosen the way AppKit
+  does after a click); the step it checks is quoted.
+
+| Feature | How the user does it | Covered by |
+|---|---|---|
+| **Game data** | | |
+| Open the Zero Hour folder, find the base game folder | launch (last folder), Game Folders > Zero Hour Folder… / Base Generals Folder… | core (game folder scan, loose files win, archives), ui ("Game Folders > … opened a folder panel"); the folder picked in the system panel: not driven (the panel runs out of process) |
+| Status line (objects, INI files, archives, warnings) | toolbar | core ("EditorCore writes the store a client reads"); display only |
+| **Objects mode** | | |
+| Switch Objects / Maps | toolbar segments | ui ("the toolbar's Objects segment is clicked"; Maps is the launch setting, Open Map File… switches back) |
+| Filter by side | sidebar rows | ui ("the side … is clicked", "the table shows its … objects"), core (sides from INI) |
+| Search name / model / KindOf | table search field | ui ("the object table's search field", "the search left … rows") |
+| Sort by a column | column headers | ui ("the Side column's header sorted the table") |
+| Object details (definition, side, model, KindOf, source) | select a row | core (ini_objects_tests: blocks, reskins, child objects), ui ("the details show its model and source") |
+| Model preview: meshes, textures, bones, house color, hidden parts, environment-map passes skipped | select a row | core (model_tests: W3D, shaders and passes, textures, skeleton), ui ("the preview shows its model"); how it looks: `--snapshot` (not compared automatically) |
+| Animation | pop-up | core ("EditorCore model commands"), ui ("the animation pop-up chose …", "the preview plays it") |
+| Play / pause | button | ui ("play/pause is clicked", "it paused or played") |
+| Hidden parts | checkbox | core (what the Draw module hides), ui ("Hidden parts is clicked") |
+| Orbit and zoom the preview | drag, scroll | ui ("a drag on the preview turns the model", "scrolling zooms the preview") |
+| Export GIF (square, wide) | menu > save panel | ui ("Export GIF > Square 800×800 opened the save panel for <suggested name>"); the file chosen in the panel: not driven (out of process); the GIF itself: `END Editor --gif` (same code, run by hand, not compared automatically) |
+| **Maps mode** | | |
+| Map list (archives, loose Maps folders, user Maps folder), search, open | sidebar | core ("EditorCore lists and opens maps", user maps listed), maps (all 150 open), ui ("the map … is clicked in the map list", the saved map opened from the list) |
+| Open Map File… | Game Folders menu | ui ("Game Folders > Open Map File… opened a .map file panel", "switched to the Maps mode"); the file chosen: not driven (out of process); opening any .map path: core |
+| Map view: terrain, blends, water, objects with models, markers, links | open a map | core ("Map scene: terrain, water, objects", map_tests), maps (all 150 without warnings); how it looks: `--map-snapshot` (not compared automatically) |
+| Models / Markers / Water | checkboxes | ui ("the map.showModels checkbox turns it off and on", markers, water) |
+| Pan, orbit, zoom | drag on empty ground, ⌥-drag; trackpad two-finger swipe pans, ⌘ + swipe, a mouse wheel or pinch zooms | ui ("a drag on empty ground pans the camera", "⌥-drag turns it", "a two-finger swipe pans … and does not zoom" (a CGEvent in pixel units, continuous: precise deltas), "a mouse wheel zooms … and does not pan" (line units), "⌘ with a two-finger swipe zooms"); pinch and the rotate gesture: not driven (there is no public API to make magnify/rotate events; they call the same camera functions, zoom and orbit) |
+| Select, add to selection, rubber band, clear | click, ⇧-click, ⇧-drag, click on empty ground | core (Flow: clicks, shift clicks and a rubber band), ui ("⇧-click selected both", "the ⇧-drag band selected the duplicates", "a click on empty ground cleared the selection") |
+| Select all | ⌘A | core, ui ("⌘A selected all … objects") |
+| Place an object, the picker | right click or ⌃-click; the bar's object button | core (Flow: a right click with no object chosen asks for one), ui ("the picker's row … is clicked", "⌃-click placed a second one", "the bar's object button is clicked", "Esc closed it") |
+| Placement owner | bar pop-up | core (Map players, placement.owner), ui ("the placement bar's Owner pop-up chose …", "owned by the chosen team") |
+| Placement angle | bar stepper | core, ui ("the bar's angle stepper is clicked up", "and down again") |
+| Move the selection | drag a selected object | core (Flow: a drag on the selection moves it), maps, ui ("the drag moved both by the same offset", "on the ground there") |
+| Turn the selection | `[` `]` (15°), `{` `}` (1°) | core, ui ("] turned the selection by 15°", "} turned it by 1° more", "{ and [ turned it back") |
+| Delete | Delete key, inspector's Delete | core, maps, ui ("Delete removed the selection", "the inspector's Delete removed the clicked object") |
+| Copy, paste at the cursor, duplicate | ⌘C, ⌘V, ⌘D | core (Flow: Delete, turn, copy, paste and duplicate), maps, ui ("⌘C copied 2 objects", "⌘V pasted …, around the cursor", "⌘D duplicated them") |
+| Undo, redo | ⌘Z, Edit > Redo, the bar's buttons | core, maps, ui ("⌘Z brought it back", "Edit > Redo put it back", "the bar's Undo is clicked", "the bar's Redo is clicked"); ⇧⌘Z typed: not driven (posted key events with ⇧ do not match menu key equivalents; Edit > Redo is the same item) |
+| Inspector: angle field and stepper, height, owner, name, script, health, flags | inspector | core (Flow: the inspector edits owner, height and properties), maps (raised, properties), ui ("angle typed", "the inspector's angle stepper", "height typed", "the inspector's Owner pop-up chose …", "name typed", "script typed", "health typed", "the Indestructible checkbox is clicked") |
+| Inspector: properties — edit, add (type pop-up), remove | inspector | core, ui ("a new property's key typed", "its type chosen in the pop-up", "Add is clicked", "its value field is typed into", "its remove button is clicked") |
+| Waypoint tool: paths, link two | Waypoint button, right clicks, Link Waypoints | core (Flow: waypoints are placed as linked paths), maps, ui ("three right clicks placed three waypoints", "linked into a path", "the inspector's Link Waypoints is clicked") |
+| Road and bridge tools, road type, Esc | Road / Bridge buttons, pop-up, two right clicks | core (Flow: roads and bridges are segments), maps, ui ("the Road button chose the road tool", "the road type pop-up chose …", "the Bridge button chose the bridge tool", "Esc cancelled a started road", "the second right click placed the road segment") |
+| Notes (what to do, what was refused) | the bar | core (Flow: notes last until the next note or map change), ui (the picker's note) |
+| Save Map As (name, Save, Cancel, Replace) | ⇧⌘S / File > Save Map As… / the bar's Save As… | core (Flow: Save Map As a name …; Save Map As writes the map's preview), maps (byte for byte, edits read back), ui ("File > Save Map As… is chosen", "its Cancel is clicked", "saved as …", "with its 128×128 preview", "the sheet asks before it replaces …", "Replace saved over it"); ⇧⌘S typed: not driven (see ⇧⌘Z) |
+| Save to another location | the sheet's Other Location… | ui ("Save As > Other Location… opened the save panel in the Maps folder"); the file chosen: not driven (out of process); saving to any path, never into the game folders: core |
+| A saved map in the game | the game's map lists | game (every map loads and runs in the game, see Play) |
+| **Play** | | |
+| Play: save the map with its unsaved edits to the test copy and start the game on it | toolbar Play, ⌘R, Map > Play Map | core (Flow: Play saves the map with its unsaved edits …: the command line, the environment, the user's map left unsaved), ui ("the toolbar's Play is clicked", "the game runs", "with -testMap on the test copy and the settings", "the game started the test copy", "⌘R started the game again", "Map > Play Map started it again") |
+| Play again / Stop Game | ⌘R again, Map > Stop Game | core (Flow: Play again closes the game the last Play started), ui ("the first game is closed", "the game ended") |
+| Play settings: faction, start position, AI opponents, AI difficulty, game app, Default, Choose… | toolbar Play Settings | core (Flow: Play settings: defaults, refused values, kept across sessions), ui ("Faction: FactionChina chosen", "Start position: 2 chosen", "the AI stepper's up arrow", "the difficulty's Hard is clicked", "the game app typed", "Default is clicked", "Play settings > Choose… opened an app panel"); the app chosen in that panel: not driven (out of process) |
+| The game goes straight into the map (skirmish for maps with start positions, a mission otherwise) | — | game (all maps, untouched and edited: placed units, waypoints, a road), ui (the windowed game in the VM, see below) |
+

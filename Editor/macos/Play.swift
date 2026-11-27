@@ -165,7 +165,8 @@ struct SaveMapSheet: View {
             HStack {
                 Button("Other Location…") {
                     dismiss()
-                    editor.saveMapToOtherLocation()
+                    // Once this sheet is gone: the system panel is a sheet on the same window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { editor.saveMapToOtherLocation() }
                 }
                 .accessibilityIdentifier("save.other")
                 Spacer()

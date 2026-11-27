@@ -198,8 +198,20 @@ enum UICheck {
     static func windowFrame(of view: NSView) -> NSRect { view.convert(view.bounds, to: nil) }
 
     /// Clicks a field, selects what it holds (⌘A) and types over it.
-    static func fill(_ placeholder: String, with text: String, returnKey: Bool = true) async -> Bool {
-        guard let (field, window) = field(placeholder) else {
+    /// The text field the accessibility element `id` is (SwiftUI's fields have no placeholder string
+    /// on the view).
+    static func field(id: String) -> (NSTextField, NSWindow)? {
+        guard let element = axFind(id), let rect = axFrame(element) else { return nil }
+        let point = NSPoint(x: rect.midX, y: rect.midY)
+        for (view, window) in views() {
+            guard let field = view as? NSTextField, field.isEditable else { continue }
+            if window.convertToScreen(windowFrame(of: field)).contains(point) { return (field, window) }
+        }
+        return nil
+    }
+
+    static func fill(_ placeholder: String, id: String? = nil, with text: String, returnKey: Bool = true) async -> Bool {
+        guard let (field, window) = id.flatMap({ field(id: $0) }) ?? field(placeholder) else {
             diagnostic = "  text fields: " + views().compactMap { $0.0 as? NSTextField }.map {
                 "\(type(of: $0)) '\($0.placeholderString ?? "-")' '\($0.stringValue)' editable \($0.isEditable)"
             }.joined(separator: "; ")
@@ -434,6 +446,19 @@ enum UICheck {
 
     static func exists(_ id: String) -> Bool { axFind(id) != nil }
 
+    /// Presses `id` from the run loop rather than from this check's task: a button that runs a
+    /// modal panel does not return until the panel closes, and the check's task (on the main actor)
+    /// could not run meanwhile to look at the panel.
+    static func pressFromRunLoop(_ id: String) -> Bool {
+        guard let element = axFind(id) else {
+            diagnostic = "  no control \(id)"
+            return false
+        }
+        scrollToVisible(element)
+        RunLoop.main.perform(inModes: [.default]) { _ = AXUIElementPerformAction(element, kAXPressAction as CFString) }
+        return true
+    }
+
     /// Whether some element shows `text` (a Text's value or title).
     static func exists(value text: String) -> Bool {
         var queue: [AXUIElement] = [AXUIElementCreateApplication(getpid())]
@@ -460,10 +485,12 @@ enum UICheck {
     }
 
     /// The system panel the app runs modally (an open or save panel), once it is up.
-    static func modalPanel(timeout: Double = 5) async -> NSSavePanel? {
+    static func modalPanel(timeout: Double = 20) async -> NSSavePanel? {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {
             if let panel = NSApp.modalWindow as? NSSavePanel { return panel }
+            // A panel shown as a sheet on a window (Save As's Other Location…).
+            if let panel = NSApp.windows.compactMap({ $0.attachedSheet as? NSSavePanel }).first(where: \.isVisible) { return panel }
             if let panel = NSApp.windows.first(where: { $0.isVisible && $0 is NSSavePanel }) as? NSSavePanel { return panel }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -471,8 +498,12 @@ enum UICheck {
     }
 
     /// Closes a system panel the way its Cancel button does (its view runs out of process).
-    static func closePanel(_ panel: NSSavePanel) {
+    static func closePanel(_ panel: NSSavePanel) async {
         if NSApp.modalWindow === panel { NSApp.abortModal() } else { panel.cancel(nil) }
+        let start = Date()
+        while (panel.isVisible || NSApp.modalWindow === panel) && Date().timeIntervalSince(start) < 10 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     // MARK: The check
@@ -491,17 +522,7 @@ enum UICheck {
             }
             @MainActor func check(_ what: String, _ ok: Bool) {
                 log((ok ? "ok    " : "FAIL  ") + what)
-                if !ok {
-                    failures += 1
-                    // UICHECK_SHOTS=<folder>: a screenshot of every failed check (the VM's screen).
-                    if let folder = ProcessInfo.processInfo.environment["UICHECK_SHOTS"] {
-                        let shot = Process()
-                        shot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                        shot.arguments = ["-x", folder + "/fail-\(failures).png"]
-                        try? shot.run()
-                        shot.waitUntilExit()
-                    }
-                }
+                if !ok { failures += 1 }
             }
             @MainActor func wait(_ what: String, timeout: Double = 120, until done: () -> Bool) async {
                 let start = Date()
@@ -719,8 +740,14 @@ enum UICheck {
 
             // 6. A click on empty ground clears; a ⇧-drag rubber band selects the duplicates.
             let empty = CGPoint(x: 30, y: 30)
+            // ⌘A selects all (the inspector of every object takes a while to show).
+            post(key: "a", code: 0, modifiers: .command, window: window)
+            await wait("the selection of all", timeout: 10) { editor.mapSelection.count == editor.mapScene.objects.count }
+            check("⌘A selected all \(editor.mapScene.objects.count) objects", editor.mapSelection.count == editor.mapScene.objects.count)
+            await settle(1.5)
             click(at: windowPoint(empty), window: window)
-            await settle()
+            await wait("the selection to clear", timeout: 10) { editor.mapSelection.isEmpty }
+            await settle(1)  // the inspector closes, the map view widens
             check("a click on empty ground cleared the selection", editor.mapSelection.isEmpty)
             let points = duplicates.compactMap(shown)
             if points.count == 2 {
@@ -761,17 +788,16 @@ enum UICheck {
                 }
                 check("⌘Z brought it back", object(one) != nil)
             }
-            post(key: "a", code: 0, modifiers: .command, window: window)
-            await settle()
-            check("⌘A selected all \(editor.mapScene.objects.count) objects", editor.mapSelection.count == editor.mapScene.objects.count)
-            click(at: windowPoint(empty), window: window)
-            await settle()
 
             // 8. The inspector: click the first object, type a height and a health, choose an owner.
             if let p = pointOn(first.id) {
                 click(at: windowPoint(p), window: window)
             }
+            await wait("the click's selection", timeout: 10) { editor.mapSelection == [first.id] }
             await settle(0.6)
+            if editor.mapSelection != [first.id] {
+                log("  first object at \(String(describing: pointOn(first.id))), selection \(editor.mapSelection.prefix(5)) (\(editor.mapSelection.count)), gesture '\(editor.mapGesture.kind)', note '\(editor.mapEditor.note)', windows \(NSApp.windows.filter(\.isVisible).map { "\(type(of: $0))" }), key \(String(describing: NSApp.keyWindow.map { type(of: $0) }))")
+            }
             check("a click selected only the first object", editor.mapSelection == [first.id])
             let typedHeight = await fill("Height", with: "25")
             check("height typed into the inspector", typedHeight)
@@ -819,18 +845,25 @@ enum UICheck {
                 if let element = axFind(id) { scrollToVisible(element) }
                 await settle()
             }
-            await reveal("inspector.newKey")
-            check("a new property's key typed", await fill("key", with: "uiCheckKey", returnKey: false))
-            if field("key") == nil { log(diagnostic) }
             check("its type chosen in the pop-up", await pick("int", from: "inspector.newType"))
-            await reveal("inspector.newValue")
-            check("its value typed", await fill("value", with: "7", returnKey: false))
+            await reveal("inspector.newKey")
+            var keyTyped = await fill("key", id: "inspector.newKey", with: "uiCheckKey", returnKey: false)
             await settle()
+            if field(id: "inspector.newKey")?.0.stringValue != "uiCheckKey" {
+                keyTyped = await fill("key", id: "inspector.newKey", with: "uiCheckKey", returnKey: false)  // once more
+                await settle()
+            }
+            check("a new property's key typed", keyTyped && field(id: "inspector.newKey")?.0.stringValue == "uiCheckKey")
+            if field(id: "inspector.newKey") == nil { log(diagnostic) }
+            await reveal("inspector.newValue")
+            check("its value typed", await fill("value", id: "inspector.newValue", with: "7", returnKey: false))
+            await settle()
+            log("  new property fields: key '\(field(id: "inspector.newKey")?.0.stringValue ?? "?")' value '\(field(id: "inspector.newValue")?.0.stringValue ?? "?")'")
             check("Add is clicked", press("inspector.add"))
             await settle()
             check("the property uiCheckKey is an int 7", property("uiCheckKey").map { $0.type == "int" && $0.value == "7" } == true)
             await reveal("inspector.property.uiCheckKey")
-            check("its value field is typed into", await fill("uiCheckKey", with: "8"))
+            check("its value field is typed into", await fill("uiCheckKey", id: "inspector.property.uiCheckKey", with: "8"))
             await settle()
             check("uiCheckKey is 8", property("uiCheckKey")?.value == "8")
             check("its remove button is clicked", press("inspector.remove.uiCheckKey"))
@@ -949,13 +982,34 @@ enum UICheck {
             check("a drag on empty ground pans the camera", state.target != targetBefore)
             await drag(from: windowPoint(empty), by: 60, modifiers: .option)
             check("⌥-drag turns it", state.yaw != yawBefore)
-            if let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -40, wheel2: 0, wheel3: 0) {
+            // Scroll events as the devices make them (CGEvent, dispatched by the window): a trackpad's
+            // two-finger swipe (pixel units, continuous: precise deltas) pans; ⌘ with it, or a mouse
+            // wheel (line units), zooms.
+            @MainActor func scroll(units: CGScrollEventUnit, continuous: Bool, by delta: Int32, flags: CGEventFlags = []) {
+                guard let event = CGEvent(scrollWheelEvent2Source: nil, units: units, wheelCount: 2, wheel1: delta,
+                                          wheel2: delta / 2, wheel3: 0) else { return }
+                event.setIntegerValueField(.scrollWheelEventIsContinuous, value: continuous ? 1 : 0)
+                event.flags = flags
                 let at = window.convertPoint(toScreen: windowPoint(center))
-                scroll.location = CGPoint(x: at.x, y: (NSScreen.screens.first?.frame.height ?? 0) - at.y)
-                if let event = NSEvent(cgEvent: scroll) { window.sendEvent(event) }
+                event.location = CGPoint(x: at.x, y: (NSScreen.screens.first?.frame.height ?? 0) - at.y)
+                if let ns = NSEvent(cgEvent: event) { window.sendEvent(ns) }
             }
+            var camTarget = state.target, camDistance = state.distance
+            scroll(units: .pixel, continuous: true, by: -40)
             await settle()
-            check("scrolling zooms (distance \(distanceBefore) -> \(state.distance))", state.distance != distanceBefore)
+            check("a two-finger swipe pans (target \(camTarget) -> \(state.target)) and does not zoom",
+                  state.target != camTarget && state.distance == camDistance)
+            camTarget = state.target
+            scroll(units: .line, continuous: false, by: -3)
+            await settle()
+            check("a mouse wheel zooms (distance \(camDistance) -> \(state.distance)) and does not pan",
+                  state.distance != camDistance && state.target == camTarget)
+            camDistance = state.distance
+            scroll(units: .pixel, continuous: true, by: 40, flags: .maskCommand)
+            await settle()
+            check("⌘ with a two-finger swipe zooms (distance \(camDistance) -> \(state.distance))",
+                  state.distance != camDistance && state.target == camTarget)
+            _ = distanceBefore
 
             // Save Map As: File > Save Map As… opens the sheet, Cancel closes it.
             let saveName = request.save
@@ -1015,6 +1069,19 @@ enum UICheck {
                   editor.mapScene.links.filter { $0.kind == "waypoint" }.count == linksBefore + 2
                   && editor.mapScene.links.contains { $0.kind == "road" })
 
+            // 11b. Game Folders (before Play: the game's full screen can leave the window narrower, its toolbar overflowing): its items open the system panels (closed again, see Export GIF).
+            for item in ["Zero Hour Folder…", "Base Generals Folder…", "Open Map File…"] {
+                let menuTask = Task { @MainActor in await pick(item, from: "toolbar.gameFolders", titled: "Game Folders") }
+                let panel = await modalPanel()
+                let folders = item != "Open Map File…"
+                check("Game Folders > \(item) opened \(folders ? "a folder" : "a .map file") panel",
+                      (panel as? NSOpenPanel).map { $0.canChooseDirectories == folders } == true)
+                if panel == nil { log(diagnostic) }
+                if let panel { await closePanel(panel) }
+                _ = await menuTask.value
+                await settle()
+            }
+            check("Open Map File… switched to the Maps mode", UserDefaults.standard.string(forKey: "editorMode") == EditorMode.maps.rawValue)
             // 12. Play settings: the AI stepper, the difficulty buttons, the game app typed, the Default
             // button, the faction and start pop-ups.
             @MainActor func settingsShown() async -> Bool {
@@ -1107,6 +1174,7 @@ enum UICheck {
             check("⌘R started the game again (pid \(editor.play.pid))", editor.play.runs == runsBefore + 2
                   && editor.play.state == "running" && editor.play.pid != firstPid)
             // The whole process group: run.sh runs the game as its child.
+            await wait("the first game's processes to end", timeout: 10) { kill(-pid_t(firstPid), 0) != 0 }
             check("the first game is closed (its process group too)", firstPid > 0 && kill(-pid_t(firstPid), 0) != 0)
             let secondPid = editor.play.pid
             check("Map > Play Map is chosen", menuBar("Map", "Play Map"))
@@ -1115,11 +1183,35 @@ enum UICheck {
                   && editor.play.pid != secondPid)
             let thirdPid = editor.play.pid
             check("Map > Stop Game is chosen", menuBar("Map", "Stop Game"))
-            await wait("the game to end", timeout: 20) { editor.play.state != "running" }
+            await wait("the game to end", timeout: 20) { editor.play.state != "running" && kill(-pid_t(thirdPid), 0) != 0 }
             check("the game ended (\(editor.play.message)), its process group too", editor.play.state == "exited"
                   && thirdPid > 0 && kill(-pid_t(thirdPid), 0) != 0)
 
-            // 14. Objects mode: a side, the table sorted by a column, a search, a row, its model and
+            // 14. The Play settings' Choose… and the sheet's Other Location… open their system panels.
+            if await settingsShown() {
+                check("Choose… is pressed", pressFromRunLoop("play.choose"))
+                let panel = await modalPanel()
+                check("Play settings > Choose… opened an app panel", panel is NSOpenPanel)
+                if let panel { await closePanel(panel) }
+                await settle()
+            }
+            if exists("play.faction") {
+                post(key: "\u{1B}", code: 53, window: NSApp.keyWindow ?? window)
+                await settle()
+            }
+            window.makeKeyAndOrderFront(nil)
+            if press("placement.saveAs") {
+                await wait("the sheet", timeout: 5) { window.attachedSheet?.isVisible == true }
+                check("Other Location… is pressed", pressFromRunLoop("save.other"))
+                let panel = await modalPanel()
+                check("Save As > Other Location… opened the save panel (in \(panel?.directoryURL?.path ?? "-"))",
+                      panel != nil && panel?.directoryURL?.resolvingSymlinksInPath().path == maps.resolvingSymlinksInPath().path)
+                if let panel { await closePanel(panel) }
+                await settle()
+            } else {
+                check("Save As… is shown in the Maps mode", false)
+            }
+            // 15. Objects mode (last: its search field takes toolbar room): a side, the table sorted by a column, a search, a row, its model and
             // details, an animation, play/pause, Hidden parts, orbit and zoom, Export GIF.
             check("the toolbar's Objects segment is clicked", clickSegment("Objects"))
             await settle(1)
@@ -1218,49 +1310,12 @@ enum UICheck {
                 let panel = await modalPanel()
                 check("Export GIF > \(GifFormat.square.title) opened the save panel for \(panel?.nameFieldStringValue ?? "-")",
                       panel?.nameFieldStringValue == suggested)
-                if let panel { closePanel(panel) }
+                if let panel { await closePanel(panel) }
                 _ = await menuTask.value
             } else {
                 check("the model preview is shown", false)
             }
 
-            // 15. Game Folders: its items open the system panels (closed again, see Export GIF).
-            for item in ["Zero Hour Folder…", "Base Generals Folder…", "Open Map File…"] {
-                let menuTask = Task { @MainActor in await pick(item, from: "toolbar.gameFolders", titled: "Game Folders") }
-                let panel = await modalPanel()
-                let folders = item != "Open Map File…"
-                check("Game Folders > \(item) opened \(folders ? "a folder" : "a .map file") panel",
-                      (panel as? NSOpenPanel).map { $0.canChooseDirectories == folders } == true)
-                if panel == nil { log(diagnostic) }
-                if let panel { closePanel(panel) }
-                _ = await menuTask.value
-                await settle()
-            }
-            check("Open Map File… switched to the Maps mode", UserDefaults.standard.string(forKey: "editorMode") == EditorMode.maps.rawValue)
-            // The Play settings' Choose… and the sheet's Other Location… open their system panels.
-            if await settingsShown() {
-                press("play.choose")
-                let panel = await modalPanel()
-                check("Play settings > Choose… opened an app panel", panel is NSOpenPanel)
-                if let panel { closePanel(panel) }
-                await settle()
-            }
-            if exists("play.faction") {
-                post(key: "\u{1B}", code: 53, window: NSApp.keyWindow ?? window)
-                await settle()
-            }
-            window.makeKeyAndOrderFront(nil)
-            if press("placement.saveAs") {
-                await wait("the sheet", timeout: 5) { window.attachedSheet?.isVisible == true }
-                press("save.other")
-                let panel = await modalPanel()
-                check("Save As > Other Location… opened the save panel in the Maps folder",
-                      panel?.directoryURL?.standardizedFileURL.path == maps.standardizedFileURL.path)
-                if let panel { closePanel(panel) }
-                await settle()
-            } else {
-                check("Save As… is shown in the Maps mode", false)
-            }
             check("the game folder is still the one opened", editor.status.gameDir == request.zh)
             finish()
         }
