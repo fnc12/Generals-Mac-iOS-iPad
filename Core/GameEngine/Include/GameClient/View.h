@@ -150,6 +150,8 @@ public:
 	virtual void initHeightForMap() {};														///< Init the camera height for the map at the current position.
 	virtual void resetPivotToGround() {};													///< Set the camera pivot to the terrain height at the current position.
 	virtual void scrollBy( const Coord2D *delta );														///< Shift the view by the given delta
+	// GeneralsX @feature fnc12 27/11/2026 Trackpad pan: shift the view by a WORLD delta, so the map can follow the fingers 1:1.
+	virtual void scrollByWorld( const Coord2D *worldDelta );
 
 	virtual void moveCameraTo(const Coord3D *o, Int frames, Int shutter, Bool orient, Real easeIn=0.0f, Real easeOut=0.0f) { lookAt( o ); }
 	virtual void moveCameraAlongWaypointPath(Waypoint *way, Int frames, Int shutter, Bool orient, Real easeIn=0.0f, Real easeOut=0.0f) { }
@@ -233,6 +235,7 @@ public:
 	Bool userLookAt(const Coord3D *o)                    { return doUserAction(&View::lookAt, o); }
 	Bool userResetPivotToGround()                        { return doUserAction(&View::resetPivotToGround); }
 	Bool userScrollBy(const Coord2D *delta)              { return doUserAction(&View::scrollBy, delta); }
+	Bool userScrollByWorld(const Coord2D *worldDelta)    { return doUserAction(&View::scrollByWorld, worldDelta); } ///< GeneralsX @feature fnc12 27/11/2026
 	Bool userSetLocation(const ViewLocation *location)   { return doUserAction(&View::setLocation, location); }
 	Bool userSetCameraLock(ObjectID id)                  { return doUserAction(&View::setCameraLock, id); }
 	Bool userSetCameraLockDrawable(Drawable *drawable)   { return doUserAction(&View::setCameraLockDrawable, drawable); }

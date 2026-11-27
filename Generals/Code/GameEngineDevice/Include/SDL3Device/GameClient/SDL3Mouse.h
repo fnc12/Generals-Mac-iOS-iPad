@@ -85,6 +85,10 @@ private:
 	// Scale raw SDL window coordinates to game internal resolution
 	// GeneralsX @bugfix felipebraz 20/02/2026 Port fighter19 coordinate scaling fix
 	static void scaleMouseCoordinates(float rawX, float rawY, Uint32 windowID, int& scaledX, int& scaledY);
+	// GeneralsX @feature fnc12 27/11/2026 Game pixels per window point (trackpad pan deltas)
+	static void gamePixelsPerPoint(Uint32 windowID, float& scaleX, float& scaleY);
+	// GeneralsX @feature fnc12 27/11/2026 Trackpad pan (macOS monitor event) and pinch (SDL_EVENT_PINCH_UPDATE)
+	static bool translateTrackpadEvent(const SDL_Event& event, MouseIO *result, float& rawX, float& rawY, Uint32& windowID);
 
 	// Load cursor from ANI file (fighter19 pattern)
 	// GeneralsX @bugfix BenderAI 22/02/2026 Port fighter19 cursor loading

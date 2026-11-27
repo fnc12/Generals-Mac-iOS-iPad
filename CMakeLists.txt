@@ -37,6 +37,12 @@ include(cmake/config-vcpkg.cmake)
 # Top level project, doesn't really affect anything.
 project(genzh LANGUAGES C CXX)
 
+# GeneralsX @feature fnc12 27/11/2026 Objective-C++ for the macOS trackpad monitor
+# (Core/GameEngineDevice/Source/SDL3Device/Common/MacTrackpad.mm).
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 # GeneralsX @build BenderAI 10/02/2026
 # Linux port: Make CompatLib headers globally accessible so Core libraries (WWLib, WWMath, etc.)
 # can access platform compatibility types when building for non-Windows platforms

@@ -55,6 +55,9 @@
 #include "GameClient/WindowXlat.h"
 #include "GameClient/Shell.h"
 #include "GameClient/Display.h"
+#include "GameClient/Gadget.h"
+#include "GameClient/InGameUI.h"
+#include "GameClient/TrackpadGesture.h"
 
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -160,6 +163,64 @@ WindowTranslator::WindowTranslator()
 //=============================================================================
 WindowTranslator::~WindowTranslator()
 {
+}
+
+// GeneralsX @feature fnc12 27/11/2026 Trackpad gestures (MSG_RAW_MOUSE_WHEEL with a kind in argument 3)
+//=============================================================================
+/** Is the window, or a window it sits in, a list box (chat, lobby and menu lists, combo box drop
+	* downs)? Those scroll with the wheel, so a trackpad swipe over them scrolls them. */
+static Bool isInsideScrollableWindow( GameWindow *window )
+{
+	for( ; window != nullptr; window = window->winGetParent() )
+	{
+		if( BitIsSet( window->winGetStyle(), GWS_SCROLL_LISTBOX ) )
+			return TRUE;
+	}
+	return FALSE;
+}
+
+//=============================================================================
+/** Decide who gets a trackpad gesture. A pan over a list box scrolls the list (in whole rows, in
+	* the direction the fingers move, as macOS does); anything else is left for the LookAtTranslator
+	* (camera) when the game accepts camera input, or destroyed. */
+static WinInputReturnCode processTrackpadGesture( const GameMessage *msg )
+{
+	static Real guiAccum = 0.0f;
+	// Game pixels of finger travel per list row.
+	const Real GUI_PIXELS_PER_STEP = 20.0f;
+
+	ICoord2D mousePos = msg->getArgument( 0 )->pixel;
+	const TrackpadGesture::Kind kind = (TrackpadGesture::Kind)msg->getArgument( 3 )->integer;
+	const Real contentDy = msg->getArgument( 5 )->real;
+
+	TrackpadGesture::Context context;
+	context.shellActive = TheShell && TheShell->isShellActive();
+	context.inputEnabled = !TheInGameUI || TheInGameUI->getInputEnabled();
+	context.modalWindowActive = TheWindowManager && TheWindowManager->winIsModalActive();
+	context.overScrollableGui = TheWindowManager &&
+		isInsideScrollableWindow( TheWindowManager->getWindowUnderCursor( mousePos.x, mousePos.y ) );
+
+	const TrackpadGesture::Route route = TrackpadGesture::route( kind, context );
+
+	if( TrackpadGesture::logEnabled() )
+		fprintf( stderr, "[trackpad] gesture kind=%d pos=(%d,%d) x=%.2f y=%.2f shell=%d input=%d modal=%d list=%d -> %s\n",
+			(Int)kind, mousePos.x, mousePos.y, msg->getArgument( 4 )->real, contentDy,
+			(Int)context.shellActive, (Int)context.inputEnabled, (Int)context.modalWindowActive, (Int)context.overScrollableGui,
+			route == TrackpadGesture::ROUTE_GUI ? "gui" : route == TrackpadGesture::ROUTE_CAMERA ? "camera" : "ignore" );
+
+	if( route != TrackpadGesture::ROUTE_GUI )
+	{
+		guiAccum = 0.0f;
+		return route == TrackpadGesture::ROUTE_CAMERA ? WIN_INPUT_NOT_USED : WIN_INPUT_USED;
+	}
+
+	Int steps = TrackpadGesture::guiWheelSteps( guiAccum, contentDy, GUI_PIXELS_PER_STEP );
+	const GameWindowMessage gwm = steps > 0 ? GWM_WHEEL_UP : GWM_WHEEL_DOWN;
+	Real wheelPos = steps > 0 ? 1.0f : -1.0f;
+	for( ; steps != 0; steps += (steps > 0 ? -1 : 1) )
+		TheWindowManager->winProcessMouseEvent( gwm, &mousePos, &wheelPos );
+
+	return WIN_INPUT_USED;
 }
 
 // WindowTranslator ===========================================================
@@ -281,6 +342,13 @@ GameMessageDisposition WindowTranslator::translateGameMessage(const GameMessage 
 		// ------------------------------------------------------------------------
 		case GameMessage::MSG_RAW_MOUSE_WHEEL:
 		{
+			// GeneralsX @feature fnc12 27/11/2026 Trackpad pan/pinch carry a kind in argument 3.
+			if( msg->getArgumentCount() > 3 )
+			{
+				returnCode = processTrackpadGesture( msg );
+				break;
+			}
+
 			// all window events have the position of the mouse as arg 0
 			ICoord2D mousePos = msg->getArgument( 0 )->pixel;
 

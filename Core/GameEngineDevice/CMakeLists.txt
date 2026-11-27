@@ -222,6 +222,25 @@ if(SAGE_USE_SDL3 AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
     )
 endif()
 
+# GeneralsX @feature fnc12 27/11/2026 macOS trackpad: NSEvent scroll monitor (Objective-C++,
+# OBJCXX is enabled in the top-level CMakeLists.txt on Apple platforms).
+# Its own small library so the game targets' precompiled headers (Windows types from DXVK's
+# native headers) never reach the AppKit headers.
+set(GENERALSX_MAC_TRACKPAD OFF)
+if(SAGE_USE_SDL3 AND APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(GENERALSX_MAC_TRACKPAD ON)
+    add_library(core_mactrackpad STATIC
+        Include/SDL3Device/Common/MacTrackpad.h
+        Source/SDL3Device/Common/MacTrackpad.mm
+    )
+    target_include_directories(core_mactrackpad PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../GameEngine/Include
+    )
+    target_link_libraries(core_mactrackpad PRIVATE sdl3lib)
+    target_link_libraries(core_mactrackpad PUBLIC "-framework AppKit")
+endif()
+
 add_library(corei_gameenginedevice_private INTERFACE)
 add_library(corei_gameenginedevice_public INTERFACE)
 
@@ -236,6 +255,10 @@ target_link_libraries(corei_gameenginedevice_private INTERFACE
     corei_main
     stb
 )
+
+if(GENERALSX_MAC_TRACKPAD)
+    target_link_libraries(corei_gameenginedevice_public INTERFACE core_mactrackpad)
+endif()
 
 # GeneralsX @build BenderAI 13/02/2026 Platform-specific multimedia stubs
 target_link_libraries(corei_gameenginedevice_public INTERFACE

@@ -49,6 +49,7 @@
 #include "GameClient/View.h"
 #include "GameClient/Drawable.h"
 #include "GameClient/LookAtXlat.h"
+#include "GameClient/TrackpadGesture.h"
 #include "GameLogic/Module/UpdateModule.h"
 #include "GameLogic/GameLogic.h"
 
@@ -132,6 +133,75 @@ Bool LookAtTranslator::canScrollAtScreenEdge() const
 #endif
 
 	return true;
+}
+
+//-----------------------------------------------------------------------------
+// GeneralsX @feature fnc12 27/11/2026 Trackpad camera control (client-side camera only).
+//-----------------------------------------------------------------------------
+/** World offset (x, y) of the terrain point under screen pixel p, or FALSE when p sees no terrain. */
+static Bool terrainAt( const ICoord2D &p, TrackpadGesture::Vec2 &out )
+{
+	Coord3D world;
+	if( !TheTacticalView->screenToTerrain( &p, &world ) )
+		return FALSE;
+	out.x = world.x;
+	out.y = world.y;
+	return TRUE;
+}
+
+/** How the terrain moves per screen pixel right / down at the anchor (the pan Jacobian). Probes
+	* step towards the view centre so they stay on screen. */
+static Bool measureWorldPerPixel( const ICoord2D &anchor, TrackpadGesture::Vec2 &perPixelX, TrackpadGesture::Vec2 &perPixelY )
+{
+	const Int PROBE = 32;
+	Int originX, originY;
+	TheTacticalView->getOrigin( &originX, &originY );
+	const Int centerX = originX + TheTacticalView->getWidth() / 2;
+	const Int centerY = originY + TheTacticalView->getHeight() / 2;
+	const Int stepX = anchor.x <= centerX ? PROBE : -PROBE;
+	const Int stepY = anchor.y <= centerY ? PROBE : -PROBE;
+
+	TrackpadGesture::Vec2 atAnchor, atX, atY;
+	ICoord2D probeX = { anchor.x + stepX, anchor.y };
+	ICoord2D probeY = { anchor.x, anchor.y + stepY };
+	if( !terrainAt( anchor, atAnchor ) || !terrainAt( probeX, atX ) || !terrainAt( probeY, atY ) )
+		return FALSE;
+
+	perPixelX = TrackpadGesture::worldPerPixel( atAnchor, atX, (Real)stepX );
+	perPixelY = TrackpadGesture::worldPerPixel( atAnchor, atY, (Real)stepY );
+	return TRUE;
+}
+
+/** Two-finger swipe: the terrain under the cursor follows the fingers. Falls back to the view
+	* centre when the cursor sees no terrain (e.g. the sky at a steep pitch). */
+static void trackpadPan( const ICoord2D &cursor, Real dx, Real dy )
+{
+	TrackpadGesture::Vec2 perPixelX, perPixelY;
+	Bool ok = measureWorldPerPixel( cursor, perPixelX, perPixelY );
+	if( !ok )
+	{
+		Int originX, originY;
+		TheTacticalView->getOrigin( &originX, &originY );
+		ICoord2D center = { originX + TheTacticalView->getWidth() / 2, originY + TheTacticalView->getHeight() / 2 };
+		ok = measureWorldPerPixel( center, perPixelX, perPixelY );
+	}
+	if( !ok )
+		return;
+
+	const TrackpadGesture::Vec2 move = TrackpadGesture::panCameraDelta( perPixelX, perPixelY, dx, dy, 1.0f );
+	Coord2D worldDelta;
+	worldDelta.x = move.x;
+	worldDelta.y = move.y;
+	TheTacticalView->userScrollByWorld( &worldDelta );
+}
+
+static void logCamera( const char *what, Real a, Real b )
+{
+	if( !TrackpadGesture::logEnabled() )
+		return;
+	const Coord3D &pos = TheTacticalView->getPosition();
+	fprintf( stderr, "[trackpad] %s (%.3f, %.3f) -> camera pos=(%.2f, %.2f) height=%.2f zoom=%.3f\n",
+		what, a, b, pos.x, pos.y, TheTacticalView->getHeightAboveGround(), TheTacticalView->getZoom() );
 }
 
 //-----------------------------------------------------------------------------
@@ -472,10 +542,36 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 		{
 			m_lastMouseMoveTimeMsec = timeGetTime();
 
+			// GeneralsX @feature fnc12 27/11/2026 Trackpad pan / pinch (argument 3 = kind). The
+			// WindowTranslator already gave list boxes their turn and destroyed the message in
+			// the shell; check again because it lets everything through while the mouse is locked.
+			if( msg->getArgumentCount() > 3 )
+			{
+				if( (TheShell && TheShell->isShellActive()) || !TheInGameUI->getInputEnabled() )
+					break;
+
+				const Int kind = msg->getArgument( 3 )->integer;
+				const Real x = msg->getArgument( 4 )->real;
+				const Real y = msg->getArgument( 5 )->real;
+				if( kind == TrackpadGesture::KIND_PAN )
+				{
+					trackpadPan( msg->getArgument( 0 )->pixel, x, y );
+					logCamera( "pan", x, y );
+				}
+				else if( kind == TrackpadGesture::KIND_PINCH )
+				{
+					TheTacticalView->userZoom( TrackpadGesture::pinchZoomHeightDelta( TheTacticalView->getHeightAboveGround(), x ) );
+					logCamera( "pinch", x, 0.0f );
+				}
+				disp = DESTROY_MESSAGE;
+				break;
+			}
+
 			const Real spin = msg->getArgument( 1 )->real;
 			// GeneralsX @feature Gabriel Petry 28/09/2026 Apply the configurable mouse scroll speed factor.
 			const Real zoom = -spin * View::ZoomHeightPerSecond * TheGlobalData->m_mouseScrollFactor;
 			TheTacticalView->userZoom(zoom);
+			logCamera( "wheel", spin, zoom );
 
 			break;
 		}

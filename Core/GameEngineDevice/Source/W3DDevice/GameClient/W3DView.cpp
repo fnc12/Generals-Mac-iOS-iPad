@@ -2278,6 +2278,24 @@ void W3DView::scrollBy( const Coord2D *delta )
 }
 
 //-------------------------------------------------------------------------------------------------
+// GeneralsX @feature fnc12 27/11/2026 Trackpad pan: scroll by a delta already in WORLD units (the
+// caller measured it on the terrain under the cursor), otherwise the same as scrollBy above.
+//-------------------------------------------------------------------------------------------------
+void W3DView::scrollByWorld( const Coord2D *worldDelta )
+{
+	if( worldDelta && (worldDelta->x != 0 || worldDelta->y != 0) )
+	{
+		Coord2D pos = getPosition2D();
+		pos.x += worldDelta->x;
+		pos.y += worldDelta->y;
+		setPosition2D(pos);
+
+		removeScriptedState(Scripted_Rotate);
+		m_recalcCamera = true;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
 void W3DView::forceRedraw()
 {

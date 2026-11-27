@@ -158,6 +158,13 @@ void View::scrollBy( const Coord2D *delta )
 	m_pos.y += delta->y;
 }
 
+// GeneralsX @feature fnc12 27/11/2026 Trackpad pan: shift the view by a world-space delta.
+void View::scrollByWorld( const Coord2D *worldDelta )
+{
+	m_pos.x += worldDelta->x;
+	m_pos.y += worldDelta->y;
+}
+
 /**
  * Rotate the view around the vertical axis to the given angle.
  */

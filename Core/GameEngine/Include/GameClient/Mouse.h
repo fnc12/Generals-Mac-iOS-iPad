@@ -117,6 +117,20 @@ struct MouseIO
 	MouseButtonState middleState;
 	Int middleEvent;
 	UnsignedInt middleFrame;					// GeneralsX @bugfix felipebraz 18/02/2026 Frame number for replay determinism
+
+	// GeneralsX @feature fnc12 27/11/2026 Trackpad gestures (macOS SDL3 only). Devices that do not
+	// set them leave them zero (Mouse memsets its event buffers), so Windows/Linux are unchanged.
+	Int gesture;				///< MouseGesture
+	Real gestureX;			///< PAN: screen pixels the content follows; PINCH: scale change
+	Real gestureY;			///< PAN: screen pixels the content follows
+};
+
+// GeneralsX @feature fnc12 27/11/2026 Values equal TrackpadGesture::Kind (GameClient/TrackpadGesture.h).
+enum MouseGesture CPP_11(: Int)
+{
+	MOUSE_GESTURE_NONE = 0,
+	MOUSE_GESTURE_PAN = 1,
+	MOUSE_GESTURE_PINCH = 2,
 };
 
 class CursorInfo
