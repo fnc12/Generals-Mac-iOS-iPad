@@ -106,6 +106,46 @@ namespace end_editor_tests {
                                       container(0x048, {chunk(0x049, textureId.data), chunk(0x04A, uvs.data)})})});
     }
 
+    // Like the retail buildings: pass 0 is an environment-mapped reflection (`sky`), pass 1 the
+    // real texture alpha-blended over it.
+    inline std::string reflectedSquareMesh(const std::string &meshName, const std::string &containerName,
+                                           const std::string &sky, const std::string &texture) {
+        Bytes header;
+        header.u32(0x00040002).u32(0).name(meshName, 16).name(containerName, 16);
+        header.u32(2).u32(4);
+        header.data.append(116 - header.data.size(), '\0');
+        Bytes vertices, normals, triangles, skyUvs, uvs;
+        vertices.floats({0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0});
+        normals.floats({0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1});
+        for(const auto &tri: {std::vector<std::uint32_t>{0, 1, 2}, std::vector<std::uint32_t>{0, 2, 3}}) {
+            triangles.u32(tri[0]).u32(tri[1]).u32(tri[2]).u32(0).floats({0, 0, 1, 0});
+        }
+        skyUvs.floats({9, 9, 9, 9, 9, 9, 9, 9});
+        uvs.floats({0, 0, 1, 0, 1, 1, 0, 1});
+        const auto material = [](const std::string &name, std::uint32_t attributes) {
+            Bytes info;
+            info.u32(attributes);
+            info.data.append(32 - info.data.size(), '\0');
+            return container(0x02B, {chunk(0x02C, name + std::string(1, '\0')), chunk(0x02D, info.data)});
+        };
+        const auto ids = [](std::uint32_t id) {
+            Bytes out;
+            out.u32(id);
+            return out.data;
+        };
+        return container(
+            0x000, {chunk(0x01F, header.data), chunk(0x002, vertices.data), chunk(0x003, normals.data),
+                    chunk(0x020, triangles.data),
+                    container(0x02A, {material("Environment shader", 0x00010000), material("Base", 0)}),
+                    chunk(0x029, opaqueShader() + shader(2, 5, false)),
+                    container(0x030, {container(0x031, {chunk(0x032, sky + std::string(1, '\0'))}),
+                                      container(0x031, {chunk(0x032, texture + std::string(1, '\0'))})}),
+                    container(0x038, {chunk(0x039, ids(0)), chunk(0x03A, ids(0)),
+                                      container(0x048, {chunk(0x049, ids(0)), chunk(0x04A, skyUvs.data)})}),
+                    container(0x038, {chunk(0x039, ids(1)), chunk(0x03A, ids(1)),
+                                      container(0x048, {chunk(0x049, ids(1)), chunk(0x04A, uvs.data)})})});
+    }
+
     struct TestPivot {
         std::string name;
         std::uint32_t parent;
