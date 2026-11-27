@@ -62,6 +62,18 @@ TEST_CASE("W3D mesh") {
     CHECK(mesh.triangleTextures == std::vector<std::uint32_t>{0, 0});
 }
 
+TEST_CASE("W3D: a reflection pass under the real texture is skipped") {
+    // CBTownHs01 and 3426 other retail meshes: LAKEDUSK.tga reflection first, the house over it.
+    const auto file = parseW3d(reflectedSquareMesh("HOUSE", "TOWN", "lakedusk.tga", "house.tga"));
+    REQUIRE(file.meshes.size() == 1);
+    const auto &mesh = file.meshes[0];
+    CHECK(mesh.triangleTextures == std::vector<std::uint32_t>{1, 1});
+    CHECK(mesh.textures[1] == "house.tga");
+    CHECK(mesh.uvs == std::vector<float>{0, 0, 1, 0, 1, 1, 0, 1});
+    CHECK(mesh.triangleShaders == std::vector<std::uint32_t>{1, 1});
+    CHECK(mesh.shaders[1] == W3dBlend::opaque);  // nothing left to blend onto
+}
+
 TEST_CASE("W3D shaders become blend modes") {
     CHECK(blendOfShader(shader(1, 0, false)) == W3dBlend::opaque);
     CHECK(blendOfShader(shader(1, 0, true)) == W3dBlend::alphaTest);

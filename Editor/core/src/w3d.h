@@ -36,7 +36,7 @@ namespace end_editor {
         std::vector<std::uint32_t> indices;  // 3 per triangle
         std::vector<std::string> textures;   // texture file names ("avtank.tga")
         std::vector<std::uint32_t> triangleTextures;  // per triangle index into `textures`; empty = all 0
-        std::vector<W3dBlend> shaders;                // of the first pass
+        std::vector<W3dBlend> shaders;                // of every pass; the drawn pass picks them
         std::vector<std::uint32_t> triangleShaders;   // per triangle index into `shaders`; empty = all 0
 
         std::string fullName() const {
