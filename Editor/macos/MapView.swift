@@ -1220,8 +1220,18 @@ final class MapMTKView: MTKView {
         }
     }
 
+    // Like every Mac app with a canvas: a two-finger trackpad swipe moves the map (the deltas
+    // already follow the user's natural-scrolling setting), a pinch zooms (magnify below).
+    // A mouse wheel, which only has lines, zooms; so does ⌘ with either.
     override func scrollWheel(with event: NSEvent) {
-        state?.zoom(by: 1 + Float(event.scrollingDeltaY) * -0.01)
+        guard let state else { return }
+        if event.hasPreciseScrollingDeltas && !event.modifierFlags.contains(.command) {
+            state.pan(dx: Float(event.scrollingDeltaX), dy: Float(event.scrollingDeltaY),
+                      viewHeight: Float(bounds.height))
+        } else {
+            let lines = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY * 0.1 : event.scrollingDeltaY
+            state.zoom(by: 1 + Float(lines) * -0.1)
+        }
     }
 
     override func magnify(with event: NSEvent) {
@@ -1307,7 +1317,7 @@ struct MapScreen: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            Text("Drag to pan, ⌥-drag to turn, scroll or pinch to zoom, click to select, ⇧-click or ⇧-drag to add. "
+            Text("Drag or two-finger swipe to pan, ⌥-drag to turn, pinch or mouse wheel to zoom, click to select, ⇧-click or ⇧-drag to add. "
                  + "Right-click places, drag the selection to move it, [ ] turn it, Delete removes it, "
                  + "⌘C ⌘V ⌘D copy, paste, duplicate, ⌘Z undoes")
                 .font(.caption2).foregroundStyle(.tertiary).padding(.bottom, 4)
