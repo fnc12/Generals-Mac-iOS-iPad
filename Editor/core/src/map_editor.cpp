@@ -522,10 +522,7 @@ namespace end_editor {
                 this->setNote("This map has no team " + arg(1), "error");
                 done = false;
             } else {
-                DictValue owner;
-                owner.type = DictValue::ascii;
-                owner.key = "originalOwner";
-                owner.text = arg(1);
+                const DictValue owner{"originalOwner", AsciiText{arg(1)}};
                 done = this->forSelection("give an owner", [&](std::int64_t id) {
                     return this->document->setProperty(id, owner);
                 });
@@ -550,20 +547,20 @@ namespace end_editor {
             double parsed = 0;
             bool valid = true;
             if (type == "bool") {
-                value.type = DictValue::boolean;
                 valid = text == "true" || text == "false" || text == "1" || text == "0";
-                value.intValue = text == "true" || text == "1" ? 1 : 0;
+                value.data = text == "true" || text == "1";
             } else if (type == "int") {
-                value.type = DictValue::integer;
                 valid = parseNumber(text, parsed) && parsed == std::floor(parsed) && std::abs(parsed) < 2147483648.0;
-                value.intValue = valid ? std::int32_t(parsed) : 0;
+                value.data = valid ? std::int32_t(parsed) : 0;
             } else if (type == "real") {
-                value.type = DictValue::real;
                 valid = parseNumber(text, parsed);
-                value.realValue = float(parsed);
+                value.data = float(parsed);
             } else {
-                value.type = type == "unicode" ? DictValue::unicode : DictValue::ascii;
-                value.text = text;
+                if (type == "unicode") {
+                    value.data = UnicodeText{text};
+                } else {
+                    value.data = AsciiText{text};
+                }
             }
             if (!valid) {
                 this->setNote(value.key + ": \"" + text + "\" is not a " + (type == "bool" ? "yes/no value" : "number"),

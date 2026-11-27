@@ -9,45 +9,46 @@ namespace end_editor {
 
     namespace {
         // Chunk ids from w3d_file.h.
-        enum : std::uint32_t {
-            chunkMesh = 0x000,
-            chunkVertices = 0x002,
-            chunkVertexNormals = 0x003,
-            chunkVertexInfluences = 0x00E,
-            chunkMeshHeader3 = 0x01F,
-            chunkTriangles = 0x020,
-            chunkTextures = 0x030,
-            chunkTexture = 0x031,
-            chunkTextureName = 0x032,
-            chunkShaders = 0x029,
-            chunkVertexMaterials = 0x02A,
-            chunkVertexMaterial = 0x02B,
-            chunkVertexMaterialInfo = 0x02D,
-            chunkMaterialPass = 0x038,
-            chunkVertexMaterialIds = 0x039,
-            chunkShaderIds = 0x03A,
-            chunkTextureStage = 0x048,
-            chunkTextureIds = 0x049,
-            chunkStageTexcoords = 0x04A,
-            chunkHierarchy = 0x100,
-            chunkHierarchyHeader = 0x101,
-            chunkPivots = 0x102,
-            chunkAnimation = 0x200,
-            chunkAnimationHeader = 0x201,
-            chunkAnimationChannel = 0x202,
-            chunkBitChannel = 0x203,
-            chunkCompressedAnimation = 0x280,
-            chunkCompressedAnimationHeader = 0x281,
-            chunkCompressedAnimationChannel = 0x282,
-            chunkCompressedBitChannel = 0x283,
-            chunkHlod = 0x700,
-            chunkHlodHeader = 0x701,
-            chunkHlodLodArray = 0x702,
-            chunkHlodSubObject = 0x704,
-            chunkHlodAggregateArray = 0x705,
-        };
+        constexpr std::uint32_t chunkMesh = 0x000;
+        constexpr std::uint32_t chunkVertices = 0x002;
+        constexpr std::uint32_t chunkVertexNormals = 0x003;
+        constexpr std::uint32_t chunkVertexInfluences = 0x00E;
+        constexpr std::uint32_t chunkMeshHeader3 = 0x01F;
+        constexpr std::uint32_t chunkTriangles = 0x020;
+        constexpr std::uint32_t chunkTextures = 0x030;
+        constexpr std::uint32_t chunkTexture = 0x031;
+        constexpr std::uint32_t chunkTextureName = 0x032;
+        constexpr std::uint32_t chunkShaders = 0x029;
+        constexpr std::uint32_t chunkVertexMaterials = 0x02A;
+        constexpr std::uint32_t chunkVertexMaterial = 0x02B;
+        constexpr std::uint32_t chunkVertexMaterialInfo = 0x02D;
+        constexpr std::uint32_t chunkMaterialPass = 0x038;
+        constexpr std::uint32_t chunkVertexMaterialIds = 0x039;
+        constexpr std::uint32_t chunkShaderIds = 0x03A;
+        constexpr std::uint32_t chunkTextureStage = 0x048;
+        constexpr std::uint32_t chunkTextureIds = 0x049;
+        constexpr std::uint32_t chunkStageTexcoords = 0x04A;
+        constexpr std::uint32_t chunkHierarchy = 0x100;
+        constexpr std::uint32_t chunkHierarchyHeader = 0x101;
+        constexpr std::uint32_t chunkPivots = 0x102;
+        constexpr std::uint32_t chunkAnimation = 0x200;
+        constexpr std::uint32_t chunkAnimationHeader = 0x201;
+        constexpr std::uint32_t chunkAnimationChannel = 0x202;
+        constexpr std::uint32_t chunkBitChannel = 0x203;
+        constexpr std::uint32_t chunkCompressedAnimation = 0x280;
+        constexpr std::uint32_t chunkCompressedAnimationHeader = 0x281;
+        constexpr std::uint32_t chunkCompressedAnimationChannel = 0x282;
+        constexpr std::uint32_t chunkCompressedBitChannel = 0x283;
+        constexpr std::uint32_t chunkHlod = 0x700;
+        constexpr std::uint32_t chunkHlodHeader = 0x701;
+        constexpr std::uint32_t chunkHlodLodArray = 0x702;
+        constexpr std::uint32_t chunkHlodSubObject = 0x704;
+        constexpr std::uint32_t chunkHlodAggregateArray = 0x705;
 
-        enum : std::uint16_t { channelX = 0, channelY = 1, channelZ = 2, channelQ = 6 };
+        // Animation channel types (W3dAnimChannelStruct::Flags): 0, 1, 2 the x, y, z translation, 6 the
+        // rotation quaternion.
+        constexpr std::uint16_t channelZ = 2;
+        constexpr std::uint16_t channelQ = 6;
         constexpr std::uint16_t flavorTimeCoded = 0;
         constexpr std::uint32_t timeCodeFlag = 0x80000000u;
         constexpr std::uint32_t stage0MappingMask = 0x00FF0000u;  // W3DVERTMAT_STAGE0_MAPPING_MASK
@@ -622,8 +623,8 @@ namespace end_editor {
         const auto destination = get<std::uint8_t>(shader, 3);
         const auto source = get<std::uint8_t>(shader, 7);
         const bool alphaTest = get<std::uint8_t>(shader, 12) != 0;
-        enum { destZero = 0, destOne = 1, destSrcColor = 2, destOneMinusSrcAlpha = 5 };
-        enum { srcZero = 0, srcOne = 1, srcSrcAlpha = 2 };
+        constexpr std::uint8_t destZero = 0, destOne = 1, destSrcColor = 2, destOneMinusSrcAlpha = 5;
+        constexpr std::uint8_t srcZero = 0, srcSrcAlpha = 2;
         if (destination == destOne) {
             return W3dBlend::additive;
         }
@@ -663,31 +664,23 @@ namespace end_editor {
     }
 
     W3dFileKind peekW3dKind(std::string_view firstBytes) {
-        W3dFileKind result;
         if (firstBytes.size() < 8) {
-            return result;
+            return W3dOtherFile{};
         }
-        const auto type = get<std::uint32_t>(firstBytes, 0);
-        switch (type) {
+        switch (get<std::uint32_t>(firstBytes, 0)) {
             case chunkMesh:
-                result.kind = W3dFileKind::meshFile;
-                break;
+                return W3dMeshFile{};
             case chunkHierarchy:
-                result.kind = W3dFileKind::hierarchyFile;
-                break;
+                return W3dHierarchyFile{};
             case chunkHlod:
-                result.kind = W3dFileKind::hlodFile;
-                break;
+                return W3dHlodFile{};
             case chunkAnimation:
             case chunkCompressedAnimation:
-                result.kind = W3dFileKind::animationFile;
                 // first sub-chunk is the header: 8 bytes of chunk header, then version, name
-                result.hierarchy = getName(firstBytes, 8 + 8 + 20, nameLength);
-                break;
+                return W3dAnimationFile{getName(firstBytes, 8 + 8 + 20, nameLength)};
             default:
-                break;
+                return W3dOtherFile{};
         }
-        return result;
     }
 
     std::vector<Matrix4> poseHierarchy(const W3dHierarchy& hierarchy,

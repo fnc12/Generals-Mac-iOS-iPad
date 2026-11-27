@@ -1051,7 +1051,7 @@ namespace end_editor {
         }
         this->storage->replace(row);
         for (const auto& value: entry->object.properties) {
-            this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value.type), value.toString()});
+            this->storage->insert(MapPropertyRow{0, id, value.key, dictTypeName(value), value.toString()});
         }
     }
 

@@ -393,10 +393,10 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     const auto& tree = file.objects[0];
     CHECK(tree.x == 17);
     CHECK(tree.z == 25);
-    CHECK(findDictValue(tree.properties, "objectInitialHealth")->intValue == 40);
-    CHECK(findDictValue(tree.properties, "objectName")->text == "Öak");
-    CHECK(findDictValue(tree.properties, "objectName")->type == DictValue::unicode);
-    CHECK(findDictValue(tree.properties, "objectScriptAttachment")->text == "TreeScript");
+    CHECK(findDictValue(tree.properties, "objectInitialHealth")->data == DictValue::Data(std::int32_t(40)));
+    CHECK(findDictValue(tree.properties, "objectName")->text() == "Öak");
+    CHECK(std::holds_alternative<UnicodeText>(findDictValue(tree.properties, "objectName")->data));
+    CHECK(findDictValue(tree.properties, "objectScriptAttachment")->text() == "TreeScript");
     CHECK_FALSE(findDictValue(tree.properties, "objectScale"));
     // The waypoint and every chunk but ObjectsList are the original bytes.
     const auto original = parsed(testMap());

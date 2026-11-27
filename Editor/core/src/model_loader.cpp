@@ -163,8 +163,9 @@ namespace end_editor {
                 return;
             }
             const auto kind = peekW3dKind(head);
-            if (kind.kind == W3dFileKind::animationFile && !kind.hierarchy.empty()) {
-                this->animationFilesByHierarchy.emplace(lower(kind.hierarchy), path);
+            if (const auto* animation = std::get_if<W3dAnimationFile>(&kind);
+                animation && !animation->hierarchy.empty()) {
+                this->animationFilesByHierarchy.emplace(lower(animation->hierarchy), path);
             }
         });
     }
