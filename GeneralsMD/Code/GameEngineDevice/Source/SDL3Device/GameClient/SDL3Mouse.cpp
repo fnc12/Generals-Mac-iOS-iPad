@@ -29,6 +29,8 @@
 
 // GeneralsX @bugfix BenderAI 13/02/2026 Fix include path (fighter19 pattern)
 #include "SDL3Device/GameClient/SDL3Mouse.h"
+#include "SDL3Device/Common/MacTrackpad.h"
+#include "GameClient/TrackpadGesture.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -899,6 +901,94 @@ void SDL3Mouse::scaleMouseCoordinates(float rawX, float rawY, Uint32 windowID, i
 }
 
 /**
+ * GeneralsX @feature fnc12 27/11/2026 Game pixels per SDL window point, using the same aspect-fit
+ * viewport as scaleMouseCoordinates() (trackpad deltas are in window points).
+ */
+void SDL3Mouse::gamePixelsPerPoint(Uint32 windowID, float& scaleX, float& scaleY)
+{
+	scaleX = 1.0f;
+	scaleY = 1.0f;
+
+	SDL_Window* window = SDL_GetWindowFromID(windowID);
+	if (!window || !TheDisplay) {
+		return;
+	}
+
+	int windowWidth = 0, windowHeight = 0;
+	SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+	const int internalWidth  = TheDisplay->getWidth();
+	const int internalHeight = TheDisplay->getHeight();
+	if (windowWidth <= 0 || windowHeight <= 0 || internalWidth <= 0 || internalHeight <= 0) {
+		return;
+	}
+
+	float viewportWidth = static_cast<float>(windowWidth);
+	float viewportHeight = static_cast<float>(windowHeight);
+	int pbX, pbY, pbW, pbH;
+	if (TheDisplay->getViewportRect(pbX, pbY, pbW, pbH)) {
+		const float gameAspect = static_cast<float>(internalWidth) / static_cast<float>(internalHeight);
+		const float windowAspect = viewportWidth / viewportHeight;
+		if (windowAspect > gameAspect) {
+			viewportWidth = viewportHeight * gameAspect;
+		} else if (windowAspect < gameAspect) {
+			viewportHeight = viewportWidth / gameAspect;
+		}
+	}
+
+	scaleX = TrackpadGesture::pointsToGamePixels(1.0f, static_cast<float>(internalWidth), viewportWidth);
+	scaleY = TrackpadGesture::pointsToGamePixels(1.0f, static_cast<float>(internalHeight), viewportHeight);
+}
+
+/**
+ * GeneralsX @feature fnc12 27/11/2026 Native macOS trackpad camera control.
+ * Pan: the macOS scroll monitor's event (precise two-finger scroll, MacTrackpad.h) -> gesture PAN
+ * with the content delta in game pixels. Pinch: SDL_EVENT_PINCH_UPDATE -> gesture PINCH with the
+ * scale change. Both at the current cursor position, like the wheel. macOS only: on other platforms
+ * this returns false and nothing changes.
+ */
+bool SDL3Mouse::translateTrackpadEvent(const SDL_Event& event, MouseIO *result, float& rawX, float& rawY, Uint32& windowID)
+{
+#if GENERALSX_MAC_TRACKPAD
+	float dx = 0.0f, dy = 0.0f;
+	const bool isPan = MacTrackpad::decodePan(event, dx, dy);
+	if (!isPan && event.type != SDL_EVENT_PINCH_UPDATE) {
+		return false;
+	}
+
+	SDL_GetMouseState(&rawX, &rawY);
+	SDL_Window* focus = SDL_GetMouseFocus();
+	windowID = isPan ? event.user.windowID : event.pinch.windowID;
+	if (windowID == 0 && focus) {
+		windowID = SDL_GetWindowID(focus);
+	}
+
+	result->deltaPos.x = 0;
+	result->deltaPos.y = 0;
+	result->time = (Uint32)(event.common.timestamp / 1000000);
+	result->wheelPos = 0;
+	result->leftState = MBS_None;
+	result->rightState = MBS_None;
+	result->middleState = MBS_None;
+
+	if (isPan) {
+		float scaleX = 1.0f, scaleY = 1.0f;
+		gamePixelsPerPoint(windowID, scaleX, scaleY);
+		result->gesture = MOUSE_GESTURE_PAN;
+		result->gestureX = dx * scaleX;
+		result->gestureY = dy * scaleY;
+	} else {
+		result->gesture = MOUSE_GESTURE_PINCH;
+		result->gestureX = event.pinch.scale;
+		result->gestureY = 0.0f;
+	}
+	return true;
+#else
+	(void)event; (void)result; (void)rawX; (void)rawY; (void)windowID;
+	return false;
+#endif
+}
+
+/**
  * Add raw SDL_Event to mouse event buffer
  * Fighter19 pattern: unified method that accepts any SDL_Event
  * Called by SDL3GameEngine::serviceWindowsOS() directly from event loop
@@ -914,10 +1004,18 @@ void SDL3Mouse::addSDLEvent(SDL_Event *event)
 	}
 
 	// Filter only mouse-related events
+	// GeneralsX @feature fnc12 27/11/2026 plus macOS trackpad pan/pinch (see translateTrackpadEvent)
+#if GENERALSX_MAC_TRACKPAD
+	const bool isTrackpadEvent =
+		(event->type == MacTrackpad::panEventType() && event->type != 0) || event->type == SDL_EVENT_PINCH_UPDATE;
+#else
+	const bool isTrackpadEvent = false;
+#endif
 	if (event->type != SDL_EVENT_MOUSE_MOTION &&
 	    event->type != SDL_EVENT_MOUSE_BUTTON_DOWN &&
 	    event->type != SDL_EVENT_MOUSE_BUTTON_UP &&
-	    event->type != SDL_EVENT_MOUSE_WHEEL) {
+	    event->type != SDL_EVENT_MOUSE_WHEEL &&
+	    !isTrackpadEvent) {
 		return;  // Not a mouse event, ignore
 	}
 
@@ -960,6 +1058,11 @@ void SDL3Mouse::translateEvent(UnsignedInt eventIndex, MouseIO *result)
 	float rawX = 0.0f, rawY = 0.0f;
 	Uint32 windowID = 0;
 
+	// GeneralsX @feature fnc12 27/11/2026 Event slots are reused: only trackpad events set a gesture.
+	result->gesture = MOUSE_GESTURE_NONE;
+	result->gestureX = 0.0f;
+	result->gestureY = 0.0f;
+
 	// Switch on event type and delegate to appropriate translation method
 	switch (event.type) {
 		case SDL_EVENT_MOUSE_MOTION:
@@ -982,6 +1085,9 @@ void SDL3Mouse::translateEvent(UnsignedInt eventIndex, MouseIO *result)
 			windowID = event.wheel.windowID;
 			break;
 		default:
+			// GeneralsX @feature fnc12 27/11/2026 macOS trackpad pan / pinch
+			if (translateTrackpadEvent(event, result, rawX, rawY, windowID))
+				break;
 			// Should not happen (sentinel value)
 			memset(result, 0, sizeof(*result));
 			return;

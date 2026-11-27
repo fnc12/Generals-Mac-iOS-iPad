@@ -220,6 +220,11 @@ void Mouse::processMouseEvent( Int index )
 	// Cumulate Wheel Adjustments
 	m_currMouse.wheelPos += m_mouseEvents[ index ].wheelPos;
 
+	// GeneralsX @feature fnc12 27/11/2026 Trackpad gestures are per event, never cumulated.
+	m_currMouse.gesture = m_mouseEvents[ index ].gesture;
+	m_currMouse.gestureX = m_mouseEvents[ index ].gestureX;
+	m_currMouse.gestureY = m_mouseEvents[ index ].gestureY;
+
 	// Check Left Mouse State
 	if( m_mouseEvents[ index ].leftState != MBS_None )
 	{
@@ -855,6 +860,22 @@ void Mouse::createStreamMessages()
 			// TheSuperHackers @bugfix Use float wheel delta to preserve fractional values from touchpad input
 			msg->appendRealArgument( m_currMouse.wheelPos / (Real)MOUSE_WHEEL_DELTA );
 			msg->appendIntegerArgument( TheKeyboard->getModifierFlags() );
+		}
+
+		// GeneralsX @feature fnc12 27/11/2026 Trackpad pan/pinch (macOS). Same message as the wheel so
+		// the window system sees it first (list boxes scroll), with 3 extra arguments:
+		// (3) Int kind (TrackpadGesture::Kind), (4) Real x, (5) Real y. Spin (1) is 0, so code that
+		// only knows the wheel treats it as no wheel movement. Raw input messages are client-only:
+		// they never reach game logic, the network or the recorder.
+		if( m_currMouse.gesture != MOUSE_GESTURE_NONE )
+		{
+			msg = TheMessageStream->appendMessage( GameMessage::MSG_RAW_MOUSE_WHEEL );
+			msg->appendPixelArgument( m_currMouse.pos );
+			msg->appendRealArgument( 0.0f );
+			msg->appendIntegerArgument( TheKeyboard->getModifierFlags() );
+			msg->appendIntegerArgument( m_currMouse.gesture );
+			msg->appendRealArgument( m_currMouse.gestureX );
+			msg->appendRealArgument( m_currMouse.gestureY );
 		}
 
 	}

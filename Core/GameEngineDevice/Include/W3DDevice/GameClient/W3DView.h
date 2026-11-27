@@ -166,6 +166,7 @@ public:
 	virtual void setOrigin( Int x, Int y) override;			///< Sets location of top-left view corner on display
 
 	virtual void scrollBy( const Coord2D *delta ) override;  ///< Shift the view by the given delta
+	virtual void scrollByWorld( const Coord2D *worldDelta ) override;  ///< GeneralsX @feature fnc12 27/11/2026 Shift by a world delta (trackpad pan)
 
 	virtual void forceRedraw() override;
 	virtual void onHeightMapChanged() override { m_lastScreenToTerrainValid = false; }

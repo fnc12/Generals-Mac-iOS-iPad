@@ -53,7 +53,11 @@ FetchContent_MakeAvailable(Catch2)
 
 add_executable(unit_tests
     compression_tests.cpp
+    trackpad_gesture_tests.cpp
 )
+
+# GeneralsX @feature fnc12 27/11/2026 TrackpadGesture.h is header-only and standalone.
+target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/GameEngine/Include)
 
 target_link_libraries(unit_tests PRIVATE
     core_compression

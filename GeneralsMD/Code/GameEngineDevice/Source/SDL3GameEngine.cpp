@@ -37,6 +37,7 @@
 #include "OpenALAudioManager.h"
 #endif
 #include "SDL3Device/GameClient/SDL3Mouse.h"
+#include "SDL3Device/Common/MacTrackpad.h"
 #include "SDL3Device/GameClient/SDL3Keyboard.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/Keyboard.h"
@@ -575,6 +576,9 @@ void SDL3GameEngine::pollSDL3Events(void)
 
 	updateTextInputState();
 
+	// GeneralsX @feature fnc12 27/11/2026 macOS trackpad: precise scrolls become pan events (no-op elsewhere)
+	MacTrackpad::install();
+
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
@@ -694,6 +698,17 @@ void SDL3GameEngine::pollSDL3Events(void)
 				break;
 
 			default:
+#if GENERALSX_MAC_TRACKPAD
+				// GeneralsX @feature fnc12 27/11/2026 macOS trackpad pan (MacTrackpad monitor event) and
+				// pinch go to the mouse like the wheel. Other platforms keep ignoring them.
+				if (event.type == SDL_EVENT_PINCH_UPDATE ||
+				    (event.type != 0 && event.type == MacTrackpad::panEventType())) {
+					SDL3Mouse* mouse = TheMouse ? dynamic_cast<SDL3Mouse*>(TheMouse) : nullptr;
+					if (mouse) {
+						mouse->addSDLEvent(&event);
+					}
+				}
+#endif
 				// Ignore other events for now
 				break;
 		}

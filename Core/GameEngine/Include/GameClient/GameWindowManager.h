@@ -281,6 +281,8 @@ public:
 
 	virtual Int winSetModal( GameWindow *window );  ///< put at top of modal stack
 	virtual Int winUnsetModal( GameWindow *window );  ///< take window off the modal stack from anywhere in the stack
+	// GeneralsX @feature fnc12 27/11/2026 Trackpad gestures leave the camera alone while a modal window is up.
+	Bool winIsModalActive() const { return m_modalHead != nullptr; }
 
 	//---------------------------------------------------------------------------
 	/////////////////////////////////////////////////////////////////////////////
