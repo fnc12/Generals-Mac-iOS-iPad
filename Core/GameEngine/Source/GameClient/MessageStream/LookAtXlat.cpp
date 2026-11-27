@@ -204,6 +204,45 @@ static void logCamera( const char *what, Real a, Real b )
 		what, a, b, pos.x, pos.y, TheTacticalView->getHeightAboveGround(), TheTacticalView->getZoom() );
 }
 
+/** Pinch: zoom about the terrain point under the cursor (W3DView::zoomAt).
+	* GeneralsX @feature fnc12 27/11/2026 Anchored at the cursor instead of the screen centre. */
+static void trackpadPinch( const ICoord2D &cursor, Real scale )
+{
+	TheTacticalView->userZoomAt( TrackpadGesture::pinchZoomHeightDelta( TheTacticalView->getHeightAboveGround(), scale ), &cursor );
+	logCamera( "pinch", scale, 0.0f );
+}
+
+/** GeneralsX @feature fnc12 27/11/2026 Testing aid, off unless GENERALSX_TRACKPAD_TEST_PINCH is set
+	* (see TrackpadGesture::TestPinch): pinches by itself once a match is running, through the same
+	* path as a real pinch. Client-side camera only, like the gesture. */
+static void trackpadTestPinchTick( const ICoord2D &cursor )
+{
+	static TrackpadGesture::TestPinch test;
+	static const Bool enabled = TrackpadGesture::parseTestPinch( getenv( "GENERALSX_TRACKPAD_TEST_PINCH" ), test );
+	static Int tick = 0;
+	if( !enabled || TheTacticalView == nullptr || !TheGameLogic->isInGame() || (TheShell && TheShell->isShellActive()) || !TheInGameUI->getInputEnabled() )
+		return;
+
+	// Let the camera settle after the match starts, then pinch in for `frames`, out for `frames`.
+	const Int SETTLE_TICKS = 90;
+	const Int step = tick++ - SETTLE_TICKS;
+	// The camera position on the frames around the pinches too, to tell the pinch's moves from others.
+	if( step >= -10 && step < 2 * test.frames + 30 )
+		logCamera( "test tick", (Real)step, 0.0f );
+	if( step < 0 || step >= 2 * test.frames )
+		return;
+
+	ICoord2D at = cursor;
+	if( !test.atCursor )
+	{
+		at.x = test.x;
+		at.y = test.y;
+	}
+	const Real scale = step < test.frames ? test.scale : 1.0f / test.scale;
+	fprintf( stderr, "[trackpad] test pinch %d/%d scale=%.3f at (%d, %d)\n", step + 1, 2 * test.frames, scale, at.x, at.y );
+	trackpadPinch( at, scale );
+}
+
 //-----------------------------------------------------------------------------
 LookAtTranslator::LookAtTranslator() :
 	m_isScrolling(false),
@@ -560,8 +599,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 				}
 				else if( kind == TrackpadGesture::KIND_PINCH )
 				{
-					TheTacticalView->userZoom( TrackpadGesture::pinchZoomHeightDelta( TheTacticalView->getHeightAboveGround(), x ) );
-					logCamera( "pinch", x, 0.0f );
+					trackpadPinch( msg->getArgument( 0 )->pixel, x );
 				}
 				disp = DESTROY_MESSAGE;
 				break;
@@ -589,6 +627,8 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 		//-----------------------------------------------------------------------------
 		case GameMessage::MSG_FRAME_TICK:
 		{
+			trackpadTestPinchTick( m_currentPos ); // GeneralsX @feature fnc12 27/11/2026 off unless GENERALSX_TRACKPAD_TEST_PINCH is set
+
 			Coord2D offset = {0, 0};
 
 			if (m_isScrolling && !TheInGameUI->isScrolling())
