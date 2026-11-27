@@ -26,7 +26,8 @@
  *           the last edit, undo or redo changed), edit_message, saved_path
  *   map_players: players of the map's SidesList with their default team (what map.place takes)
  *   map_textures ("terrain" atlas, "water"), map_terrain (mesh chunks), map_water, map_objects
- *           (with height above the ground), map_object_properties, map_models, map_model_parts
+ *           (with height above the ground; start: a start waypoint's number, its color that start
+ *           position's, also the color of the objects it owns), map_object_properties, map_models, map_model_parts
  *           (bind pose), map_model_textures, map_warnings
  *   map_editor (one row, id = 1): what the user is doing (src/map_editor.h): tool, template_name,
  *           road_type, team, angle, picker (show the object picker), pending (a right click

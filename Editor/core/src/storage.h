@@ -203,7 +203,8 @@ namespace end_editor {
         int flags = 0;
         std::int64_t modelId = 0;
         std::string owner;
-        int color = 0xFFFFFF;
+        int color = 0xFFFFFF;  // the owner's color; a start waypoint's, its start position's
+        int start = 0;  // a start waypoint ("Player_<n>_Start"): n, else 0
     };
 
     // The object's properties dictionary as the map stores it.
@@ -507,7 +508,8 @@ namespace end_editor {
                                        make_column("flags", &MapObjectRow::flags),
                                        make_column("model_id", &MapObjectRow::modelId),
                                        make_column("owner", &MapObjectRow::owner),
-                                       make_column("color", &MapObjectRow::color)),
+                                       make_column("color", &MapObjectRow::color),
+                                       make_column("start", &MapObjectRow::start)),
                             make_table("map_object_properties",
                                        make_column("id", &MapPropertyRow::id, primary_key().autoincrement()),
                                        make_column("object_id", &MapPropertyRow::objectId),

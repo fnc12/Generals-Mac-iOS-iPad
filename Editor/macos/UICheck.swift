@@ -869,6 +869,12 @@ enum UICheck {
                 check("the inspector's Owner pop-up chose Start 1: owner teamStart1",
                       picked && object(first.id)?.owner == "teamStart1" && property("originalOwner")?.value == "teamStart1")
                 if !picked { log(diagnostic) }
+                // Start 1's objects take Start 1's color: its owner's, its waypoint's (and label's).
+                let startWaypoint = editor.mapScene.objects.first { $0.start == 1 }
+                check(String(format: "Start 1's object is drawn in Start 1's color #%06X (its waypoint's #%06X)",
+                             object(first.id)?.color ?? 0, startWaypoint?.color ?? 0),
+                      object(first.id)?.color == startOne.color && startWaypoint?.color == startOne.color
+                      && startOne.color != 0xFFFFFF)
             }
             // A new property: its key and value typed, its type chosen in the pop-up, Add.
             // The form's last rows exist once they are scrolled into view (a lazy list).
@@ -1062,6 +1068,140 @@ enum UICheck {
                 scroll(units: .pixel, continuous: true, by: 40, flags: .maskCommand, at: aside)
             }
             _ = distanceBefore
+
+            // 10b. Start labels: one "Start N" over each start waypoint, drawn in the map's frames
+            // (the same camera as the terrain), following pan, turn and zoom; none behind the camera;
+            // gone with Markers off.
+            let starts = editor.mapScene.objects.filter { $0.start > 0 }.sorted { $0.start < $1.start }
+            let named = starts.allSatisfy { waypoint in
+                editor.mapObjectProperties(of: waypoint.id).contains { $0.key == "waypointName" && $0.value == "Player_\(waypoint.start)_Start" }
+            }
+            check("the map's start waypoints: \(starts.map { "Start \($0.start)" }) named Player_N_Start",
+                  starts.count >= 2 && named && Set(starts.map(\.start)).count == starts.count)
+            check("each start position has its own color: \(starts.map { String(format: "#%06X", $0.color) })",
+                  Set(starts.map(\.color)).count == starts.count && starts.allSatisfy { waypoint in
+                      editor.mapPlayers.first { $0.start == waypoint.start }?.color == waypoint.color })
+            /// Each start label of the last frame is at its waypoint as this camera shows it.
+            @MainActor func labelsFollow(_ what: String, expectHidden: Set<Int64> = []) async {
+                await settle(0.2)
+                let labels = renderer.startLabels
+                var worst: CGFloat = 0
+                var missing: [Int] = []
+                for waypoint in starts {
+                    let expected = state.viewPoint(of: waypoint.position + SIMD3(0, 0, 13), size: view.bounds.size)
+                    let label = labels.first { $0.object == waypoint.id }
+                    if expectHidden.contains(waypoint.id) {
+                        if expected != nil || label != nil { missing.append(waypoint.start) }
+                        continue
+                    }
+                    guard let expected, let label, label.start == waypoint.start, label.color == waypoint.color,
+                          label.frame.maxY == label.anchor.y, abs(label.frame.midX - label.anchor.x) < 0.01 else {
+                        missing.append(waypoint.start)
+                        continue
+                    }
+                    worst = max(worst, hypot(label.anchor.x - expected.x, label.anchor.y - expected.y))
+                }
+                check("\(what): \(labels.count) start labels, each at its waypoint's projected point "
+                      + "(off by at most \(String(format: "%.2f", worst)) pt)"
+                      + (expectHidden.isEmpty ? "" : ", none for the waypoint behind the camera")
+                      + (missing.isEmpty ? "" : ", wrong: \(missing)"),
+                      missing.isEmpty && labels.count == starts.count - expectHidden.count && worst <= 1)
+            }
+            /// Share of the pixels inside each label's frame that have its color, in a frame rendered
+            /// like the view's (same camera and size).
+            @MainActor func labelCoverage(_ labels: [StartLabel]) -> [Double] {
+                let width = Int(view.bounds.width), height = Int(view.bounds.height)
+                guard let image = renderer.renderImage(width: width, height: height),
+                      let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return [] }
+                return labels.map { label in
+                    let r = Int((label.color >> 16) & 0xFF), g = Int((label.color >> 8) & 0xFF), b = Int(label.color & 0xFF)
+                    var inside = 0, colored = 0
+                    for y in max(Int(label.frame.minY), 0)..<min(Int(label.frame.maxY), height) {
+                        for x in max(Int(label.frame.minX), 0)..<min(Int(label.frame.maxX), width) {
+                            let p = bytes + (y * width + x) * 4  // BGRA
+                            inside += 1
+                            if abs(Int(p[2]) - r) < 24 && abs(Int(p[1]) - g) < 24 && abs(Int(p[0]) - b) < 24 { colored += 1 }
+                        }
+                    }
+                    return inside == 0 ? 0 : Double(colored) / Double(inside)
+                }
+            }
+            // The whole map from the south, as it opens.
+            let camera = (state.target, state.yaw, state.pitch, state.distance)
+            await layoutSettled()
+            state.frame(renderer.scene)
+            await settle(0.5)
+            await labelsFollow("the map framed")
+            let framedLabels = renderer.startLabels
+            let coverage = labelCoverage(framedLabels)
+            check("each label is drawn in its start's color (\(coverage.map { String(format: "%.0f%%", $0 * 100) }) of its pixels)",
+                  coverage.count == framedLabels.count && coverage.allSatisfy { $0 > 0.3 })
+            if let image = renderer.renderImage(width: Int(view.bounds.width) * 2, height: Int(view.bounds.height) * 2) {
+                let url = URL(fileURLWithPath: request.out).deletingLastPathComponent().appendingPathComponent("startlabels-render.png")
+                if let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
+                    CGImageDestinationAddImage(destination, image, nil)
+                    CGImageDestinationFinalize(destination)
+                }
+            }
+            log("start labels: held for a screenshot")
+            await settle(3)
+            // A click on a start waypoint: the inspector says which start it is.
+            if let waypoint = starts.first, let at = pointOn(waypoint.id) {
+                click(at: windowPoint(at), window: window)
+                await wait("the start waypoint selected", timeout: 5) { editor.mapSelection == [waypoint.id] }
+                await settle(0.5)
+                let row = axFind("inspector.start")
+                let text = row.map { node in
+                    (axText(node) + ((axValue(node, kAXChildrenAttribute) as? [AXUIElement]) ?? []).flatMap(axText)).joined(separator: " ")
+                } ?? ""
+                check("a click on Player_\(waypoint.start)_Start: the inspector shows \"\(text)\"",
+                      editor.mapSelection == [waypoint.id] && text.contains("Start \(waypoint.start)"))
+                click(at: windowPoint(empty), window: window)
+                await wait("the selection to clear", timeout: 10) { editor.mapSelection.isEmpty }
+                await settle(1)
+                await layoutSettled()
+            } else {
+                check("a start waypoint can be clicked", false)
+            }
+            // Ground with no object under it (a drag there pans).
+            let labelEmpty = stride(from: 0.9, through: 0.5, by: -0.05).flatMap { y in
+                stride(from: 0.5, through: 0.9, by: 0.1).map { CGPoint(x: view.bounds.width * $0, y: view.bounds.height * y) }
+            }.first { ground($0) != nil && renderer.hits(at: $0, size: view.bounds.size).isEmpty } ?? empty
+            var anchorsBefore = renderer.startLabels.map(\.anchor)
+            await drag(from: windowPoint(labelEmpty), by: 80)
+            await labelsFollow("after a pan")
+            check("the labels moved with the pan", renderer.startLabels.map(\.anchor) != anchorsBefore)
+            anchorsBefore = renderer.startLabels.map(\.anchor)
+            await drag(from: windowPoint(labelEmpty), by: 50, modifiers: .option)
+            await labelsFollow("after a turn")
+            check("the labels moved with the turn", renderer.startLabels.map(\.anchor) != anchorsBefore)
+            anchorsBefore = renderer.startLabels.map(\.anchor)
+            scroll(units: .line, continuous: false, by: -2, at: center)
+            await labelsFollow("after a zoom")
+            check("the labels moved with the zoom", renderer.startLabels.map(\.anchor) != anchorsBefore)
+            // A start waypoint behind the camera has no label (its projection would mirror it).
+            if let behind = starts.first {
+                let forward = SIMD3(-cos(state.yaw), -sin(state.yaw), Float(0))
+                // The eye 300 past it: then it is behind the eye's plane even looking down.
+                state.target = behind.position + forward * (state.distance / cos(state.pitch) + 300)
+                await labelsFollow("Player_\(behind.start)_Start behind the camera", expectHidden: [behind.id])
+            }
+            state.frame(renderer.scene)
+            await labelsFollow("framed again")
+            let shownLabels = renderer.startLabels
+            let shownCoverage = labelCoverage(shownLabels)
+            press("map.showMarkers")
+            await settle(0.5)
+            let hiddenCoverage = labelCoverage(shownLabels)
+            check("Markers off: no start labels (\(renderer.startLabels.count)), their pixels gone "
+                  + "(\(shownCoverage.map { String(format: "%.0f%%", $0 * 100) }) -> "
+                  + "\(hiddenCoverage.map { String(format: "%.0f%%", $0 * 100) }))",
+                  !state.showMarkers && renderer.startLabels.isEmpty && hiddenCoverage.count == shownLabels.count
+                  && shownCoverage.count == shownLabels.count && zip(hiddenCoverage, shownCoverage).allSatisfy { $0 < $1 / 3 })
+            press("map.showMarkers")
+            await labelsFollow("Markers on again")
+            (state.target, state.yaw, state.pitch, state.distance) = camera
+            await settle()
 
             // Save Map As: File > Save Map As… opens the sheet, Cancel closes it.
             let saveName = request.save

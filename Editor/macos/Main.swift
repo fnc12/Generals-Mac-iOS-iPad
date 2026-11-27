@@ -244,7 +244,8 @@ final class StoreReader {
     func mapObjects() -> [MapObjectItem] {
         var objects: [MapObjectItem] = []
         rows("""
-            SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color, height FROM map_objects ORDER BY id
+            SELECT id, template_name, kind, x, y, z, angle, flags, model_id, owner, color, height, start FROM map_objects
+            ORDER BY id
             """) { s in
             objects.append(MapObjectItem(
                 id: sqlite3_column_int64(s, 0), templateName: Self.text(s, 1), kind: Self.text(s, 2),
@@ -252,7 +253,8 @@ final class StoreReader {
                                 Float(sqlite3_column_double(s, 5))),
                 height: Float(sqlite3_column_double(s, 11)),
                 angle: Float(sqlite3_column_double(s, 6)), flags: Int(sqlite3_column_int(s, 7)),
-                modelId: sqlite3_column_int64(s, 8), owner: Self.text(s, 9), color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 10))))
+                modelId: sqlite3_column_int64(s, 8), owner: Self.text(s, 9), color: UInt32(truncatingIfNeeded: sqlite3_column_int(s, 10)),
+                start: Int(sqlite3_column_int(s, 12))))
         }
         return objects
     }

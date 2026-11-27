@@ -61,6 +61,8 @@ namespace end_editor {
         std::string hiddenSubObjects;
         std::string owner;  // team name (originalOwner)
         std::uint32_t color = 0xFFFFFF;  // owner's player color, 0xRRGGBB
+        // A start waypoint ("Player_<n>_Start"): n, colored like start position n; else 0.
+        int start = 0;
     };
 
     struct MapScene {

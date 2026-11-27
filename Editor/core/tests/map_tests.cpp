@@ -1,6 +1,7 @@
 #include "compression.h"
 #include "data_chunk.h"
 #include "editor_core.h"
+#include "map_document.h"
 #include "map_file.h"
 #include "map_scene.h"
 #include "test_big_writer.h"
@@ -281,7 +282,10 @@ TEST_CASE("Map scene: terrain, water, objects") {
     CHECK(placedTree.z == Approx(groundHeight(map, 15, 5) + 2));
     const auto placedWaypoint = resolveObject(map, map.objects[1], findObject);
     CHECK(placedWaypoint.kind == "waypoint");
-    CHECK(placedWaypoint.color == 0xFFFFFF);
+    // Player_1_Start: start position 1's waypoint, in its color.
+    CHECK(placedWaypoint.start == 1);
+    CHECK(placedWaypoint.color == startPositionColor(1));
+    CHECK(placedTree.start == 0);
 }
 
 TEST_CASE("EditorCore lists and opens maps") {

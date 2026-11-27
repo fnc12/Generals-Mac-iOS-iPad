@@ -226,6 +226,7 @@ TEST_CASE("Map players: a multiplayer map's start positions follow the SidesList
         CHECK(player.displayName == "Start " + std::to_string(start));
         CHECK(player.team == "teamStart" + std::to_string(start));
         CHECK(player.start == start);
+        CHECK(player.color == startPositionColor(start));
         CHECK_FALSE(player.neutral);
     }
     CHECK(mapTeams(map) == std::vector<std::string>{"teamPlyrRed", "teamStart1", "teamStart2", "teamStart3"});
@@ -451,4 +452,42 @@ TEST_CASE("MapDocument groups, heights of old objects, properties and existing w
     CHECK(document.remove(3));
     const auto fresh = document.placeWaypoint(1, 1);
     CHECK(document.waypointId(fresh) == 21);
+}
+
+TEST_CASE("Start positions: waypoint and team names, and one color each") {
+    const auto waypoint = [](const std::string& name, const std::string& templateName = waypointTemplate) {
+        MapObject object;
+        object.templateName = templateName;
+        object.properties.push_back(DictValue{"waypointName", AsciiText{name}});
+        return object;
+    };
+    for (int n = 1; n <= 8; ++n) {
+        CHECK(startPositionOf(waypoint("Player_" + std::to_string(n) + "_Start")) == n);
+        CHECK(startPositionOfTeam("teamStart" + std::to_string(n)) == n);
+    }
+    for (const auto* name: {"Player_0_Start",
+                            "Player_9_Start",
+                            "Player_10_Start",
+                            "player_1_start",
+                            "Player_1_Star",
+                            "Player_1_Start2",
+                            "Start 1",
+                            ""}) {
+        CHECK(startPositionOf(waypoint(name)) == 0);
+    }
+    CHECK(startPositionOf(waypoint("Player_1_Start", "TestRock")) == 0);
+    CHECK(startPositionOf(MapObject{}) == 0);
+    for (const auto* team: {"teamStart0", "teamStart9", "teamStart10", "teamstart1", "teamStart", "teamPlyrRed", ""}) {
+        CHECK(startPositionOfTeam(team) == 0);
+    }
+    // Eight different colors, none white (no owner) or near the waypoint markers' gold.
+    std::vector<std::uint32_t> colors;
+    for (int n = 1; n <= 8; ++n) {
+        const auto color = startPositionColor(n);
+        CHECK(color != 0xFFFFFF);
+        CHECK(std::find(colors.begin(), colors.end(), color) == colors.end());
+        colors.push_back(color);
+    }
+    CHECK(startPositionColor(0) == 0xFFFFFF);
+    CHECK(startPositionColor(9) == 0xFFFFFF);
 }

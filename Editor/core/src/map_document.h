@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace end_editor {
@@ -32,6 +33,13 @@ namespace end_editor {
     // "Player_1_Start", "Player_2_Start".. up to the first number missing, at most 8. A map of two
     // or more is a multiplayer map (Play starts it as a skirmish).
     int mapStartPositions(const MapFile& map);
+    // The start position a waypoint marks: n for a waypoint named "Player_<n>_Start" (1..8), else 0.
+    int startPositionOf(const MapObject& object);
+    // The start position whose objects a team is: n for "teamStart<n>" (1..8), else 0.
+    int startPositionOfTeam(std::string_view team);
+    // The editor's color (0xRRGGBB) of start position n (1..8): its waypoint's label, its owner in the
+    // owner menus and the objects it owns. The game has none (whoever starts there brings theirs).
+    std::uint32_t startPositionColor(int start);
 
     // The template name of waypoints (WorldBuilder's WaypointTool).
     inline constexpr const char* waypointTemplate = "*Waypoints/Waypoint";
