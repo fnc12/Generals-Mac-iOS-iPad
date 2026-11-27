@@ -373,8 +373,10 @@ TEST_CASE("Flow: the inspector edits owner, height and properties of the selecti
     CHECK(flow.property(1, "objectScale") == "<none>");
     // Bad values are refused with a note; nothing changes.
     const auto steps = flow.reader->get<MapRow>(1).undoCount;
-    flow.send("selection.property\tobjectInitialHealth\tint\tlots");
+    // A value that is not of its type is refused when the command is read.
+    CHECK(flow.refused("selection.property\tobjectInitialHealth\tint\tlots") == "error:bad_argument");
     CHECK(flow.editor().noteKind == "error");
+    CHECK(flow.editor().note == "objectInitialHealth: \"lots\" is not a number");
     flow.send("selection.height\t100000");
     CHECK(flow.editor().noteKind == "error");
     flow.send("selection.owner\tteamNobody");

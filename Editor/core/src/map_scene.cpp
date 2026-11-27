@@ -547,7 +547,8 @@ namespace end_editor {
         } else if (info && !info->model.empty()) {
             placed.kind = "model";
             placed.model = info->model;
-            placed.modelKey = info->model + "\t" + info->muzzleFlashes + "\t" + info->hiddenSubObjects;
+            placed.muzzleFlashes = info->muzzleFlashes;
+            placed.hiddenSubObjects = info->hiddenSubObjects;
         } else {
             placed.kind = "marker";
         }

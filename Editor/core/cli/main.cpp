@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
                 front(db->select(&MapObjectRow::id,
                                  where(abs(c(&MapObjectRow::x) - cx) < 0.01 and abs(c(&MapObjectRow::y) - cy) < 0.01),
                                  limit(1)));
-            std::vector<std::string> commands{"selection.set\t" + (middle ? std::to_string(*middle) : std::string("0")),
+            std::vector<std::string> commands{"selection.set\t" + (middle ? std::to_string(*middle) : std::string()),
                                               "selection.height\t15",
                                               "selection.property\tobjectInitialHealth\tint\t50",
                                               "selection.property\tobjectName\tstring\tEditCheck",

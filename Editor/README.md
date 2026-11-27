@@ -20,7 +20,10 @@ idea 13). macOS first; Windows (C#) and Linux (gtkmm) clients later. No Qt.
     `map.open`, `maps.user`, `map.place`, `map.move`, `map.rotate`, `map.delete`, `map.undo`,
     `map.redo`, `map.save`, `map.save_as`, `map.play`, `play.*`, and the client's input:
     `map.press`/`drag`/`release`/`click_right`, `edit.*`, `placement.*`, `selection.*`,
-    `waypoint.link`, `note.clear`.
+    `waypoint.link`, `note.clear`. Each command is parsed once, at that boundary, into a typed
+    value (`core/src/commands.h`: a `std::variant` of one struct per command with its typed
+    fields); a malformed one is refused with its error before anything runs, and the core's jobs
+    and the map editor get only those values.
   - Editing state and rules live in the core too (`core/src/map_editor.h`): the placement tool,
     a right click waiting for an object, the selection, mouse gestures, the clipboard and the
     note shown to the user. The client turns events into commands, adding only what needs its

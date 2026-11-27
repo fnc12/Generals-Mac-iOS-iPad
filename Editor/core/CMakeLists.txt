@@ -57,6 +57,7 @@ add_library(end_editor_core STATIC
     src/terrain_ini.cpp
     src/map_scene.cpp
     src/map_document.cpp
+    src/commands.cpp
     src/map_editor.cpp
     src/map_preview.cpp
     src/game_launch.cpp
