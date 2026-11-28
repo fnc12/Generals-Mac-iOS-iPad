@@ -1148,15 +1148,8 @@ namespace end_editor {
     }
 
     std::string EditorCore::defaultGameApp() const {
-        const char* home = std::getenv("HOME");
-        if (!home || !*home) {
-            return "";
-        }
-        // The user Maps folder is .../GeneralsX/GeneralsZH/Maps for Zero Hour, .../Generals/Maps for the base game.
-        const bool baseGame = !this->userMapsFolder.empty() &&
-                              std::filesystem::path(this->userMapsFolder).parent_path().filename() == "Generals";
-        return (std::filesystem::path(home) / "GeneralsX" / "Apps" / (baseGame ? "GeneralsX.app" : "GeneralsXZH.app"))
-            .string();
+        const bool baseGame = !this->userMapsFolder.empty() && isBaseGameUserMaps(this->userMapsFolder);
+        return end_editor::defaultGameApp(homeFolder(), baseGame);
     }
 
     std::optional<int> EditorCore::colorIndex(std::string_view name) const {

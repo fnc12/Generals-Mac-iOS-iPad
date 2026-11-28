@@ -75,7 +75,13 @@
  * not of its type), error:unknown_template, error:unknown_road, error:unknown_faction,
  * error:no_user_maps; a refused edit also leaves its note in map_editor. Edits run in the next
  * end_editor_update(), all queued ones at once.
- * Work runs in end_editor_update(), which the client calls once per tick. */
+ * Work runs in end_editor_update(), which the client calls once per tick.
+ *
+ * Text is UTF-8, paths too. Windows: the core is end_editor_core_c.dll (these functions, cdecl);
+ * it opens files with narrow paths, so the host process runs with the UTF-8 code page (an app
+ * manifest with <activeCodePage>UTF-8</activeCodePage>, Windows 10 1903 and later). map.play
+ * starts the game with CreateProcessW in a Job object of its own; play.stop and Play again close
+ * its windows (WM_CLOSE) and end the whole job when it has not quit after 3 s. */
 
 #ifdef __cplusplus
 extern "C" {

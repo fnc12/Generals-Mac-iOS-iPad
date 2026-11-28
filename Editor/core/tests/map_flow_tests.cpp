@@ -8,6 +8,7 @@
 #include "map_preview.h"
 #include "storage.h"
 #include "test_big_writer.h"
+#include "test_fake_game.h"
 #include "test_map_writer.h"
 
 #include <catch2/catch_approx.hpp>
@@ -21,8 +22,6 @@
 #include <iterator>
 #include <optional>
 #include <thread>
-
-#include <signal.h>
 
 using namespace end_editor;
 using namespace end_editor_tests;
@@ -690,28 +689,6 @@ TEST_CASE("Map preview: tile colors lit by height, water areas blue") {
 }
 
 namespace {
-    // A stand-in for the game app: Fake.app/Contents/MacOS/run.sh writes the arguments it got (one
-    // per line), CNC_GENERALS_ZH_PATH, CNC_GENERALS_PATH and GENERALSX_USER_DATA_DIR to files next to the app, then waits
-    // `seconds` in a child process (like run.sh, which runs the game as its child) and exits with `code`.
-    std::filesystem::path
-    makeFakeGame(const std::filesystem::path& folder, int seconds = 0, int code = 0, bool ignoreTerm = false) {
-        const auto app = folder / "Fake.app";
-        std::filesystem::create_directories(app / "Contents" / "MacOS");
-        const auto script = app / "Contents" / "MacOS" / "run.sh";
-        std::ofstream(script) << "#!/bin/sh\n"
-                              << (ignoreTerm ? "trap '' TERM\n" : "")
-                              << "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" << (folder / "args.txt").string()
-                              << "'\n"
-                              << "printf '%s\\n%s\\n%s\\n' \"$CNC_GENERALS_ZH_PATH\" \"$CNC_GENERALS_PATH\" "
-                                 "\"$GENERALSX_USER_DATA_DIR\" > '"
-                              << (folder / "env.txt").string() << "'\n"
-                              << "echo started $$ >> '" << (folder / "runs.txt").string() << "'\n"
-                              << "sleep " << seconds << " &\necho $! > '" << (folder / "child.txt").string()
-                              << "'\nwait $!\nexit " << code << "\n";
-        std::filesystem::permissions(script, std::filesystem::perms::owner_all);
-        return app;
-    }
-
     std::vector<std::string> lines(const std::string& text) {
         std::vector<std::string> result;
         std::size_t start = 0;
@@ -758,12 +735,12 @@ TEST_CASE("Flow: Play saves the map with its unsaved edits to the test copy and 
     CHECK(play.pid > 0);
     CHECK(play.runs == 1);
     CHECK(play.mapPath == testCopy.string());
-    const auto program = (app / "Contents" / "MacOS" / "run.sh").string();
+    const auto program = fakeGameProgram(app).string();
     CHECK(play.command ==
           program + "\t-testMap\t" + testCopy.string() +
               "\t-testMapFaction\tFactionChina\t-testMapAI\t2\t-testMapAIDifficulty\thard\t-testMapStart\t2"
               "\t-testMapColor\t2");
-    CHECK(flow.editor().note.rfind("Playing Test Map in Fake.app", 0) == 0);
+    CHECK(flow.editor().note.rfind("Playing Test Map in " + app.filename().string(), 0) == 0);
     // The test copy has the unsaved edit; the user's map stays unsaved and edited.
     const auto copy = parsed(readFile(testCopy));
     CHECK(copy.objects.size() == placed);
@@ -813,11 +790,13 @@ TEST_CASE("Flow: Play again closes the game the last Play started; play.stop clo
     CHECK(second.state == "running");
     CHECK(second.runs == 2);
     CHECK(second.pid != first.pid);
-    CHECK(::kill(pid_t(first.pid), 0) != 0);  // the first one is gone
+    CHECK_FALSE(processRuns(first.pid));  // the first one is gone
+    // Up and running (on Windows a game is asked to quit through its window, so it needs one).
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     flow.send("play.stop");
     const auto stopped = waitForGame(flow);
     CHECK(stopped.state == "exited");
-    CHECK(stopped.exitCode == 128 + SIGTERM);
+    CHECK(stopped.exitCode == stoppedExitCode);
 }
 
 TEST_CASE("Flow: a game that does not quit when asked is ended (Play again, play.stop)") {
@@ -830,16 +809,16 @@ TEST_CASE("Flow: a game that does not quit when asked is ended (Play again, play
     std::this_thread::sleep_for(std::chrono::milliseconds(300));  // its trap is set
     flow.send("map.play");
     CHECK(flow.reader->get<PlayRow>(1).runs == 2);
-    CHECK(::kill(pid_t(first.pid), 0) != 0);
+    CHECK_FALSE(processRuns(first.pid));
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     const auto child = std::stoi(readFile(flow.saved / "child.txt"));
-    CHECK(::kill(pid_t(child), 0) == 0);
+    CHECK(processRuns(child));
     flow.send("play.stop");
     const auto stopped = waitForGame(flow, 10);
     CHECK(stopped.state == "exited");
-    CHECK(stopped.exitCode == 128 + SIGKILL);
+    CHECK(stopped.exitCode == forcedExitCode);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    CHECK(::kill(pid_t(child), 0) != 0);  // the game the launcher script ran is gone too
+    CHECK_FALSE(processRuns(child));  // the game the launcher script ran is gone too
 }
 
 TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions") {
@@ -852,13 +831,17 @@ TEST_CASE("Flow: Play settings: defaults, refused values, kept across sessions")
     CHECK(play.startPosition == 1);
     CHECK(play.color == "Random");
     CHECK(play.state == "idle");
-    const char* home = std::getenv("HOME");
-    REQUIRE(home);
-    CHECK(play.appResolved == (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsXZH.app").string());
-    // The base game's user Maps folder means the base game's app.
+    const auto home = homeFolder();
+    REQUIRE_FALSE(home.empty());
+    CHECK(play.appResolved == defaultGameApp(home, false));
+    // The base game's user Maps folder means the base game's app (GeneralsX's and the original
+    // game's user data folders on Windows).
     flow.send("maps.user\t" + (flow.saved / "GeneralsX" / "Generals" / "Maps").string());
-    CHECK(flow.reader->get<PlayRow>(1).appResolved ==
-          (std::filesystem::path(home) / "GeneralsX/Apps/GeneralsX.app").string());
+    CHECK(flow.reader->get<PlayRow>(1).appResolved == defaultGameApp(home, true));
+    flow.send("maps.user\t" + (flow.saved / "Command and Conquer Generals Data" / "Maps").string());
+    CHECK(flow.reader->get<PlayRow>(1).appResolved == defaultGameApp(home, true));
+    flow.send("maps.user\t" + (flow.saved / "Command and Conquer Generals Zero Hour Data" / "Maps").string());
+    CHECK(flow.reader->get<PlayRow>(1).appResolved == defaultGameApp(home, false));
 
     // The playable factions of PlayerTemplate.ini, what the faction menu offers.
     std::vector<std::string> factions;

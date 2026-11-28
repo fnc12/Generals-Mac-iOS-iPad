@@ -85,12 +85,26 @@ endif()
 # The Swift client links the static library directly; keep it at a known path.
 set_target_properties(end_editor_core PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Windows: the C ABI as a DLL (end_editor_core_c.dll) for the C# client, which calls it through
+# P/Invoke. Only the functions of editor_core_c.h are exported (src/end_editor_core_c.def). Paths
+# cross the ABI as UTF-8, so the host process runs with the UTF-8 code page (src/utf8.manifest;
+# the C# client's app.manifest says the same).
+if(WIN32)
+    add_library(end_editor_core_c SHARED src/end_editor_core_c.def)
+    target_link_libraries(end_editor_core_c PRIVATE end_editor_core)
+    set_target_properties(end_editor_core_c PROPERTIES LINKER_LANGUAGE CXX)
+    set(END_EDITOR_MANIFEST src/utf8.manifest)
+endif()
+
 if(END_EDITOR_BUILD_CLI)
-    add_executable(end-editor-cli cli/main.cpp)
+    add_executable(end-editor-cli cli/main.cpp ${END_EDITOR_MANIFEST})
     target_link_libraries(end-editor-cli PRIVATE end_editor_core)
     # The round-trip check reads the original map bytes with the core's own file and unpacking code.
     target_include_directories(end-editor-cli PRIVATE src)
     target_include_directories(end-editor-cli BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
+    if(MSVC)
+        target_compile_options(end-editor-cli PRIVATE /utf-8)
+    endif()
 endif()
 
 if(END_EDITOR_BUILD_TESTS)
@@ -103,9 +117,21 @@ if(END_EDITOR_BUILD_TESTS)
     FetchContent_MakeAvailable(Catch2)
     add_executable(end_editor_tests tests/big_archive_tests.cpp tests/ini_objects_tests.cpp tests/editor_core_tests.cpp
         tests/model_tests.cpp tests/map_tests.cpp tests/map_edit_tests.cpp
-        tests/map_flow_tests.cpp tests/command_tests.cpp)
+        tests/map_flow_tests.cpp tests/command_tests.cpp tests/game_launch_tests.cpp ${END_EDITOR_MANIFEST})
     target_include_directories(end_editor_tests PRIVATE src)
     target_include_directories(end_editor_tests BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
     target_link_libraries(end_editor_tests PRIVATE end_editor_core Catch2::Catch2WithMain)
+    if(MSVC)
+        # The tests' text (map and folder names) is UTF-8 like the core's.
+        target_compile_options(end_editor_tests PRIVATE /utf-8)
+    endif()
+    if(WIN32)
+        # A stand-in for the game app (Play tests): records what it got, runs a child, quits
+        # when its window is closed (tests/fake_game.cpp). On macOS and Linux a shell script is.
+        add_executable(end_editor_fake_game WIN32 tests/fake_game.cpp ${END_EDITOR_MANIFEST})
+        target_link_libraries(end_editor_fake_game PRIVATE shell32)
+        add_dependencies(end_editor_tests end_editor_fake_game)
+        target_compile_definitions(end_editor_tests PRIVATE END_EDITOR_FAKE_GAME="$<TARGET_FILE:end_editor_fake_game>")
+    endif()
     add_test(NAME end_editor_tests COMMAND end_editor_tests WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 endif()
