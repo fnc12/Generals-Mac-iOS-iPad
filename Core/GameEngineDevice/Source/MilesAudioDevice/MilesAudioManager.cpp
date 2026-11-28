@@ -1425,6 +1425,16 @@ void MilesAudioManager::openDevice()
 
 	m_deviceOpened = true;
 
+	// GeneralsX @bugfix fnc12 28/11/2026 Headless there is no window, and AIL_quick_startup crashes without one
+	// (access violation) once mss32.dll is found: the game data folder is a DLL directory now. Headless runs keep the
+	// sound off, as they did when mss32.dll was not found (the replay CRCs of all platforms match that way).
+	if (TheGlobalData->m_headless)
+	{
+		DEBUG_LOG(("Headless: the Miles Sound System is not started."));
+		setOn(false, AudioAffect_All);
+		return;
+	}
+
 	// Load the Miles Sound System on runtime here instead of importing it into the executable.
 	if (!MilesLoader::load())
 	{
