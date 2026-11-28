@@ -31,6 +31,10 @@ idea 13). macOS first; Windows (C#) and Linux (gtkmm) clients later. No Qt.
     and draws what the store says.
   - `end_editor_update()` runs queued work; the client calls it once per tick.
 - `macos/` — SwiftUI client. Links the core's static library and the system SQLite.
+- `windows/` — WPF client (.NET 8, C#): `EndEditor/`. Calls the core's DLL (`end_editor_core_c.dll`,
+  the same C ABI) through P/Invoke, reads the store with Microsoft.Data.Sqlite (read-only) and draws
+  with Direct3D 11 (Vortice.Windows) in a Win32 child window; the Metal shaders are ported to HLSL
+  (`Render/Shaders.cs`). Like the macOS client it decides nothing: input becomes the same commands.
 
 ## Build
 
@@ -53,6 +57,19 @@ build/editor-core/end-editor-cli ~/GeneralsX/GeneralsZH --base ~/GeneralsX/Gener
 # macOS app -> build/editor-macos/END Editor.app
 Editor/macos/build.sh
 ```
+
+Windows (Visual Studio 2022 or its Build Tools with the C++ x64 tools, CMake, the .NET 8 SDK or later):
+
+```powershell
+# core DLL + tests (run) + CLI with MSVC x64, then the app published self-contained:
+# build\editor-windows\END Editor\END Editor.exe
+powershell -ExecutionPolicy Bypass -File Editor\windows\build.ps1 [-Out <folder>] [-Build <folder>] [-SkipTests]
+```
+
+On Windows the core gets zlib from its sources when the system has none (one of the 150 maps is "ZL"
+compressed), and the executables run with the UTF-8 code page (`core/src/utf8.manifest`, the app's
+`app.manifest`): paths cross the C ABI as UTF-8 and the core opens files with narrow paths, so a
+Documents folder like OneDrive's `Документы` works.
 
 Code style: the C and C++ sources (`core/`, `macos/bridge.h`) are formatted with clang-format and
 `Editor/.clang-format`, a copy of sqlite_orm's (v1.9.1). `Editor/format.sh` formats them in place;
