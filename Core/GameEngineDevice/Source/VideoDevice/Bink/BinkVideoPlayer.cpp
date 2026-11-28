@@ -46,6 +46,7 @@
 //----------------------------------------------------------------------------
 
 #include "VideoDevice/Bink/BinkVideoPlayer.h"
+#include "Common/LocalFileSystem.h"
 #include "Common/AudioAffect.h"
 #include "Common/GameAudio.h"
 #include "Common/GameMemory.h"
@@ -264,7 +265,7 @@ VideoStreamInterface*	BinkVideoPlayer::open( AsciiString movieTitle )
 		{
 			char filePath[ _MAX_PATH ];
 			snprintf( filePath, ARRAY_SIZE(filePath), "%s%s\\%s.%s", TheGlobalData->m_modDir.str(), VIDEO_PATH, pVideo->m_filename.str(), VIDEO_EXT );
-			HBINK handle = BinkOpen(filePath , BINKPRELOADALL );
+			HBINK handle = BinkOpen(TheLocalFileSystem->resolveReadPath(filePath).str(), BINKPRELOADALL );
 			DEBUG_ASSERTLOG(!handle, ("opened bink file %s", filePath));
 			if (handle)
 			{
@@ -274,13 +275,16 @@ VideoStreamInterface*	BinkVideoPlayer::open( AsciiString movieTitle )
 
 		char localizedFilePath[ _MAX_PATH ];
 		snprintf( localizedFilePath, ARRAY_SIZE(localizedFilePath), VIDEO_LANG_PATH_FORMAT, GetRegistryLanguage().str(), pVideo->m_filename.str(), VIDEO_EXT );
-		HBINK handle = BinkOpen(localizedFilePath , BINKPRELOADALL );
+		// GeneralsX @bugfix fnc12 28/11/2026 Bink opens the file itself, from the working directory only: the movies
+		// (loose files of the game data) are resolved like the other loose files, or an exe outside the game folder
+		// played no videos.
+		HBINK handle = BinkOpen(TheLocalFileSystem->resolveReadPath(localizedFilePath).str(), BINKPRELOADALL );
 		DEBUG_ASSERTLOG(!handle, ("opened localized bink file %s", localizedFilePath));
 		if (!handle)
 		{
 			char filePath[ _MAX_PATH ];
 			snprintf( filePath, ARRAY_SIZE(filePath), "%s\\%s.%s", VIDEO_PATH, pVideo->m_filename.str(), VIDEO_EXT );
-			handle = BinkOpen(filePath , BINKPRELOADALL );
+			handle = BinkOpen(TheLocalFileSystem->resolveReadPath(filePath).str(), BINKPRELOADALL );
 			DEBUG_ASSERTLOG(!handle, ("opened bink file %s", localizedFilePath));
 		}
 

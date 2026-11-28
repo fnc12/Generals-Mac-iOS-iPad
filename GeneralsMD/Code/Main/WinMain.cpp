@@ -861,6 +861,20 @@ Int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance,
 		// in release, the file only ever lives in the root dir
 		gLoadScreenBitmap = (HBITMAP)LoadImage(hInstance, "Install_Final.bmp", IMAGE_BITMAP, 0, 0, LR_SHARED|LR_LOADFROMFILE);
 #endif
+		// GeneralsX @bugfix fnc12 28/11/2026 An exe outside the game folder (the data from CNC_GENERALS_ZH_PATH): the
+		// splash image is in the game data. The file systems do not exist yet, so the variable is read here.
+		if (!gLoadScreenBitmap)
+		{
+			const char *dataDir = getenv("CNC_GENERALS_ZH_PATH");
+			if (dataDir && dataDir[0])
+			{
+				AsciiString splashPath(dataDir);
+				if (!splashPath.endsWith("\\") && !splashPath.endsWith("/"))
+					splashPath.concat('\\');
+				splashPath.concat("Install_Final.bmp");
+				gLoadScreenBitmap = (HBITMAP)LoadImage(hInstance, splashPath.str(), IMAGE_BITMAP, 0, 0, LR_SHARED|LR_LOADFROMFILE);
+			}
+		}
 
 #ifdef RTS_ENABLE_CRASHDUMP
 		// Initialize minidump facilities - requires TheGlobalData so performed after parseCommandLineForStartup
