@@ -334,6 +334,35 @@ positions for a user map saved over with the same size.
 
 Next: terrain editing.
 
+## What works (step 7: the Windows client)
+
+- `windows/EndEditor` (WPF, .NET 8, x64): the Objects mode (sides, table, search, sorting,
+  details, model preview with animations), the Maps mode (list with search, the 3D map: terrain,
+  water, models, markers, links, start labels and colors, selection boxes, rubber band), the camera
+  (drag pans, Alt-drag turns, the wheel zooms at the cursor), Models / Markers / Water, every edit of
+  the macOS client (select, Shift-click, band, move, place with the picker, waypoints, roads,
+  bridges, Delete, `[ ] { }`, Ctrl+C/V/D/A/Z/Y, the inspector with Start N owners and properties),
+  Save (Ctrl+S, over the saved file), Save Map As (Ctrl+Shift+S, Replace, Other Location…), Play
+  (Ctrl+R) and Play Settings, Stop Game. Ctrl is sent to the core as `cmd`.
+- The core starts the game on Windows (`game_launch.cpp`: CreateProcessW, a Job object, WM_CLOSE,
+  then the whole job ended), is a DLL with only the C ABI exported, and builds zlib where the system
+  has none.
+- `END Editor.exe --map-snapshot <zh> <base> <map> <out.png> [--top] [--size WxH]` and
+  `END Editor.exe --ui-check <zh> <base> <map> <template> <save name> <game exe> <out.txt>` as on the
+  Mac; the check drives the window through UI Automation and posted window messages (needs a desktop
+  session) and also takes the core's stand-in game (`end_editor_fake_game.exe` with a `fake.cfg`
+  next to it) where there is no Windows game build.
+
+Checked (28.11.2026): core tests with MSVC x64 — 66 test cases, 1929 assertions pass (on an x64 PC
+and in a Windows 11 ARM64 VM under x64 emulation); macOS 66 / 1928. Round trip on Windows with the
+Steam data: 150 of 150 maps byte for byte, `--edit-maps` 150 of 150. `--ui-check` on Tournament
+Desert in the ARM64 VM (Parallels D3D11): 150 ok, 0 FAIL, twice; Play there ran the stand-in game
+(no Windows game build in that VM), the arguments checked. On the x64 PC the GeneralsXZH build of
+master with `-testMap` was found but not started from the editor.
+
+Not yet on Windows: Export GIF, the `--perf` harness, a trackpad's two-finger pan and pinch (the
+wheel zooms); leaving the window straight from the map keeps the last map point for Ctrl+V.
+
 ## Test coverage
 
 Every user-facing feature and what checks it. Keep this table when adding a feature.
