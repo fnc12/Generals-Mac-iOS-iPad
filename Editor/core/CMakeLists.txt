@@ -71,12 +71,30 @@ target_include_directories(end_editor_core
 # sqlite_orm installed there would silently replace the pinned one.
 target_include_directories(end_editor_core BEFORE PRIVATE ${sqlite_orm_SOURCE_DIR}/include)
 target_link_libraries(end_editor_core PUBLIC ${END_EDITOR_SQLITE})
-# zlib only unpacks the rare "ZL" compressed maps; without it they are reported as unsupported.
+# zlib unpacks the rare "ZL" compressed maps (one of the 150 maps of the archives). The system's
+# (always on macOS and Linux); where there is none (Windows) its sources are built, like SQLite's.
 find_package(ZLIB)
 if(ZLIB_FOUND)
     target_link_libraries(end_editor_core PUBLIC ZLIB::ZLIB)
-    target_compile_definitions(end_editor_core PRIVATE END_EDITOR_HAS_ZLIB=1)
+else()
+    FetchContent_Declare(zlib_source
+        URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+        SOURCE_SUBDIR do-not-build
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(zlib_source)
+    set(END_EDITOR_ZLIB_SOURCES adler32 compress crc32 deflate gzclose gzlib gzread gzwrite infback inffast inflate
+        inftrees trees uncompr zutil)
+    list(TRANSFORM END_EDITOR_ZLIB_SOURCES PREPEND ${zlib_source_SOURCE_DIR}/)
+    list(TRANSFORM END_EDITOR_ZLIB_SOURCES APPEND .c)
+    add_library(end_editor_zlib STATIC ${END_EDITOR_ZLIB_SOURCES})
+    target_include_directories(end_editor_zlib PUBLIC ${zlib_source_SOURCE_DIR})
+    if(MSVC)
+        target_compile_definitions(end_editor_zlib PRIVATE _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE)
+    endif()
+    target_link_libraries(end_editor_core PUBLIC end_editor_zlib)
 endif()
+target_compile_definitions(end_editor_core PRIVATE END_EDITOR_HAS_ZLIB=1)
 if(MSVC)
     target_compile_options(end_editor_core PRIVATE /W4 /utf-8)
 else()
