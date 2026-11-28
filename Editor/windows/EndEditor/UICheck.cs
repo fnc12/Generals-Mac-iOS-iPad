@@ -157,9 +157,9 @@ public static class UICheck
         /// Opens a menu of the menu bar, as a click on it does.
         private void OpenMenu(string name)
         {
-            var bar = AutomationElement.FromHandle(mainHandle).FindFirst(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuBar));
-            var menu = bar == null ? null : FindByName(bar, name);
+            var menu = AutomationElement.FromHandle(mainHandle).FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem),
+                new PropertyCondition(AutomationElement.NameProperty, name)));
             if (menu != null && menu.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
             {
                 ((ExpandCollapsePattern)expand).Expand();

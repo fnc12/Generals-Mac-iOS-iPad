@@ -156,7 +156,9 @@ public sealed class MainWindow : Window
         play.IsEnabled = Editor.CanEditMap;
         Objects.Refresh(changes);
         MapsScreen.Refresh(changes);
-        if ((changes & (Changes.Play | Changes.Objects)) != 0 && !playSettingsView.IsKeyboardFocusWithin) playSettingsView.Refresh();
+        // Rebuilt with the store's values, unless its game app field is being typed into.
+        var typing = Keyboard.FocusedElement is TextBox field && playSettingsView.IsAncestorOf(field);
+        if ((changes & (Changes.Play | Changes.Objects)) != 0 && !typing) playSettingsView.Refresh();
     }
 
     /// Ctrl shortcuts of the menus, from the window or the map view (which has the keyboard while
