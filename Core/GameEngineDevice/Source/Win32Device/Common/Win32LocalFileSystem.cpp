@@ -268,6 +268,12 @@ void Win32LocalFileSystem::setAssetRootPath(const AsciiString& path)
 		m_assetRootPath.concat('\\');
 	}
 	DEBUG_LOG(("Win32LocalFileSystem::setAssetRootPath - asset fallback path set to '%s'", m_assetRootPath.str()));
+	// GeneralsX @bugfix fnc12 28/11/2026 The game's own DLLs (mss32.dll, binkw32.dll) come with the game data: let
+	// LoadLibrary find them in the asset root too (after the exe's folder), or an exe outside the game folder ran
+	// without sound and videos.
+	if (m_assetRootPath.isNotEmpty()) {
+		::SetDllDirectoryA(m_assetRootPath.str());
+	}
 }
 
 // The working directory wins; a relative path that does not exist there is looked up in the asset root.

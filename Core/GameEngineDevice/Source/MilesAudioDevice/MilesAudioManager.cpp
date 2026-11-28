@@ -52,6 +52,7 @@
 #include "Common/GameSounds.h"
 #include "Common/CRCDebug.h"
 #include "Common/GlobalData.h"
+#include "Common/LocalFileSystem.h"
 #include "Common/ScopedMutex.h"
 
 #include "GameClient/DebugDisplay.h"
@@ -1434,7 +1435,11 @@ void MilesAudioManager::openDevice()
 
 	m_milesLoaded = true;
 
-	AIL_set_redist_directory("MSS\\");
+	// GeneralsX @bugfix fnc12 28/11/2026 The Miles providers (MSS\*.asi, *.flt: the MP3 decoder) come with the game
+	// data: take that folder when the working directory has none, or speech and music stayed silent.
+	AsciiString redist = TheLocalFileSystem->resolveReadPath("MSS\\mssmp3.asi");
+	redist.truncateBy(static_cast<Int>(strlen("mssmp3.asi")));
+	AIL_set_redist_directory(redist.str());
 	AIL_startup();
 	Int retval = 0;
 
