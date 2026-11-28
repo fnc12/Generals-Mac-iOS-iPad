@@ -49,6 +49,10 @@ public:
 	// This no-op default allows Win32LocalFileSystem to inherit it unchanged.
 	virtual void setAssetRootPath(const AsciiString& /*path*/) {}
 
+	// GeneralsX @bugfix fnc12 28/11/2026 The path to hand to an OS call that reads a loose file itself (such as
+	// LoadCursorFromFile): the working directory's, or the asset root's when only the asset root has the file.
+	virtual AsciiString resolveReadPath(const Char *filename) const { return AsciiString(filename); }
+
 protected:
 };
 

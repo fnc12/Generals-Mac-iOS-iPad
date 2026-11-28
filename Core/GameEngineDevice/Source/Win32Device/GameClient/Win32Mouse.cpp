@@ -391,13 +391,15 @@ void Win32Mouse::initCursorResources()
 
 					if (TheLocalFileSystem->doesFileExist(fname.str()))
 					{
-						cursorResources[cursor][direction]=LoadCursorFromFile(fname.str());
+						cursorResources[cursor][direction]=LoadCursorFromFile(TheLocalFileSystem->resolveReadPath(fname.str()).str());
 						loaded = TRUE;
 					}
 				}
 
+				// GeneralsX @bugfix fnc12 28/11/2026 LoadCursorFromFile reads the working directory only: with the exe
+				// outside the game folder (the data from CNC_GENERALS_ZH_PATH) the game had no mouse cursor.
 				if (!loaded)
-					cursorResources[cursor][direction]=LoadCursorFromFile(resourcePath);
+					cursorResources[cursor][direction]=LoadCursorFromFile(TheLocalFileSystem->resolveReadPath(resourcePath).str());
 				DEBUG_ASSERTCRASH(cursorResources[cursor][direction], ("MissingCursor %s",resourcePath));
 			}
 		}

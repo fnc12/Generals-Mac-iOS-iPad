@@ -52,9 +52,9 @@ public:
 	// GeneralsX @bugfix fnc12 26/11/2026 Loose files are looked up in the working directory first, then
 	// in the asset root that BIGFileSystem resolved (CNC_GENERALS_ZH_PATH, ini, registry), like StdLocalFileSystem.
 	virtual void setAssetRootPath(const AsciiString& path) override;
+	virtual AsciiString resolveReadPath(const Char *filename) const override;
 
 protected:
-	AsciiString resolveReadPath(const Char *filename) const;
 
 	AsciiString m_assetRootPath;
 };
