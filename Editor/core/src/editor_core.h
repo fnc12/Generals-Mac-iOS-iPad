@@ -123,7 +123,8 @@ namespace end_editor {
         void runPlayMap();
         // play.*: a setting of the Play button; "" or an error code (the note says why).
         std::string setPlaySetting(const commands::PlaySetting& setting);
-        // The default game app for the opened game (GeneralsXZH or GeneralsX in ~/GeneralsX/Apps).
+        // The default game app for the opened game (GeneralsXZH or GeneralsX in ~/GeneralsX/Apps,
+        // game_launch.h).
         std::string defaultGameApp() const;
         // The game's index of a Multiplayer.ini color (its first entry of that name); none for
         // "Random" and names it does not have.

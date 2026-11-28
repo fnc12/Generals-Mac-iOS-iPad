@@ -1,0 +1,10 @@
+; The C ABI of include/end_editor/editor_core_c.h, exported by end_editor_core_c.dll (Windows).
+LIBRARY end_editor_core_c
+EXPORTS
+    end_editor_get_version
+    end_editor_initialize
+    end_editor_shutdown
+    end_editor_db_path
+    end_editor_send
+    end_editor_update
+    end_editor_pending_work
